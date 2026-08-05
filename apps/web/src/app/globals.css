@@ -1,0 +1,265 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #080808;
+  --panel: #0a0a0a;
+  --accent: #00e676;
+  --text: #ededed;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-accent: var(--accent);
+  --color-ink: var(--text);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html,
+body {
+  margin: 0;
+  background: #080808;
+  color: #ededed;
+  font-family: var(--font-geist-sans), "Geist", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+a {
+  color: #00e676;
+  text-decoration: none;
+}
+a:hover {
+  color: #5bffaa;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: #0b0b0b;
+}
+::-webkit-scrollbar-thumb {
+  background: #232323;
+  border-radius: 9px;
+}
+
+@keyframes ar-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.18);
+  }
+}
+@keyframes ar-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+@keyframes ar-up {
+  0% {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+  100% {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes ar-fade {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+@keyframes ar-sheet {
+  0% {
+    transform: translateX(100%);
+  }
+  100% {
+    transform: none;
+  }
+}
+@keyframes ar-ring {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.7);
+    opacity: 0;
+  }
+}
+@keyframes ar-deal {
+  0% {
+    transform: translateY(-30px) rotate(-9deg) scale(0.9);
+    opacity: 0;
+  }
+  100% {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes ar-chip {
+  0% {
+    transform: translateY(-40px) scale(0.7);
+    opacity: 0;
+  }
+  70% {
+    transform: translateY(3px) scale(1.04);
+    opacity: 1;
+  }
+  100% {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes ar-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes ar-slidein {
+  0% {
+    transform: translateX(18px);
+    opacity: 0;
+  }
+  100% {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes ar-flip {
+  0% {
+    transform: rotateY(90deg) scale(0.92);
+    opacity: 0;
+  }
+  100% {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes ar-action-pop {
+  0% {
+    transform: translate(-50%, 8px) scale(0.85);
+    opacity: 0;
+  }
+  18% {
+    transform: translate(-50%, -2px) scale(1.06);
+    opacity: 1;
+  }
+  70% {
+    transform: translate(-50%, -6px) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -14px) scale(0.98);
+    opacity: 0;
+  }
+}
+@keyframes ar-win {
+  0% {
+    transform: translate(-50%, -40%) scale(0.86);
+    opacity: 0;
+  }
+  14% {
+    transform: translate(-50%, -50%) scale(1.04);
+    opacity: 1;
+  }
+  78% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -56%) scale(0.98);
+    opacity: 0;
+  }
+}
+@keyframes ar-win-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px rgba(0, 230, 118, 0.35), 0 0 28px rgba(0, 230, 118, 0.18);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(0, 230, 118, 0.7), 0 0 42px rgba(0, 230, 118, 0.38);
+  }
+}
+
+/* Hover utilities mirroring the design files' style-hover attributes
+   (inline styles can't express :hover, so these are applied via className). */
+.mz-hover-border:hover {
+  border-color: rgba(255, 255, 255, 0.3) !important;
+}
+.mz-hover-border-strong:hover {
+  border-color: rgba(255, 255, 255, 0.3) !important;
+  color: #ededed !important;
+}
+.mz-hover-lift:hover {
+  transform: translateY(-3px);
+}
+.mz-hover-row:hover {
+  background: rgba(255, 255, 255, 0.025) !important;
+}
+.mz-hover-bg:hover {
+  background: rgba(255, 255, 255, 0.03) !important;
+}
+.mz-hover-cta:hover {
+  box-shadow: 0 0 32px rgba(0, 230, 118, 0.42) !important;
+}
+.mz-join-cta:hover {
+  box-shadow: 0 0 34px rgba(0, 230, 118, 0.45) !important;
+  color: #050505 !important;
+}
+.mz-open-cta:hover {
+  box-shadow: 0 0 28px rgba(0, 230, 118, 0.4) !important;
+  color: #050505 !important;
+}
+.mz-register-cta:hover {
+  background: rgba(0, 230, 118, 0.07) !important;
+  color: #00e676 !important;
+}
+
+/* Netflix-style game cards on Home — poster hovers up, CTA fades in. */
+.mz-game-card {
+  transition: transform 0.28s cubic-bezier(0.2, 0.9, 0.25, 1), border-color 0.25s ease, box-shadow 0.28s ease;
+}
+.mz-game-card:hover {
+  transform: translateY(-6px) scale(1.035);
+  z-index: 2;
+}
+.mz-game-card-cta {
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.mz-game-card:hover .mz-game-card-cta {
+  opacity: 1;
+  transform: none;
+}
+.mz-game-card-felt {
+  transition: transform 0.4s ease;
+}
+.mz-game-card:hover .mz-game-card-felt {
+  transform: scale(1.08) rotate(1deg);
+}

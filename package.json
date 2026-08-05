@@ -1,0 +1,18 @@
+{
+  "name": "mozetto",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter @mozetto/web --filter @mozetto/api --filter @mozetto/game-server --filter @mozetto/agent-runtime run dev",
+    "dev:web": "pnpm --filter @mozetto/web dev",
+    "dev:api": "pnpm --filter @mozetto/api dev",
+    "dev:game": "pnpm --filter @mozetto/game-server dev",
+    "dev:agent": "pnpm --filter @mozetto/agent-runtime dev",
+    "build": "pnpm -r run build",
+    "db:migrate": "pnpm --filter @mozetto/database migrate",
+    "typecheck": "pnpm -r run typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2"
+  }
+}

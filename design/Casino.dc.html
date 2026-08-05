@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+html,body{margin:0;background:#080808;color:#EDEDED;font-family:'Geist',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+a{color:#00E676;text-decoration:none}a:hover{color:#5BFFAA}
+::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-track{background:#0B0B0B}::-webkit-scrollbar-thumb{background:#232323;border-radius:9px}
+@keyframes ar-pulse{0%,100%{opacity:.35;transform:scale(1)}50%{opacity:1;transform:scale(1.18)}}
+@keyframes ar-fade{0%{opacity:0}100%{opacity:1}}
+@keyframes ar-sheet{0%{transform:translateX(100%)}100%{transform:none}}
+</style>
+</helmet>
+
+<div style="display:flex;min-height:100vh;min-width:1320px;background:#080808">
+  <dc-import name="Nav" active="casino" hint-size="216px,100vh"></dc-import>
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <dc-import name="Topbar" hint-size="100%,52px"></dc-import>
+
+    <main style="flex:1;padding:24px 26px 56px;max-width:1400px">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between">
+        <div>
+          <h1 style="margin:0;font-size:29px;font-weight:600;letter-spacing:-.035em">Casino</h1>
+          <p style="margin:8px 0 0;font-size:13.5px;color:#7A7A7A">House-banked games. Your AI plays the session against the house inside the limits you set.</p>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;padding:9px 16px;border-radius:10px;border:1px solid rgba(110,168,255,.2);background:rgba(110,168,255,.05)">
+          <span style="font-size:12px;color:#6EA8FF">◈</span>
+          <span style="font-size:12.5px;color:#9A9A9A">No pot rake here — the platform earns from the disclosed house edge only.</span>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:20px">
+        <sc-for list="{{ gameTabs }}" as="g" hint-placeholder-count="2">
+          <div onClick="{{ g.pick }}" style="display:flex;align-items:center;gap:9px;padding:10px 18px;border-radius:11px;cursor:pointer;background:{{ g.bg }};border:1px solid {{ g.border }};transition:all .18s" style-hover="border-color:rgba(255,255,255,.28)">
+            <span style="font-size:13px;color:{{ g.color }}">{{ g.glyph }}</span>
+            <span style="font-size:13.5px;font-weight:550;letter-spacing:-.015em;color:{{ g.fg }}">{{ g.k }}</span>
+            <span style="font:400 10.5px 'Geist Mono',monospace;color:#5A5A5A">{{ g.edge }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-top:14px">
+        <sc-for list="{{ leagueCards }}" as="l" hint-placeholder-count="6">
+          <div onClick="{{ l.pick }}" style="border-radius:14px;border:1px solid {{ l.border }};background:{{ l.bg }};padding:15px 16px;cursor:pointer;opacity:{{ l.op }};transition:all .2s" style-hover="transform:translateY(-3px)">
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="width:5px;height:16px;border-radius:3px;background:{{ l.color }}"></div>
+              <div style="font-size:13.5px;font-weight:600;letter-spacing:-.02em">{{ l.k }}</div>
+            </div>
+            <div style="font:500 17px 'Geist Mono',monospace;color:{{ l.color }};margin-top:11px;letter-spacing:-.02em">{{ l.min }}</div>
+            <div style="font:400 10px 'Geist Mono',monospace;color:#5A5A5A;margin-top:4px">MINIMUM SESSION</div>
+            <div style="font:400 10.5px 'Geist Mono',monospace;color:#7A7A7A;margin-top:10px;padding-top:9px;border-top:1px solid rgba(255,255,255,.05)">{{ l.tables }}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="border-radius:16px;border:1px solid rgba(255,255,255,.07);background:#0A0A0A;margin-top:14px;overflow:hidden">
+        <div style="padding:14px 20px;border-bottom:1px solid rgba(255,255,255,.06);font-size:14.5px;font-weight:600;letter-spacing:-.02em">{{ listTitle }}</div>
+        <div style="display:grid;grid-template-columns:1.4fr 120px 130px 110px 110px 96px 150px;gap:12px;padding:11px 20px;border-bottom:1px solid rgba(255,255,255,.05);font:500 9px 'Geist Mono',monospace;letter-spacing:.12em;color:#4A4A4A">
+          <span>TABLE</span><span>BET RANGE</span><span style="text-align:right">SESSION RANGE</span><span style="text-align:right">HOUSE EDGE</span><span style="text-align:right">RULES</span><span style="text-align:right">PACE</span><span></span>
+        </div>
+        <sc-for list="{{ tables }}" as="t" hint-placeholder-count="8">
+          <div style="display:grid;grid-template-columns:1.4fr 120px 130px 110px 110px 96px 150px;gap:12px;align-items:center;padding:14px 20px;border-bottom:1px solid rgba(255,255,255,.04);font:400 11.5px 'Geist Mono',monospace" style-hover="background:rgba(255,255,255,.025)">
+            <div style="display:flex;align-items:center;gap:11px;min-width:0">
+              <div style="width:5px;height:28px;border-radius:3px;background:{{ t.leagueColor }};flex:none"></div>
+              <div style="min-width:0">
+                <div style="font-family:'Geist',sans-serif;font-size:13.5px;font-weight:550;letter-spacing:-.015em;color:#EDEDED">{{ t.name }}</div>
+                <div style="font:400 9.5px 'Geist Mono',monospace;color:{{ t.leagueColor }};margin-top:3px;letter-spacing:.08em">{{ t.league }} · {{ t.game }}</div>
+              </div>
+            </div>
+            <span style="color:#DADADA">{{ t.betRange }}</span>
+            <span style="color:#8A8A8A;text-align:right">{{ t.range }}</span>
+            <span style="color:#FFB020;text-align:right">{{ t.edge }}</span>
+            <span style="color:#7A7A7A;text-align:right">{{ t.rules }}</span>
+            <span style="color:#7A7A7A;text-align:right">{{ t.speed }}</span>
+            <div style="display:flex;gap:7px;justify-content:flex-end">
+              <a href="Live.dc.html" style="padding:7px 13px;border-radius:8px;border:1px solid rgba(255,255,255,.11);font-family:'Geist',sans-serif;font-size:12px;color:#9A9A9A" style-hover="border-color:rgba(255,255,255,.3);color:#EDEDED">Watch</a>
+              <div onClick="{{ t.join }}" style="padding:7px 18px;border-radius:8px;font-family:'Geist',sans-serif;font-size:12px;font-weight:600;cursor:pointer;background:{{ t.btnBg }};border:1px solid {{ t.btnBorder }};color:{{ t.btnFg }}">{{ t.btn }}</div>
+            </div>
+          </div>
+        </sc-for>
+        <div style="padding:16px 20px;font-size:11.5px;line-height:1.6;color:#5A5A5A">House games are not rated against other players. Your AI is measured on return, risk-adjusted return, total wagered and maximum drawdown instead.</div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<sc-if value="{{ sheetOpen }}" hint-placeholder-val="{{ false }}">
+<div style="position:fixed;inset:0;z-index:80;display:flex;justify-content:flex-end">
+  <div onClick="{{ closeSheet }}" style="position:absolute;inset:0;background:rgba(2,2,2,.72);backdrop-filter:blur(6px);animation:ar-fade .2s ease-out both"></div>
+  <div style="position:relative;width:560px;height:100%;background:#0A0A0A;border-left:1px solid rgba(255,255,255,.09);box-shadow:-40px 0 100px rgba(0,0,0,.7);display:flex;flex-direction:column;animation:ar-sheet .26s cubic-bezier(.2,.9,.3,1) both">
+    <div style="flex:none;padding:20px 26px 18px;border-bottom:1px solid rgba(255,255,255,.07)">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.14em;color:{{ sheetLeagueColor }}">{{ sheetLeague }} LEAGUE · HOUSE GAME</div>
+        <div onClick="{{ closeSheet }}" style="width:28px;height:28px;border-radius:8px;border:1px solid rgba(255,255,255,.09);display:flex;align-items:center;justify-content:center;font-size:13px;color:#7A7A7A;cursor:pointer" style-hover="border-color:rgba(255,255,255,.3);color:#EDEDED">✕</div>
+      </div>
+      <h2 style="margin:14px 0 0;font-size:26px;font-weight:600;letter-spacing:-.035em">{{ sheetName }}</h2>
+      <div style="display:flex;gap:24px;margin-top:12px">
+        <sc-for list="{{ sheetFacts }}" as="f" hint-placeholder-count="4">
+          <div>
+            <div style="font:400 8.5px 'Geist Mono',monospace;letter-spacing:.11em;color:#4A4A4A">{{ f.k }}</div>
+            <div style="font:500 13px 'Geist Mono',monospace;margin-top:4px;color:{{ f.color }}">{{ f.v }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="flex:1;min-height:0;overflow-y:auto;padding:22px 26px 26px">
+      <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.14em;color:#4A4A4A">1 · BRING TO TABLE</div>
+      <div style="border-radius:15px;border:1px solid rgba(255,255,255,.08);background:#0D0D0D;padding:18px 20px;margin-top:11px">
+        <div style="display:flex;justify-content:space-between;font:400 11.5px 'Geist Mono',monospace"><span style="color:#6A6A6A">WALLET BALANCE</span><span style="color:#EDEDED">$7,400.00</span></div>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:14px;padding:14px 16px;border-radius:12px;background:#080808;border:1px solid {{ inputBorder }}">
+          <span style="font:500 22px 'Geist Mono',monospace;color:#5A5A5A">$</span>
+          <input value="{{ bankText }}" onChange="{{ setBank }}" style="flex:1;background:transparent;border:none;outline:none;color:#EDEDED;font:500 26px 'Geist Mono',monospace;letter-spacing:-.02em;min-width:0">
+        </div>
+        <div style="display:flex;gap:7px;margin-top:12px">
+          <sc-for list="{{ quick }}" as="q" hint-placeholder-count="4">
+            <div onClick="{{ q.pick }}" style="flex:1;padding:9px 0;border-radius:9px;text-align:center;font:500 11px 'Geist Mono',monospace;cursor:pointer;background:{{ q.bg }};border:1px solid {{ q.border }};color:{{ q.fg }}" style-hover="border-color:rgba(255,255,255,.3)">{{ q.k }}</div>
+          </sc-for>
+        </div>
+        <div style="font-size:11.5px;line-height:1.55;color:{{ warnColor }};margin-top:12px">{{ warn }}</div>
+      </div>
+
+      <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.14em;color:#4A4A4A;margin-top:24px">2 · BETTING LIMITS</div>
+      <div style="border-radius:15px;border:1px solid rgba(255,255,255,.08);background:#0D0D0D;padding:18px 20px;margin-top:11px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <sc-for list="{{ bets }}" as="b" hint-placeholder-count="2">
+            <div>
+              <div style="font-size:12.5px;font-weight:500;color:#BABABA">{{ b.k }}</div>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:9px;padding:10px 13px;border-radius:11px;background:#080808;border:1px solid rgba(255,255,255,.08)">
+                <span style="font:500 12px 'Geist Mono',monospace;color:#5A5A5A">$</span>
+                <input value="{{ b.v }}" onChange="{{ b.set }}" style="flex:1;background:transparent;border:none;outline:none;color:#EDEDED;font:500 14px 'Geist Mono',monospace;min-width:0">
+              </div>
+              <div style="font-size:11px;color:#5A5A5A;margin-top:6px">{{ b.hint }}</div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="font-size:12.5px;font-weight:500;color:#BABABA;margin-top:18px">Risk style</div>
+        <div style="display:flex;gap:7px;margin-top:9px">
+          <sc-for list="{{ risks }}" as="r" hint-placeholder-count="3">
+            <div onClick="{{ r.pick }}" style="flex:1;padding:10px 0;border-radius:10px;text-align:center;font:500 11.5px 'Geist Mono',monospace;cursor:pointer;background:{{ r.bg }};border:1px solid {{ r.border }};color:{{ r.fg }}" style-hover="border-color:rgba(255,255,255,.3)">{{ r.k }}</div>
+          </sc-for>
+        </div>
+        <div style="font-size:11.5px;line-height:1.55;color:#5A5A5A;margin-top:12px">Your AI sizes every bet inside these limits and decides hit, stand, double, split and insurance on its own.</div>
+      </div>
+
+      <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.14em;color:#4A4A4A;margin-top:24px">3 · SESSION RULES</div>
+      <div style="border-radius:15px;border:1px solid rgba(255,255,255,.08);background:#0D0D0D;padding:18px 20px;margin-top:11px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <sc-for list="{{ stops }}" as="s" hint-placeholder-count="2">
+            <div>
+              <div style="font-size:12.5px;font-weight:500;color:#BABABA">{{ s.k }}</div>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:9px;padding:10px 13px;border-radius:11px;background:#080808;border:1px solid rgba(255,255,255,.08)">
+                <span style="font:500 12px 'Geist Mono',monospace;color:#5A5A5A">$</span>
+                <input value="{{ s.v }}" onChange="{{ s.set }}" style="flex:1;background:transparent;border:none;outline:none;color:#EDEDED;font:500 14px 'Geist Mono',monospace;min-width:0">
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="font-size:12.5px;font-weight:500;color:#BABABA;margin-top:18px">Maximum rounds</div>
+        <div style="display:flex;gap:7px;margin-top:9px">
+          <sc-for list="{{ rounds }}" as="r" hint-placeholder-count="4">
+            <div onClick="{{ r.pick }}" style="flex:1;padding:10px 0;border-radius:10px;text-align:center;font:500 11.5px 'Geist Mono',monospace;cursor:pointer;background:{{ r.bg }};border:1px solid {{ r.border }};color:{{ r.fg }}" style-hover="border-color:rgba(255,255,255,.3)">{{ r.k }}</div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.14em;color:#4A4A4A;margin-top:24px">4 · CONFIRM</div>
+      <div style="border-radius:15px;border:1px solid rgba(0,230,118,.2);background:linear-gradient(165deg,rgba(0,230,118,.05),#0A0A0A);padding:18px 20px;margin-top:11px;display:flex;flex-direction:column;gap:11px">
+        <sc-for list="{{ receipt }}" as="r" hint-placeholder-count="6">
+          <div style="display:flex;justify-content:space-between;font:400 12.5px 'Geist Mono',monospace"><span style="color:#7A7A7A">{{ r.k }}</span><span style="color:{{ r.color }}">{{ r.v }}</span></div>
+        </sc-for>
+      </div>
+      <div style="font-size:11.5px;line-height:1.6;color:#5A5A5A;margin-top:12px">Only your table balance is at risk. The house edge is charged inside the game's odds — there is no separate rake on your winnings.</div>
+    </div>
+
+    <div style="flex:none;padding:16px 26px 20px;border-top:1px solid rgba(255,255,255,.07);display:flex;gap:11px;background:#0A0A0A">
+      <div onClick="{{ closeSheet }}" style="padding:13px 22px;border-radius:11px;border:1px solid rgba(255,255,255,.12);font-size:13.5px;color:#BABABA;cursor:pointer" style-hover="border-color:rgba(255,255,255,.3);color:#EDEDED">Cancel</div>
+      <a href="Blackjack.dc.html" style="flex:1;padding:13px 0;border-radius:11px;background:#00E676;color:#050505;font-size:14px;font-weight:600;text-align:center" style-hover="box-shadow:0 0 34px rgba(0,230,118,.45);color:#050505">Join next round · {{ bankLabel }}</a>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+const L = {Bronze: '#B87333', Silver: '#B8C0C8', Gold: '#C9A227', Platinum: '#8FE3D2', Diamond: '#8FB8FF', Sovereign: '#C89BFF'};
+const T = (name, league, game, g, betRange, min, max, edge, rules, speed) => ({name, league, game, g, betRange, min, max, edge, rules, speed});
+const TABLES = [
+  T('Vault 1', 'Bronze', 'Blackjack', 'bj', '$1 – $25', 10, 100, '0.51%', '6 deck · S17', 'Fast'),
+  T('Vault 6', 'Silver', 'Blackjack', 'bj', '$5 – $250', 100, 1000, '0.48%', '8 deck · S17', 'Standard'),
+  T('Vault 12', 'Gold', 'Blackjack', 'bj', '$50 – $2,500', 1000, 10000, '0.44%', '8 deck · S17 · DAS', 'Standard'),
+  T('Vault Prime', 'Platinum', 'Blackjack', 'bj', '$500 – $25,000', 10000, 100000, '0.40%', '8 deck · S17 · DAS · RSA', 'Deep'),
+  T('Vault Reserve', 'Diamond', 'Blackjack', 'bj', '$5,000 – $250,000', 100000, 1000000, '0.38%', 'Single deck · S17', 'Deep'),
+  T('Trident 2', 'Bronze', 'Three Card Poker', 'tcp', '$1 – $25', 10, 100, '3.37%', 'Ante · Pair Plus', 'Fast'),
+  T('Trident 8', 'Silver', 'Three Card Poker', 'tcp', '$5 – $250', 100, 1000, '3.37%', 'Ante · Pair Plus', 'Fast'),
+  T('Trident 15', 'Gold', 'Three Card Poker', 'tcp', '$50 – $2,500', 1000, 10000, '3.29%', 'Ante · Pair Plus · 6-card bonus', 'Standard')
+];
+const LEAGUES = [
+  {k: 'Bronze', min: '$10', open: true}, {k: 'Silver', min: '$100', open: true},
+  {k: 'Gold', min: '$1,000', open: true}, {k: 'Platinum', min: '$10,000', open: true},
+  {k: 'Diamond', min: '$100,000', open: false}, {k: 'Sovereign', min: '$1,000,000', open: false}
+];
+const money = n => '$' + Number(n).toLocaleString('en-US', {maximumFractionDigits: 2});
+class Component extends DCLogic {
+  state = {game: 'bj', league: 'ALL', sheet: null, bank: 10, base: '', maxBet: '', risk: 1, rounds: 1, stop: '', target: ''};
+  renderVals() {
+    const st = this.state, wallet = 7400;
+    const byGame = TABLES.filter(t => t.g === st.game);
+    const pool = byGame.filter(t => st.league === 'ALL' || t.league.toUpperCase() === st.league);
+    const s = st.sheet;
+    const min = s ? s.min : 10, max = s ? s.max : 100;
+    const cap = Math.min(max, wallet), v = st.bank;
+    const bad = v < min || v > cap;
+    const set = k => e => this.setState({[k]: e.target.value.replace(/[^0-9.]/g, '')});
+    const mkChip = (list, key) => list.map((k, i) => ({
+      k, pick: () => this.setState({[key]: i}),
+      bg: st[key] === i ? 'rgba(255,255,255,.07)' : 'transparent',
+      border: st[key] === i ? 'rgba(0,230,118,.45)' : 'rgba(255,255,255,.09)',
+      fg: st[key] === i ? '#EDEDED' : '#6A6A6A'
+    }));
+    return {
+      gameTabs: [{k: 'Blackjack', id: 'bj', glyph: '◈', color: '#6EA8FF', edge: '0.38–0.51% edge'}, {k: 'Three Card Poker', id: 'tcp', glyph: '♥', color: '#C89BFF', edge: '3.29–3.37% edge'}].map(g => ({
+        ...g, pick: () => this.setState({game: g.id, league: 'ALL'}),
+        bg: st.game === g.id ? 'rgba(255,255,255,.06)' : '#0A0A0A',
+        border: st.game === g.id ? g.color + '66' : 'rgba(255,255,255,.08)',
+        fg: st.game === g.id ? '#EDEDED' : '#9A9A9A'
+      })),
+      leagueCards: LEAGUES.map(l => {
+        const on = st.league === l.k.toUpperCase();
+        const n = byGame.filter(t => t.league === l.k).length;
+        return {
+          k: l.k, min: l.min, color: L[l.k],
+          pick: () => this.setState({league: on ? 'ALL' : l.k.toUpperCase()}),
+          border: on ? L[l.k] + '77' : 'rgba(255,255,255,.07)',
+          bg: on ? 'linear-gradient(160deg,' + L[l.k] + '14,#0A0A0A 70%)' : '#0A0A0A',
+          op: l.open ? '1' : '.55',
+          tables: n + (n === 1 ? ' open table' : ' open tables')
+        };
+      }),
+      listTitle: (st.game === 'bj' ? 'Blackjack' : 'Three Card Poker') + ' · ' + pool.length + ' tables',
+      tables: pool.map(t => {
+        const afford = wallet >= t.min;
+        return {
+          ...t, leagueColor: L[t.league],
+          range: money(t.min) + '–' + money(t.max),
+          join: () => afford && this.setState({sheet: t, bank: t.min}),
+          btn: afford ? 'Sit down' : 'Locked',
+          btnBg: afford ? '#00E676' : 'transparent',
+          btnBorder: afford ? '#00E676' : 'rgba(255,255,255,.12)',
+          btnFg: afford ? '#050505' : '#7A7A7A'
+        };
+      }),
+      sheetOpen: !!s,
+      closeSheet: () => this.setState({sheet: null}),
+      sheetLeague: s ? s.league.toUpperCase() : '', sheetLeagueColor: s ? L[s.league] : '#C9A227',
+      sheetName: s ? s.name : '',
+      sheetFacts: s ? [
+        {k: 'GAME', v: s.game, color: '#EDEDED'},
+        {k: 'BET RANGE', v: s.betRange, color: '#EDEDED'},
+        {k: 'HOUSE EDGE', v: s.edge, color: '#FFB020'},
+        {k: 'RULES', v: s.rules, color: '#8A8A8A'}
+      ] : [],
+      bankText: String(v), bankLabel: money(v),
+      setBank: e => this.setState({bank: parseFloat(e.target.value.replace(/[^0-9.]/g, '')) || 0}),
+      inputBorder: bad ? 'rgba(255,82,82,.5)' : 'rgba(0,230,118,.28)',
+      quick: [{k: 'MIN', v: min}, {k: '2×', v: Math.min(cap, min * 2)}, {k: '5×', v: Math.min(cap, min * 5)}, {k: 'MAX', v: cap}].map(q => ({
+        k: q.k, pick: () => this.setState({bank: q.v}),
+        bg: v === q.v ? 'rgba(0,230,118,.09)' : 'transparent',
+        border: v === q.v ? 'rgba(0,230,118,.45)' : 'rgba(255,255,255,.09)',
+        fg: v === q.v ? '#00E676' : '#8A8A8A'
+      })),
+      warn: bad ? (v < min ? 'Below the table minimum of ' + money(min) + '.' : 'Your wallet allows up to ' + money(cap) + '.')
+                : 'This is the only money at risk. Your remaining ' + money(wallet - v) + ' stays in your wallet.',
+      warnColor: bad ? '#FF8A8A' : '#5A5A5A',
+      bets: [
+        {k: 'Base bet', v: st.base || String(Math.max(1, Math.round(v / 100))), set: set('base'), hint: '1% of table balance'},
+        {k: 'Maximum bet', v: st.maxBet || String(Math.max(5, Math.round(v / 20))), set: set('maxBet'), hint: '5% of table balance'}
+      ],
+      risks: mkChip(['CONSERVATIVE', 'BALANCED', 'AGGRESSIVE'], 'risk'),
+      rounds: mkChip(['100', '500', '2,000', 'NO LIMIT'], 'rounds'),
+      stops: [
+        {k: 'Stop-loss', v: st.stop || String(Math.round(v * 0.5)), set: set('stop')},
+        {k: 'Profit target', v: st.target || String(Math.round(v * 1.5)), set: set('target')}
+      ],
+      receipt: [
+        {k: 'Wallet balance', v: money(wallet), color: '#EDEDED'},
+        {k: 'Moving to table', v: money(v), color: '#EDEDED'},
+        {k: 'Maximum session exposure', v: money(v), color: '#FFB020'},
+        {k: 'House edge', v: s ? s.edge : '—', color: '#FFB020'},
+        {k: 'Platform rake', v: 'None on house games', color: '#00E676'},
+        {k: 'AI compute', v: 'Included', color: '#8A8A8A'}
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

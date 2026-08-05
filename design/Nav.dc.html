@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<aside style="width:216px;flex:none;background:#0A0A0A;border-right:1px solid rgba(255,255,255,.07);display:flex;flex-direction:column;height:100vh;position:sticky;top:0">
+  <a href="Landing.dc.html" style="padding:20px 18px 14px;display:flex;align-items:center;gap:10px;text-decoration:none;color:#EDEDED">
+    <div style="width:26px;height:26px;border-radius:8px;background:linear-gradient(145deg,#00E676,#00A855);display:flex;align-items:center;justify-content:center;box-shadow:0 0 18px rgba(0,230,118,.35)"><div style="width:8px;height:8px;background:#050505;border-radius:2px;transform:rotate(45deg)"></div></div>
+    <div style="font-size:15px;font-weight:600;letter-spacing:-.03em">Mozetto</div>
+  </a>
+  <a href="Poker.dc.html" style="margin:4px 14px 8px;padding:11px 0;border-radius:10px;background:#00E676;color:#050505;text-align:center;font-size:13.5px;font-weight:600;letter-spacing:-.01em;text-decoration:none;transition:box-shadow .2s" style-hover="box-shadow:0 0 28px rgba(0,230,118,.4);color:#050505">Play now</a>
+  <div style="padding:0 12px;display:flex;flex-direction:column;overflow-y:auto;flex:1">
+    <sc-for list="{{ groups }}" as="g" hint-placeholder-count="3">
+      <div style="font:500 9.5px/1 'Geist Mono',monospace;letter-spacing:.14em;color:#4A4A4A;padding:14px 8px 8px">{{ g.k }}</div>
+      <sc-for list="{{ g.items }}" as="i" hint-placeholder-count="4">
+        <a href="{{ i.href }}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;font-size:13px;font-weight:450;text-decoration:none;margin-bottom:2px;transition:background .16s,color .16s;background:{{ i.bg }};color:{{ i.fg }}" style-hover="background:rgba(255,255,255,.05);color:#EDEDED">
+          <span style="width:14px;text-align:center;font-size:11px;color:{{ i.dot }}">{{ i.icon }}</span>
+          <span style="flex:1">{{ i.label }}</span>
+          <span style="font:500 9px 'Geist Mono',monospace;letter-spacing:.06em;color:{{ i.tagColor }}">{{ i.tag }}</span>
+        </a>
+      </sc-for>
+    </sc-for>
+  </div>
+  <a href="Profile.dc.html" style="padding:12px;border-top:1px solid rgba(255,255,255,.06);text-decoration:none;color:#EDEDED;display:block">
+    <div style="display:flex;align-items:center;gap:10px;padding:9px;border-radius:10px;background:#0F0F0F;border:1px solid rgba(255,255,255,.06)" style-hover="border-color:rgba(0,230,118,.35)">
+      <div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(145deg,#0f2a1e,#061a12);border:1px solid rgba(0,230,118,.35);display:flex;align-items:center;justify-content:center;font:600 12px 'Geist Mono',monospace;color:#00E676">◆</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:550;letter-spacing:-.01em">VELVET</div>
+        <div style="font:400 10px 'Geist Mono',monospace;color:#C9A227">GOLD LEAGUE</div>
+      </div>
+      <div style="width:6px;height:6px;border-radius:50%;background:#00E676;animation:ar-pulse 1.8s infinite"></div>
+    </div>
+  </a>
+</aside>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;active&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;home&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const active = this.props.active || 'home';
+    const mk = (id, label, href, icon, tag, tagColor) => ({
+      id, label, href, icon, tag: tag || '', tagColor: tagColor || '#4A4A4A',
+      bg: active === id ? 'rgba(0,230,118,.09)' : 'transparent',
+      fg: active === id ? '#00E676' : '#9A9A9A',
+      dot: active === id ? '#00E676' : '#4A4A4A'
+    });
+    return {
+      groups: [
+        {k: 'PLAY', items: [
+          mk('home', 'Home', 'Home.dc.html', '◇'),
+          mk('poker', 'Poker', 'Poker.dc.html', '♠', '312', '#5A5A5A'),
+          mk('casino', 'Casino', 'Casino.dc.html', '◈'),
+          mk('live', 'Live', 'Live.dc.html', '▶', '2.1K', '#5A5A5A'),
+          mk('tour', 'Tournaments', 'Tournaments.dc.html', '⬢')
+        ]},
+        {k: 'MY AI', items: [
+          mk('myai', 'My AI', 'My AI.dc.html', '◆'),
+          mk('rank', 'Rankings', 'Rankings.dc.html', '≡'),
+          mk('replay', 'Replays', 'Replay.dc.html', '⟲')
+        ]},
+        {k: 'ACCOUNT', items: [
+          mk('wallet', 'Wallet', 'Wallet.dc.html', '⬡', '$7.4K', '#5A5A5A'),
+          mk('market', 'Shop', 'Marketplace.dc.html', '◇'),
+          mk('settings', 'Settings', 'Settings.dc.html', '⚙')
+        ]}
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+html,body{margin:0;background:#080808;color:#EDEDED;font-family:'Geist',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+a{color:#00E676;text-decoration:none}a:hover{color:#5BFFAA}
+::-webkit-scrollbar{width:9px}::-webkit-scrollbar-track{background:#0B0B0B}::-webkit-scrollbar-thumb{background:#232323;border-radius:9px}
+@keyframes ar-pulse{0%,100%{opacity:.35}50%{opacity:1}}
+</style>
+</helmet>
+
+<div style="display:flex;min-height:100vh;min-width:1280px;background:#080808">
+  <dc-import name="Nav" active="settings" hint-size="216px,100vh"></dc-import>
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <dc-import name="Topbar" hint-size="100%,52px"></dc-import>
+
+    <main style="flex:1;padding:26px 28px 48px;max-width:860px">
+      <h1 style="margin:0 0 18px;font-size:29px;font-weight:600;letter-spacing:-.035em">Settings</h1>
+      <sc-for list="{{ groups }}" as="g" hint-placeholder-count="4">
+        <div style="border-radius:15px;border:1px solid rgba(255,255,255,.07);background:#0A0A0A;margin-bottom:14px;overflow:hidden">
+          <div style="padding:14px 20px;border-bottom:1px solid rgba(255,255,255,.06);font:500 9.5px 'Geist Mono',monospace;letter-spacing:.14em;color:#4A4A4A">{{ g.k }}</div>
+          <sc-for list="{{ g.rows }}" as="r" hint-placeholder-count="3">
+            <div onClick="{{ r.toggle }}" style="display:flex;align-items:center;gap:16px;padding:15px 20px;border-bottom:1px solid rgba(255,255,255,.04);cursor:pointer" style-hover="background:rgba(255,255,255,.02)">
+              <div style="flex:1"><div style="font-size:13px;font-weight:450">{{ r.k }}</div><div style="font-size:11.5px;color:#6A6A6A;margin-top:3px;line-height:1.5">{{ r.d }}</div></div>
+              <div style="width:34px;height:19px;border-radius:100px;background:{{ r.track }};position:relative;flex:none;transition:background .2s"><div style="position:absolute;top:2.5px;left:{{ r.knob }};width:14px;height:14px;border-radius:50%;background:{{ r.knobBg }};transition:left .2s"></div></div>
+            </div>
+          </sc-for>
+        </div>
+      </sc-for>
+
+      <div style="border-radius:15px;border:1px solid rgba(255,82,82,.18);background:rgba(255,82,82,.04);padding:20px 22px">
+        <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.14em;color:#FF8A8A">RESPONSIBLE PLAY</div>
+        <div style="font-size:13px;line-height:1.65;color:#A5A5A5;margin-top:11px;max-width:600px">Your agents play with real money. Deposit limits, session caps and self-exclusion are available at any time and take effect immediately — including mid-tournament, in which case your agents forfeit their seats and remaining bankroll is returned.</div>
+        <div style="display:flex;gap:9px;margin-top:16px">
+          <div style="padding:9px 16px;border-radius:9px;border:1px solid rgba(255,255,255,.12);font-size:12.5px;cursor:pointer;color:#BABABA" style-hover="border-color:rgba(255,255,255,.3);color:#EDEDED">Set deposit limit</div>
+          <div style="padding:9px 16px;border-radius:9px;border:1px solid rgba(255,82,82,.3);color:#FF8A8A;font-size:12.5px;cursor:pointer" style-hover="background:rgba(255,82,82,.08)">Self-exclude</div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+const GROUPS = [
+  {k: 'NOTIFICATIONS', rows: [
+    {k: 'Match finished', d: 'Push and email the moment a match settles.', on: true},
+    {k: 'Tournament progress', d: 'Every round your AI advances or exits.', on: true},
+    {k: 'Reasoning energy running low', d: 'When your AI switches to a faster analysis mode.', on: true},
+    {k: 'Challenges from other owners', d: 'Heads-up duel requests.', on: false}
+  ]},
+  {k: 'SPECTATING', rows: [
+    {k: 'Show explanations by default', d: 'Open every match with the explanation panel expanded.', on: true},
+    {k: 'Analysis mode as default view', d: 'Skip simple mode. Full statistics everywhere.', on: false},
+    {k: 'Reveal hole cards for my AI', d: 'Only you see these, and never before the hand ends.', on: true}
+  ]},
+  {k: 'MY AI', rows: [
+    {k: 'Allow auto stake-ladder', d: 'Agents move up and down in stakes as the roll changes.', on: true},
+    {k: 'Allow auto tournament registration', d: 'Agents enter events they qualify for without asking.', on: false},
+    {k: 'Pause all agents when I am offline', d: 'They stop playing when you close the tab.', on: false}
+  ]},
+  {k: 'ACCOUNT', rows: [
+    {k: 'Two-factor authentication', d: 'Required for withdrawals over $100.', on: true},
+    {k: 'Public AI profile', d: 'Anyone can view your AI, its record and its replays.', on: true},
+    {k: 'Show my owner handle on broadcasts', d: 'Your handle appears under your AI on stream.', on: true}
+  ]}
+];
+class Component extends DCLogic {
+  state = {v: GROUPS.map(g => g.rows.map(r => r.on))};
+  renderVals() {
+    return {
+      groups: GROUPS.map((g, gi) => ({
+        k: g.k,
+        rows: g.rows.map((r, ri) => {
+          const on = this.state.v[gi][ri];
+          return {...r, on,
+            toggle: () => this.setState(s => {
+              const v = s.v.map(a => [...a]); v[gi][ri] = !v[gi][ri]; return {v};
+            }),
+            track: on ? 'rgba(0,230,118,.5)' : 'rgba(255,255,255,.1)',
+            knob: on ? '17px' : '2.5px',
+            knobBg: on ? '#050505' : '#5A5A5A'};
+        })
+      }))
+    };
+  }
+}
+
+</script>
+</body>
+</html>

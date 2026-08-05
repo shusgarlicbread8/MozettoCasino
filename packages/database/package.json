@@ -1,0 +1,20 @@
+{
+  "name": "@mozetto/database",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "migrate": "node ./scripts/migrate.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mozetto/ratings": "workspace:*",
+    "pg": "^8.22.0",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2"
+  }
+}

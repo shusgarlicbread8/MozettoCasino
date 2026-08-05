@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+html,body{margin:0;background:#080808;color:#EDEDED;font-family:'Geist',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+a{color:#00E676;text-decoration:none}a:hover{color:#5BFFAA}
+::-webkit-scrollbar{width:9px}::-webkit-scrollbar-track{background:#0B0B0B}::-webkit-scrollbar-thumb{background:#232323;border-radius:9px}
+@keyframes ar-pulse{0%,100%{opacity:.35}50%{opacity:1}}
+@keyframes ar-up{0%{transform:translateY(8px);opacity:0}100%{transform:none;opacity:1}}
+</style>
+</helmet>
+
+<div style="display:flex;min-height:100vh;min-width:1320px;background:#080808">
+  <dc-import name="Nav" active="wallet" hint-size="216px,100vh"></dc-import>
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <dc-import name="Topbar" hint-size="100%,52px"></dc-import>
+
+    <main style="flex:1;padding:26px 28px 56px;max-width:1240px">
+      <h1 style="margin:0 0 20px;font-size:29px;font-weight:600;letter-spacing:-.035em">Wallet</h1>
+
+      <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:14px">
+        <div style="border-radius:16px;border:1px solid rgba(255,255,255,.07);background:linear-gradient(165deg,#101010,#0A0A0A);padding:26px">
+          <div style="font:400 10px 'Geist Mono',monospace;letter-spacing:.13em;color:#5A5A5A">WALLET BALANCE</div>
+          <div style="font:500 48px 'Geist Mono',monospace;letter-spacing:-.035em;margin-top:10px">$7,400.00</div>
+          <div style="font-size:12.5px;color:#6A6A6A;margin-top:8px">Never at risk. Money is only exposed once you move it to a table.</div>
+          <div style="display:flex;gap:10px;margin-top:22px">
+            <div style="padding:11px 22px;border-radius:10px;background:#00E676;color:#050505;font-size:13.5px;font-weight:600;cursor:pointer;transition:box-shadow .2s" style-hover="box-shadow:0 0 28px rgba(0,230,118,.4)">Deposit</div>
+            <div style="padding:11px 22px;border-radius:10px;border:1px solid rgba(255,255,255,.12);font-size:13.5px;cursor:pointer;color:#BABABA" style-hover="border-color:rgba(255,255,255,.3);color:#EDEDED">Withdraw</div>
+          </div>
+          <div style="display:flex;gap:22px;margin-top:24px;padding-top:20px;border-top:1px solid rgba(255,255,255,.06)">
+            <sc-for list="{{ leagueStatus }}" as="l" hint-placeholder-count="3">
+              <div>
+                <div style="font:400 9px 'Geist Mono',monospace;letter-spacing:.11em;color:#4A4A4A">{{ l.k }}</div>
+                <div style="font:500 14px 'Geist Mono',monospace;margin-top:5px;color:{{ l.color }}">{{ l.v }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="border-radius:16px;border:1px solid rgba(255,177,32,.2);background:linear-gradient(165deg,rgba(255,177,32,.05),#0A0A0A);overflow:hidden">
+          <div style="padding:20px 22px 16px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="width:6px;height:6px;border-radius:50%;background:#FFB020;animation:ar-pulse 1.8s infinite"></div>
+              <div style="font:400 10px 'Geist Mono',monospace;letter-spacing:.13em;color:#8A7040">AT TABLES</div>
+            </div>
+            <div style="font:500 32px 'Geist Mono',monospace;letter-spacing:-.03em;margin-top:8px;color:#FFB020">$1,500.00</div>
+            <div style="font-size:12px;color:#7A7A7A;margin-top:6px">This is the maximum you can lose right now.</div>
+          </div>
+          <sc-for list="{{ tables }}" as="t" hint-placeholder-count="2">
+            <a href="{{ t.href }}" style="display:flex;align-items:center;gap:11px;padding:13px 22px;border-top:1px solid rgba(255,255,255,.05);text-decoration:none" style-hover="background:rgba(255,255,255,.03)">
+              <div style="width:4px;height:26px;border-radius:3px;background:{{ t.leagueColor }};flex:none"></div>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:12.5px;font-weight:550;color:#EDEDED">{{ t.name }}</div>
+                <div style="font:400 10px 'Geist Mono',monospace;color:#5A5A5A;margin-top:3px">{{ t.meta }}</div>
+              </div>
+              <div style="text-align:right">
+                <div style="font:500 13px 'Geist Mono',monospace;color:#EDEDED">{{ t.balance }}</div>
+                <div style="font:400 10px 'Geist Mono',monospace;color:{{ t.pnlColor }};margin-top:3px">{{ t.pnl }}</div>
+              </div>
+            </a>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:14px">
+        <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="4">
+          <div style="border-radius:14px;border:1px solid rgba(255,255,255,.07);background:#0A0A0A;padding:18px 20px">
+            <div style="font:400 9.5px 'Geist Mono',monospace;letter-spacing:.11em;color:#4A4A4A">{{ k.k }}</div>
+            <div style="font:500 22px 'Geist Mono',monospace;margin-top:8px;color:{{ k.color }}">{{ k.v }}</div>
+            <div style="font-size:11px;color:#6A6A6A;margin-top:5px">{{ k.sub }}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="border-radius:16px;border:1px solid rgba(255,255,255,.07);background:#0A0A0A;margin-top:14px;overflow:hidden">
+        <div style="padding:15px 20px;border-bottom:1px solid rgba(255,255,255,.06);display:flex;justify-content:space-between;align-items:center">
+          <div style="font-size:14.5px;font-weight:600;letter-spacing:-.02em">Recent activity</div>
+          <div style="display:flex;gap:5px">
+            <sc-for list="{{ filters }}" as="f" hint-placeholder-count="5">
+              <div onClick="{{ f.go }}" style="padding:4px 11px;border-radius:6px;font:400 10.5px 'Geist Mono',monospace;cursor:pointer;background:{{ f.bg }};color:{{ f.fg }}">{{ f.k }}</div>
+            </sc-for>
+          </div>
+        </div>
+        <sc-for list="{{ ledger }}" as="l" hint-placeholder-count="10">
+          <div style="display:grid;grid-template-columns:104px 1fr 150px 110px 110px;gap:14px;align-items:center;padding:13px 20px;border-bottom:1px solid rgba(255,255,255,.04);font:400 11.5px 'Geist Mono',monospace">
+            <span style="color:#5A5A5A">{{ l.d }}</span>
+            <span style="color:#C5C5C5;font-family:'Geist',sans-serif;font-size:12.5px">{{ l.t }}</span>
+            <span style="color:#6A6A6A">{{ l.method }}</span>
+            <span style="color:{{ l.color }};text-align:right">{{ l.amt }}</span>
+            <span style="color:#5A5A5A;text-align:right">{{ l.bal }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="border-radius:16px;border:1px solid rgba(255,255,255,.07);background:#0A0A0A;margin-top:14px;overflow:hidden">
+        <div onClick="{{ toggleAdv }}" style="padding:15px 20px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" style-hover="background:rgba(255,255,255,.02)">
+          <div>
+            <div style="font-size:14px;font-weight:600;letter-spacing:-.02em">Advanced breakdown</div>
+            <div style="font-size:11.5px;color:#5A5A5A;margin-top:3px">Rake, house edge, reasoning energy and on-chain settlement records.</div>
+          </div>
+          <span style="font:400 12px 'Geist Mono',monospace;color:#5A5A5A">{{ advChevron }}</span>
+        </div>
+        <sc-if value="{{ advOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:4px 20px 22px;animation:ar-up .2s ease-out both">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:22px">
+              <div>
+                <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.14em;color:#4A4A4A;margin-bottom:12px">WHERE THE MONEY WENT · 30 DAYS</div>
+                <sc-for list="{{ costs }}" as="c" hint-placeholder-count="5">
+                  <div style="margin-bottom:13px">
+                    <div style="display:flex;justify-content:space-between;font:400 11.5px 'Geist Mono',monospace"><span style="color:#8A8A8A">{{ c.k }}</span><span style="color:{{ c.vColor }}">{{ c.v }}</span></div>
+                    <div style="height:5px;border-radius:4px;background:rgba(255,255,255,.05);margin-top:6px"><div style="height:100%;border-radius:4px;background:{{ c.color }};width:{{ c.w }}"></div></div>
+                  </div>
+                </sc-for>
+                <div style="border-top:1px solid rgba(255,255,255,.06);margin-top:14px;padding-top:12px;display:flex;justify-content:space-between;font:500 13px 'Geist Mono',monospace"><span style="color:#8A8A8A">NET</span><span style="color:#00E676">+$2,184</span></div>
+              </div>
+              <div>
+                <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.14em;color:#4A4A4A;margin-bottom:12px">SETTLEMENT PATH</div>
+                <sc-for list="{{ flow }}" as="f" hint-placeholder-count="3">
+                  <div style="display:flex;gap:12px;align-items:flex-start;padding-bottom:14px">
+                    <div style="width:22px;height:22px;border-radius:7px;background:{{ f.bg }};border:1px solid {{ f.border }};display:flex;align-items:center;justify-content:center;font-size:10px;color:{{ f.color }};flex:none">{{ f.icon }}</div>
+                    <div style="flex:1">
+                      <div style="font-size:12.5px;font-weight:500;color:#DADADA">{{ f.k }}</div>
+                      <div style="font:400 10.5px/1.5 'Geist Mono',monospace;color:#6A6A6A;margin-top:3px">{{ f.sub }}</div>
+                    </div>
+                  </div>
+                </sc-for>
+                <div style="padding:12px 14px;border-radius:11px;background:rgba(110,168,255,.05);border:1px solid rgba(110,168,255,.16);font-size:11.5px;line-height:1.6;color:#8A8A8A">Reasoning energy is included in every buy-in. You are never billed for compute, and every AI at a table receives the same allowance.</div>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {f: 0, adv: false};
+  renderVals() {
+    return {
+      leagueStatus: [
+        {k: 'CURRENT LEAGUE', v: 'GOLD', color: '#C9A227'},
+        {k: 'NEXT LEAGUE', v: 'PLATINUM · $10,000', color: '#8FE3D2'},
+        {k: 'MINIMUM BUY-IN ANYWHERE', v: '$10', color: '#8A8A8A'}
+      ],
+      tables: [
+        {name: 'Monaco 12', meta: 'GOLD · 6-MAX NLHE · 184 HANDS', balance: '$1,912', pnl: '+$412', pnlColor: '#00E676', leagueColor: '#C9A227', href: 'Arena.dc.html'},
+        {name: 'Vault 12', meta: 'GOLD · BLACKJACK · 414 ROUNDS', balance: '$1,184', pnl: '+$184', pnlColor: '#00E676', leagueColor: '#C9A227', href: 'Blackjack.dc.html'}
+      ],
+      kpis: [
+        {k: 'SESSIONS · 30 DAYS', v: '41', color: '#EDEDED', sub: 'across 4 games'},
+        {k: 'NET · 30 DAYS', v: '+$2,184', color: '#00E676', sub: '24 winning sessions'},
+        {k: 'BIGGEST POT WON', v: '$3,850', color: '#00E676', sub: 'Monaco 12 · 2 Aug'},
+        {k: 'RAKE PAID', v: '$412', color: '#8A8A8A', sub: '2.5% capped, per eligible pot'}
+      ],
+      filters: ['ALL', 'POKER', 'CASINO', 'TRANSFERS', 'SHOP'].map((k, i) => ({k, go: () => this.setState({f: i}),
+        bg: this.state.f === i ? 'rgba(255,255,255,.08)' : 'transparent', fg: this.state.f === i ? '#EDEDED' : '#5A5A5A'})),
+      ledger: [
+        {d: '04 AUG 19:12', t: 'Monaco 12 · buy-in', method: 'WALLET → TABLE', amt: '−$1,500', color: '#8A8A8A', bal: '$7,400.00'},
+        {d: '04 AUG 18:40', t: 'Vault 12 · session closed at profit target', method: 'TABLE → WALLET', amt: '+$1,842', color: '#00E676', bal: '$8,900.00'},
+        {d: '04 AUG 14:02', t: 'Harbour 9 · session closed at stop-loss', method: 'TABLE → WALLET', amt: '+$260', color: '#FF5252', bal: '$7,058.00'},
+        {d: '03 AUG 22:18', t: 'Rake · 2.5% capped, 84 eligible pots', method: 'PLATFORM FEE', amt: '−$142', color: '#8A8A8A', bal: '$6,798.00'},
+        {d: '03 AUG 20:04', t: 'Kingsway PLO · session closed', method: 'TABLE → WALLET', amt: '+$1,204', color: '#00E676', bal: '$6,940.00'},
+        {d: '03 AUG 12:00', t: 'Emerald table skin', method: 'SHOP', amt: '−$3.00', color: '#8A8A8A', bal: '$5,736.00'},
+        {d: '02 AUG 09:44', t: 'Deposit', method: 'USDC · BASE', amt: '+$5,000', color: '#00E676', bal: '$5,739.00'},
+        {d: '01 AUG 20:11', t: 'Gold Invitational · finished 6th', method: 'TOURNAMENT', amt: '+$1,740', color: '#00E676', bal: '$739.00'},
+        {d: '01 AUG 18:00', t: 'Gold Invitational · entry', method: 'TOURNAMENT', amt: '−$1,000', color: '#8A8A8A', bal: '−'},
+        {d: '31 JUL 16:30', t: 'Withdrawal to bank', method: 'SEPA', amt: '−$2,000', color: '#8A8A8A', bal: '$1,999.00'}
+      ],
+      advOpen: this.state.adv, advChevron: this.state.adv ? '▾' : '▸',
+      toggleAdv: () => this.setState(s => ({adv: !s.adv})),
+      costs: [
+        {k: 'POKER WINNINGS', v: '+$4,182', vColor: '#00E676', w: '100%', color: '#00E676'},
+        {k: 'POKER LOSSES', v: '−$2,140', vColor: '#FF5252', w: '51%', color: '#FF5252'},
+        {k: 'CASINO NET', v: '+$556', vColor: '#00E676', w: '14%', color: '#00E676'},
+        {k: 'RAKE (2.5% CAPPED)', v: '−$412', vColor: '#8A8A8A', w: '10%', color: '#5A5A5A'},
+        {k: 'SHOP', v: '−$3', vColor: '#8A8A8A', w: '2%', color: '#5A5A5A'}
+      ],
+      flow: [
+        {icon: '⬡', k: 'Wallet balance', sub: 'Untouched until you buy in — withdrawable at any time', color: '#EDEDED', bg: '#0D0D0D', border: 'rgba(255,255,255,.1)'},
+        {icon: '◈', k: 'Table balance in escrow', sub: 'Only this amount is at risk during a session', color: '#FFB020', bg: 'rgba(255,177,32,.08)', border: 'rgba(255,177,32,.24)'},
+        {icon: '▲', k: 'Winners, rake and house edge', sub: 'Pots settle to winners on-chain; rake on poker only, house edge on casino games', color: '#00E676', bg: 'rgba(0,230,118,.08)', border: 'rgba(0,230,118,.24)'}
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+html,body{margin:0;background:#080808;color:#EDEDED;font-family:'Geist',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+a{color:#00E676;text-decoration:none}a:hover{color:#5BFFAA}
+::-webkit-scrollbar{width:9px}::-webkit-scrollbar-track{background:#0B0B0B}::-webkit-scrollbar-thumb{background:#232323;border-radius:9px}
+@keyframes ar-pulse{0%,100%{opacity:.35}50%{opacity:1}}
+@keyframes ar-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+</style>
+</helmet>
+
+<div style="display:flex;min-height:100vh;min-width:1280px;background:#080808">
+  <dc-import name="Nav" active="market" hint-size="216px,100vh"></dc-import>
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <dc-import name="Topbar" hint-size="100%,52px"></dc-import>
+
+    <main style="flex:1;padding:26px 28px 56px;max-width:1180px">
+      <div style="display:flex;align-items:baseline;justify-content:space-between">
+        <div>
+          <h1 style="margin:0;font-size:29px;font-weight:600;letter-spacing:-.035em">Shop</h1>
+          <p style="margin:8px 0 0;font-size:13.5px;color:#7A7A7A">Looks only. Nothing here changes how your AI plays or gives any advantage at the table.</p>
+        </div>
+        <div style="display:flex;gap:6px">
+          <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="5">
+            <div onClick="{{ t.go }}" style="padding:8px 15px;border-radius:9px;font:500 11px 'Geist Mono',monospace;letter-spacing:.04em;cursor:pointer;background:{{ t.bg }};border:1px solid {{ t.border }};color:{{ t.fg }};transition:all .18s">{{ t.k }}</div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:20px">
+        <sc-for list="{{ items }}" as="i" hint-placeholder-count="12">
+          <div style="border-radius:16px;border:1px solid rgba(255,255,255,.07);background:#0A0A0A;overflow:hidden;transition:border-color .2s,transform .2s" style-hover="border-color:rgba(0,230,118,.3);transform:translateY(-4px)">
+            <div style="height:132px;background:{{ i.art }};display:flex;align-items:center;justify-content:center;border-bottom:1px solid rgba(255,255,255,.06);position:relative">
+              <div style="font-size:36px;color:{{ i.color }};animation:ar-float 6s ease-in-out infinite">{{ i.glyph }}</div>
+              <div style="position:absolute;top:11px;left:11px;font:500 9px 'Geist Mono',monospace;letter-spacing:.1em;color:#5A5A5A">{{ i.cat }}</div>
+              <div style="position:absolute;top:11px;right:11px;font:500 9px 'Geist Mono',monospace;letter-spacing:.1em;color:{{ i.rarityColor }}">{{ i.rarity }}</div>
+            </div>
+            <div style="padding:16px 18px">
+              <div style="font-size:14px;font-weight:600;letter-spacing:-.02em">{{ i.name }}</div>
+              <div style="font-size:11.5px;line-height:1.5;color:#6A6A6A;margin-top:5px;min-height:34px">{{ i.desc }}</div>
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:13px;border-top:1px solid rgba(255,255,255,.05)">
+                <div style="font:500 14px 'Geist Mono',monospace;color:{{ i.priceColor }}">{{ i.price }}</div>
+                <div style="padding:6px 14px;border-radius:8px;background:{{ i.btnBg }};border:1px solid {{ i.btnBorder }};font-size:11.5px;font-weight:550;color:{{ i.btnFg }};cursor:pointer">{{ i.btn }}</div>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:11px;margin-top:18px;padding:14px 18px;border-radius:12px;background:rgba(110,168,255,.05);border:1px solid rgba(110,168,255,.16)">
+        <div style="font-size:13px;color:#6EA8FF">◆</div>
+        <div style="font-size:12.5px;line-height:1.55;color:#9A9A9A;text-wrap:pretty">Mozetto does not sell strategy. Every ranked match is played on the same engine with the same reasoning energy — cosmetics are the only thing money buys here.</div>
+      </div>
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+const ITEMS = [
+  {cat: 'AVATAR', name: 'Obsidian Mask', desc: 'A matte black avatar frame with a slow emerald sheen.', glyph: '◆', color: '#00E676', rarity: 'RARE', price: '$4.00', tone: 'rgba(0,230,118,.14)'},
+  {cat: 'AVATAR', name: 'Paper Fox', desc: 'Folded-paper avatar in warm amber.', glyph: '✦', color: '#FFB020', rarity: 'COMMON', price: '$2.00', tone: 'rgba(255,177,32,.14)'},
+  {cat: 'AVATAR', name: 'Deep Blue', desc: 'Cold analytical avatar for patient players.', glyph: '◈', color: '#6EA8FF', rarity: 'COMMON', price: '$2.00', tone: 'rgba(110,168,255,.14)'},
+  {cat: 'AVATAR', name: 'Crimson Edge', desc: 'Sharp red frame with a pressure-pulse animation.', glyph: '●', color: '#FF5252', rarity: 'RARE', price: '$4.00', tone: 'rgba(255,82,82,.14)'},
+  {cat: 'CARD BACK', name: 'Emerald Weave', desc: 'Woven green card back with a fine gold thread.', glyph: '▤', color: '#00E676', rarity: 'OWNED', price: 'Owned', tone: 'rgba(0,230,118,.1)'},
+  {cat: 'CARD BACK', name: 'Midnight Grid', desc: 'Terminal-blue grid on near-black stock.', glyph: '▦', color: '#6EA8FF', rarity: 'COMMON', price: '$1.50', tone: 'rgba(110,168,255,.1)'},
+  {cat: 'CARD BACK', name: 'Bone Ivory', desc: 'Warm ivory back with a debossed monogram.', glyph: '▥', color: '#EDEDED', rarity: 'RARE', price: '$3.00', tone: 'rgba(255,255,255,.08)'},
+  {cat: 'TABLE SKIN', name: 'Monte Felt', desc: 'Classic deep-green felt with a brass rail.', glyph: '⬮', color: '#00E676', rarity: 'OWNED', price: 'Owned', tone: 'rgba(0,230,118,.1)'},
+  {cat: 'TABLE SKIN', name: 'Slate Room', desc: 'Charcoal felt, cool white lighting, no ornament.', glyph: '⬯', color: '#BABABA', rarity: 'COMMON', price: '$3.00', tone: 'rgba(255,255,255,.07)'},
+  {cat: 'TABLE SKIN', name: 'Amber Lounge', desc: 'Low amber light and oxblood leather trim.', glyph: '⬬', color: '#FFB020', rarity: 'LEGENDARY', price: '$8.00', tone: 'rgba(255,177,32,.14)'},
+  {cat: 'ANIMATION', name: 'Slow Arrival', desc: 'Your AI fades in from smoke as the match opens.', glyph: '⟡', color: '#C89BFF', rarity: 'RARE', price: '$5.00', tone: 'rgba(200,155,255,.14)'},
+  {cat: 'ANIMATION', name: 'Clean Sweep', desc: 'Victory animation: the pot slides in one motion.', glyph: '⟶', color: '#00E676', rarity: 'RARE', price: '$5.00', tone: 'rgba(0,230,118,.14)'}
+];
+const RC = {COMMON: '#6A6A6A', RARE: '#6EA8FF', LEGENDARY: '#FFB020', OWNED: '#00E676'};
+class Component extends DCLogic {
+  state = {tab: 0};
+  renderVals() {
+    const TABS = ['ALL', 'AVATAR', 'CARD BACK', 'TABLE SKIN', 'ANIMATION'];
+    const t = TABS[this.state.tab];
+    return {
+      tabs: TABS.map((k, i) => ({k, go: () => this.setState({tab: i}),
+        bg: this.state.tab === i ? 'rgba(0,230,118,.09)' : 'transparent',
+        border: this.state.tab === i ? 'rgba(0,230,118,.35)' : 'rgba(255,255,255,.09)',
+        fg: this.state.tab === i ? '#00E676' : '#6A6A6A'})),
+      items: ITEMS.filter(i => t === 'ALL' || i.cat === t).map(i => ({
+        ...i,
+        art: 'radial-gradient(120% 130% at 50% 25%,' + i.tone + ',#0A0A0A 72%)',
+        rarityColor: RC[i.rarity],
+        priceColor: i.rarity === 'OWNED' ? '#00E676' : '#EDEDED',
+        btn: i.rarity === 'OWNED' ? 'Equipped' : 'Buy',
+        btnBg: i.rarity === 'OWNED' ? 'transparent' : '#00E676',
+        btnBorder: i.rarity === 'OWNED' ? 'rgba(0,230,118,.35)' : '#00E676',
+        btnFg: i.rarity === 'OWNED' ? '#00E676' : '#050505'
+      }))
+    };
+  }
+}
+</script>
+</body>
+</html>

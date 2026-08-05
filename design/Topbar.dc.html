@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<header style="height:52px;flex:none;border-bottom:1px solid rgba(255,255,255,.07);background:rgba(8,8,8,.88);backdrop-filter:blur(18px);display:flex;align-items:center;gap:16px;padding:0 18px;position:sticky;top:0;z-index:40">
+  <div style="display:flex;align-items:center;gap:14px;flex:1;min-width:0">
+    <a href="Live.dc.html" style="display:flex;align-items:center;gap:7px;padding:4px 9px;border-radius:6px;background:rgba(255,82,82,.1);border:1px solid rgba(255,82,82,.22);flex:none;text-decoration:none">
+      <div style="width:5px;height:5px;border-radius:50%;background:#FF5252;animation:ar-pulse 1.4s infinite"></div>
+      <span style="font:500 10px 'Geist Mono',monospace;letter-spacing:.08em;color:#FF8A8A">{{ liveCount }} TABLES LIVE</span>
+    </a>
+    <div style="display:flex;gap:20px;white-space:nowrap;font:400 11px 'Geist Mono',monospace;color:#8A8A8A;overflow:hidden">
+      <sc-for list="{{ ticker }}" as="t" hint-placeholder-count="4">
+        <span><span style="color:#4A4A4A">{{ t.k }}</span> {{ t.v }} <span style="color:{{ t.c }}">{{ t.d }}</span></span>
+      </sc-for>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:14px;flex:none">
+    <a href="Wallet.dc.html" style="display:flex;align-items:center;gap:14px;text-decoration:none;color:#EDEDED">
+      <div style="text-align:right">
+        <div style="font:400 9px 'Geist Mono',monospace;letter-spacing:.1em;color:#4A4A4A">WALLET</div>
+        <div style="font:500 13px 'Geist Mono',monospace">$7,400.00</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font:400 9px 'Geist Mono',monospace;letter-spacing:.1em;color:#4A4A4A">AT TABLES</div>
+        <div style="font:500 13px 'Geist Mono',monospace;color:#FFB020">$1,500.00</div>
+      </div>
+    </a>
+    <a href="Poker.dc.html" style="padding:7px 15px;border-radius:8px;background:#00E676;color:#050505;font-size:12.5px;font-weight:600;text-decoration:none;transition:box-shadow .2s" style-hover="box-shadow:0 0 26px rgba(0,230,118,.4);color:#050505">Play now</a>
+    <div style="width:1px;height:22px;background:rgba(255,255,255,.08)"></div>
+    <div onClick="{{ toggle }}" style="width:32px;height:32px;border-radius:8px;border:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center;cursor:pointer;position:relative;font-size:12px;color:#9A9A9A" style-hover="border-color:rgba(0,230,118,.4);color:#00E676">◔
+      <div style="position:absolute;top:-4px;right:-4px;min-width:15px;height:15px;padding:0 4px;border-radius:8px;background:#00E676;color:#050505;font:600 9px/15px 'Geist Mono',monospace;text-align:center">3</div>
+    </div>
+  </div>
+  <sc-if value="{{ open }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;top:56px;right:14px;width:376px;border-radius:15px;border:1px solid rgba(255,255,255,.1);background:rgba(12,12,12,.98);backdrop-filter:blur(22px);box-shadow:0 30px 80px rgba(0,0,0,.85);overflow:hidden;animation:ar-up .2s ease-out both;z-index:60">
+      <div style="padding:15px 18px;border-bottom:1px solid rgba(255,255,255,.06);display:flex;justify-content:space-between;align-items:center">
+        <div style="font-size:14px;font-weight:600;letter-spacing:-.02em">Notifications</div>
+        <div style="font:400 10.5px 'Geist Mono',monospace;color:#00E676;cursor:pointer">MARK ALL READ</div>
+      </div>
+      <sc-for list="{{ notifs }}" as="n" hint-placeholder-count="4">
+        <div style="display:flex;gap:12px;padding:14px 18px;border-bottom:1px solid rgba(255,255,255,.04);cursor:pointer;background:{{ n.bg }}" style-hover="background:rgba(255,255,255,.04)">
+          <div style="width:28px;height:28px;border-radius:8px;background:{{ n.iconBg }};display:flex;align-items:center;justify-content:center;font-size:11px;color:{{ n.color }};flex:none">{{ n.icon }}</div>
+          <div style="flex:1"><div style="font-size:12.5px;line-height:1.45;color:#DADADA">{{ n.t }}</div><div style="font:400 10px 'Geist Mono',monospace;color:#4A4A4A;margin-top:4px">{{ n.ago }}</div></div>
+        </div>
+      </sc-for>
+    </div>
+  </sc-if>
+</header>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {open: false, i: 0};
+  componentDidMount() { this.t = setInterval(() => this.setState(s => ({i: s.i + 1})), 3000); }
+  componentWillUnmount() { clearInterval(this.t); }
+  renderVals() {
+    const j = this.state.i;
+    return {
+      open: this.state.open,
+      liveCount: (312 + (j % 5)),
+      toggle: () => this.setState(s => ({open: !s.open})),
+      ticker: [
+        {k: 'BIGGEST POT', v: '$184,200', d: 'SEOUL 2', c: '#00E676'},
+        {k: 'GOLD TABLES', v: '28', d: 'OPEN', c: '#5A5A5A'},
+        {k: 'YOUR SESSION', v: '+$412', d: 'MONACO 12', c: '#00E676'}
+      ],
+      notifs: [
+        {icon: '▲', color: '#00E676', iconBg: 'rgba(0,230,118,.12)', bg: 'rgba(0,230,118,.03)', t: 'VELVET won a $3,840 pot at Monaco 12. Session is up $412.', ago: '2 MIN AGO'},
+        {icon: '◈', color: '#6EA8FF', iconBg: 'rgba(110,168,255,.12)', bg: 'transparent', t: 'Your session stop-loss on Emerald 4 was reached. VELVET left the table.', ago: '1 H AGO'},
+        {icon: '⬢', color: '#C9A227', iconBg: 'rgba(201,162,39,.12)', bg: 'transparent', t: 'You qualified for Platinum League. Verification required to enter.', ago: '4 H AGO'},
+        {icon: '≡', color: '#00E676', iconBg: 'rgba(0,230,118,.12)', bg: 'transparent', t: 'VELVET v4 is now 8.4 bb/100 over 12,400 hands in Gold 6-max.', ago: '9 H AGO'}
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

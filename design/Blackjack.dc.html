@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+html,body{margin:0;background:#080808;color:#EDEDED;font-family:'Geist',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+a{color:#00E676;text-decoration:none}a:hover{color:#5BFFAA}
+::-webkit-scrollbar{width:8px}::-webkit-scrollbar-track{background:#0B0B0B}::-webkit-scrollbar-thumb{background:#232323;border-radius:8px}
+@keyframes ar-pulse{0%,100%{opacity:.35;transform:scale(1)}50%{opacity:1;transform:scale(1.18)}}
+@keyframes ar-deal{0%{transform:translateY(-26px) rotate(-8deg) scale(.92);opacity:0}100%{transform:none;opacity:1}}
+@keyframes ar-slidein{0%{transform:translateX(18px);opacity:0}100%{transform:none;opacity:1}}
+@keyframes ar-up{0%{transform:translateY(8px);opacity:0}100%{transform:none;opacity:1}}
+</style>
+</helmet>
+
+<div style="display:flex;height:100vh;min-height:860px;min-width:1400px;background:#080808;overflow:hidden">
+  <dc-import name="Nav" active="casino" hint-size="216px,100vh"></dc-import>
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column;height:100%">
+    <dc-import name="Topbar" hint-size="100%,52px"></dc-import>
+
+    <div style="flex:1;min-height:0;display:grid;grid-template-columns:1fr 340px">
+      <div style="position:relative;display:flex;flex-direction:column;background:radial-gradient(900px 640px at 50% 42%,#0C0C0C,#050505);min-width:0">
+        <div style="flex:none;display:flex;align-items:center;justify-content:space-between;padding:12px 22px;border-bottom:1px solid rgba(255,255,255,.05)">
+          <div style="display:flex;align-items:center;gap:14px">
+            <div style="display:flex;align-items:center;gap:9px">
+              <div style="width:5px;height:20px;border-radius:3px;background:#C9A227"></div>
+              <div style="font:500 12.5px 'Geist Mono',monospace;letter-spacing:.04em">VAULT 12 · GOLD</div>
+            </div>
+            <div style="font:400 11px 'Geist Mono',monospace;color:#5A5A5A">BLACKJACK · 8 DECK · S17 · DAS · HOUSE EDGE 0.44% · NO RAKE</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div onClick="{{ setSimple }}" style="padding:5px 13px;border-radius:7px;font:500 11px 'Geist Mono',monospace;cursor:pointer;background:{{ simpleBg }};color:{{ simpleFg }}">SIMPLE</div>
+            <div onClick="{{ setPro }}" style="padding:5px 13px;border-radius:7px;font:500 11px 'Geist Mono',monospace;cursor:pointer;background:{{ proBg }};color:{{ proFg }}">ANALYSIS</div>
+          </div>
+        </div>
+
+        <div style="flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:30px">
+          <div style="position:relative;width:100%;max-width:760px;height:100%;max-height:560px;border-radius:50% 50% 18px 18px / 62% 62% 18px 18px;background:radial-gradient(120% 130% at 50% 8%,#10402B 0%,#0A2418 48%,#05100B 100%);border:11px solid #0D0D0D;box-shadow:inset 0 0 90px rgba(0,0,0,.9),0 30px 90px rgba(0,0,0,.85),0 0 0 1px rgba(0,230,118,.12);display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:34px 30px 26px">
+
+            <div style="display:flex;flex-direction:column;align-items:center;gap:12px">
+              <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.24em;color:rgba(255,255,255,.35)">HOUSE · DEALER STANDS ON 17</div>
+              <div style="display:flex;gap:8px;min-height:76px">
+                <sc-for list="{{ dealer }}" as="c" hint-placeholder-count="2">
+                  <div style="width:54px;height:76px;border-radius:7px;background:{{ c.bg }};border:1px solid {{ c.border }};display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 10px 26px rgba(0,0,0,.6);animation:ar-deal .35s ease-out both">
+                    <div style="font:600 25px 'Geist',sans-serif;line-height:1;color:{{ c.color }}">{{ c.r }}</div>
+                    <div style="font-size:18px;line-height:1.2;color:{{ c.color }}">{{ c.s }}</div>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="font:500 16px 'Geist Mono',monospace;color:{{ dealerColor }};letter-spacing:.04em">{{ dealerTotal }}</div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;align-items:center;gap:9px">
+              <div style="font:500 22px 'Geist Mono',monospace;color:{{ resultColor }};letter-spacing:-.02em;min-height:28px">{{ result }}</div>
+              <div style="font:400 10px 'Geist Mono',monospace;letter-spacing:.16em;color:#4A7A62">{{ resultSub }}</div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;align-items:center;gap:12px;width:100%">
+              <div style="display:flex;gap:8px;min-height:76px">
+                <sc-for list="{{ player }}" as="c" hint-placeholder-count="2">
+                  <div style="width:54px;height:76px;border-radius:7px;background:{{ c.bg }};border:1px solid {{ c.border }};display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 10px 26px rgba(0,0,0,.6);animation:ar-deal .35s ease-out both">
+                    <div style="font:600 25px 'Geist',sans-serif;line-height:1;color:{{ c.color }}">{{ c.r }}</div>
+                    <div style="font-size:18px;line-height:1.2;color:{{ c.color }}">{{ c.s }}</div>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="font:500 16px 'Geist Mono',monospace;color:{{ playerColor }};letter-spacing:.04em">{{ playerTotal }}</div>
+              <div style="display:flex;align-items:center;gap:14px;padding:11px 20px;border-radius:14px;background:rgba(11,11,11,.94);border:1px solid {{ actorBorder }};box-shadow:0 10px 30px rgba(0,0,0,.5)">
+                <div style="width:32px;height:32px;border-radius:10px;background:#151515;border:1px solid rgba(0,230,118,.4);display:flex;align-items:center;justify-content:center;font-size:14px;color:#00E676">◆</div>
+                <div>
+                  <div style="font:500 13px 'Geist Mono',monospace">VELVET <span style="font-size:9px;color:#5A5A5A">v4</span></div>
+                  <div style="font:400 9.5px 'Geist Mono',monospace;color:#5A5A5A;margin-top:3px">YOUR AI · BALANCED RISK</div>
+                </div>
+                <div style="width:1px;height:28px;background:rgba(255,255,255,.09)"></div>
+                <div style="text-align:right">
+                  <div style="font:400 8.5px 'Geist Mono',monospace;letter-spacing:.11em;color:#4A4A4A">BET</div>
+                  <div style="font:500 15px 'Geist Mono',monospace;color:#00E676;margin-top:3px">{{ bet }}</div>
+                </div>
+                <div style="width:1px;height:28px;background:rgba(255,255,255,.09)"></div>
+                <div style="min-width:132px">
+                  <div style="font:500 10px 'Geist Mono',monospace;letter-spacing:.08em;color:{{ statusColor }}">{{ status }}</div>
+                  <div style="height:3px;border-radius:3px;background:rgba(255,255,255,.07);margin-top:7px"><div style="height:100%;border-radius:3px;background:#00E676;width:{{ timer }};transition:width .1s linear"></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="flex:none;padding:11px 22px;border-top:1px solid rgba(255,255,255,.05);display:flex;align-items:center;justify-content:space-between;background:rgba(6,6,6,.6)">
+          <div style="font:400 9.5px 'Geist Mono',monospace;letter-spacing:.11em;color:#4A4A4A">YOUR AI DECIDES HIT · STAND · DOUBLE · SPLIT · INSURANCE AND SIZES EVERY BET WITHIN YOUR LIMITS</div>
+          <div style="display:flex;align-items:center;gap:9px">
+            <sc-for list="{{ controls }}" as="c" hint-placeholder-count="3">
+              <div style="padding:9px 16px;border-radius:9px;font-size:12.5px;font-weight:500;cursor:pointer;background:{{ c.bg }};border:1px solid {{ c.border }};color:{{ c.fg }}" style-hover="border-color:rgba(255,255,255,.32)">{{ c.k }}</div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+
+      <aside style="border-left:1px solid rgba(255,255,255,.07);background:#080808;display:flex;flex-direction:column;min-height:0;overflow:hidden">
+        <div style="flex:none;padding:14px 18px;border-bottom:1px solid rgba(255,255,255,.06)">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div style="font:500 10px 'Geist Mono',monospace;letter-spacing:.14em;color:#5A5A5A">YOUR SESSION</div>
+            <div style="font:400 10px 'Geist Mono',monospace;color:#00E676">● PLAYING</div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">
+            <sc-for list="{{ session }}" as="s" hint-placeholder-count="4">
+              <div style="border-radius:10px;background:#0C0C0C;border:1px solid rgba(255,255,255,.06);padding:10px 11px">
+                <div style="font:400 8.5px 'Geist Mono',monospace;color:#4A4A4A;letter-spacing:.1em">{{ s.k }}</div>
+                <div style="font:500 15px 'Geist Mono',monospace;margin-top:4px;color:{{ s.color }}">{{ s.v }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="margin-top:11px">
+            <div style="display:flex;justify-content:space-between;font:400 10px 'Geist Mono',monospace;color:#6A6A6A"><span>STOP-LOSS $500</span><span>TARGET $1,500</span></div>
+            <div style="height:5px;border-radius:4px;background:rgba(255,255,255,.06);margin-top:7px;position:relative;overflow:hidden">
+              <div style="position:absolute;left:0;top:0;bottom:0;width:{{ stopPct }};background:linear-gradient(90deg,#FF5252,#FFB020,#00E676)"></div>
+            </div>
+            <div style="font:400 10.5px 'Geist Mono',monospace;color:#5A5A5A;margin-top:7px">Leaves the table automatically at either limit.</div>
+          </div>
+        </div>
+
+        <div style="flex:none;padding:16px 18px;border-bottom:1px solid rgba(255,255,255,.06);background:linear-gradient(180deg,rgba(0,230,118,.05),transparent)">
+          <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.14em;color:#4A4A4A">LAST DECISION</div>
+          <div style="margin-top:11px;font:400 11.5px/1.7 'Geist Mono',monospace;color:#B5B5B5;min-height:60px">{{ explain }}</div>
+          <div style="font:400 9px 'Geist Mono',monospace;letter-spacing:.1em;color:#3A3A3A;margin-top:6px">POSTED AFTER THE ROUND</div>
+        </div>
+
+        <sc-if value="{{ isPro }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:none;padding:14px 18px;border-bottom:1px solid rgba(255,255,255,.06)">
+            <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.14em;color:#4A4A4A;margin-bottom:12px">PERFORMANCE · THIS SESSION</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <sc-for list="{{ perf }}" as="p" hint-placeholder-count="6">
+                <div style="border-radius:10px;background:#0C0C0C;border:1px solid rgba(255,255,255,.06);padding:10px">
+                  <div style="font:400 8.5px 'Geist Mono',monospace;color:#4A4A4A;letter-spacing:.1em">{{ p.k }}</div>
+                  <div style="font:500 15px 'Geist Mono',monospace;margin-top:4px;color:{{ p.color }}">{{ p.v }}</div>
+                </div>
+              </sc-for>
+            </div>
+            <div style="font-size:11px;line-height:1.55;color:#5A5A5A;margin-top:11px">House games are measured on return and drawdown, never on a player rating.</div>
+          </div>
+        </sc-if>
+
+        <div style="flex:1;min-height:0;overflow-y:auto;padding:14px 18px">
+          <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.14em;color:#4A4A4A;margin-bottom:10px">ROUND HISTORY</div>
+          <sc-for list="{{ log }}" as="l" hint-placeholder-count="10">
+            <div style="display:grid;grid-template-columns:24px 1fr 62px 62px;gap:10px;align-items:baseline;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.035);font:400 10.5px 'Geist Mono',monospace;animation:ar-slidein .3s ease-out both">
+              <span style="color:#3A3A3A">{{ l.n }}</span>
+              <span style="color:#8A8A8A">{{ l.act }}</span>
+              <span style="color:#6A6A6A;text-align:right">{{ l.bet }}</span>
+              <span style="color:{{ l.color }};text-align:right">{{ l.pnl }}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="flex:none;padding:14px 18px;border-top:1px solid rgba(255,255,255,.06);display:flex;flex-direction:column;gap:9px">
+          <sc-for list="{{ fairness }}" as="f" hint-placeholder-count="4">
+            <div style="display:flex;justify-content:space-between;font:400 10.5px 'Geist Mono',monospace"><span style="color:#6A6A6A">{{ f.k }}</span><span style="color:{{ f.color }}">{{ f.v }}</span></div>
+          </sc-for>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+const R = '#C4342E';
+const F = (r, s) => ({r, s, color: (s === '♥' || s === '♦') ? R : '#111', bg: 'linear-gradient(160deg,#FBFBF8,#DCDCD6)', border: 'rgba(255,255,255,.2)'});
+const BACK = {r: '', s: '', color: 'transparent', bg: 'repeating-linear-gradient(45deg,#12261C,#12261C 4px,#0C1C15 4px,#0C1C15 8px)', border: 'rgba(255,255,255,.09)'};
+const SEQ = [
+  {dealer: [F('9','♠'), BACK], player: [F('A','♦'), F('7','♣')], dt: 'SHOWING 9', pt: 'SOFT 18', status: 'THINKING', result: '', sub: 'ROUND 412', bet: '$200', explain: ''},
+  {dealer: [F('9','♠'), BACK], player: [F('A','♦'), F('7','♣')], dt: 'SHOWING 9', pt: 'SOFT 18', status: 'DECISION LOCKED', result: '', sub: 'ROUND 412', bet: '$200', explain: ''},
+  {dealer: [F('9','♠'), BACK], player: [F('A','♦'), F('7','♣'), F('3','♥')], dt: 'SHOWING 9', pt: 'HARD 21', status: 'HIT', result: '', sub: 'ROUND 412', bet: '$200',
+   explain: 'Soft 18 against a nine is a hit, not a stand — the ace protects the hand and there is more value in improving than holding.'},
+  {dealer: [F('9','♠'), F('8','♦')], player: [F('A','♦'), F('7','♣'), F('3','♥')], dt: 'HARD 17', pt: 'HARD 21', status: 'STAND', result: 'WIN  +$200', resultColor: '#00E676', sub: 'DEALER STANDS ON 17', bet: '$200',
+   explain: 'Twenty-one is the top of the range. Standing is automatic, and the dealer must stand on seventeen.', act: {t: 'Hit to 21 · dealer 17', bet: '$200', pnl: '+$200', color: '#00E676'}},
+  {dealer: [F('4','♣'), BACK], player: [F('K','♠'), F('6','♦')], dt: 'SHOWING 4', pt: 'HARD 16', status: 'THINKING', result: '', sub: 'ROUND 413', bet: '$240', explain: ''},
+  {dealer: [F('4','♣'), BACK], player: [F('K','♠'), F('6','♦')], dt: 'SHOWING 4', pt: 'HARD 16', status: 'STAND', result: '', sub: 'ROUND 413', bet: '$240',
+   explain: 'Sixteen against a four is the classic stand. The dealer busts often enough from a low card that taking a card here loses money.'},
+  {dealer: [F('4','♣'), F('10','♥'), F('9','♠')], player: [F('K','♠'), F('6','♦')], dt: 'BUST 23', pt: 'HARD 16', status: 'STAND', result: 'WIN  +$240', resultColor: '#00E676', sub: 'DEALER BUSTS', bet: '$240',
+   explain: 'The dealer drew to twenty-three. Standing on sixteen paid off exactly as the odds said it would.', act: {t: 'Stand 16 · dealer bust', bet: '$240', pnl: '+$240', color: '#00E676'}},
+  {dealer: [F('A','♥'), BACK], player: [F('8','♣'), F('8','♦')], dt: 'SHOWING A', pt: 'PAIR OF 8s', status: 'DECLINING INSURANCE', result: '', sub: 'ROUND 414', bet: '$240', explain: ''},
+  {dealer: [F('A','♥'), BACK], player: [F('8','♣'), F('8','♦')], dt: 'SHOWING A', pt: 'PAIR OF 8s', status: 'SPLIT', result: '', sub: 'ROUND 414 · TWO HANDS', bet: '$480',
+   explain: 'Eights always split, even against an ace. Insurance is a losing bet at this count, so it was declined.'},
+  {dealer: [F('A','♥'), F('10','♠')], player: [F('8','♣'), F('8','♦')], dt: 'BLACKJACK', pt: 'PAIR OF 8s', status: 'ROUND OVER', result: 'LOSS  −$480', resultColor: '#FF5252', sub: 'DEALER BLACKJACK', bet: '$480',
+   explain: 'The dealer had blackjack. Splitting was still correct — declining insurance saved more over the long run than this hand cost.', act: {t: 'Split 8s · dealer blackjack', bet: '$480', pnl: '−$480', color: '#FF5252'}}
+];
+class Component extends DCLogic {
+  state = {i: 0, tick: 0, pro: false, log: []};
+  componentDidMount() {
+    this.t = setInterval(() => this.setState(s => {
+      if (s.tick < 6) return {tick: s.tick + 1};
+      const ni = (s.i + 1) % SEQ.length, nx = SEQ[ni];
+      let log = s.log;
+      if (nx.act) log = [{n: String(412 + s.log.length).slice(-3), ...nx.act}, ...s.log].slice(0, 30);
+      return {i: ni, tick: 0, log};
+    }), 320);
+  }
+  componentWillUnmount() { clearInterval(this.t); }
+  renderVals() {
+    const st = this.state, step = SEQ[st.i], pro = st.pro;
+    const thinking = /THINKING|LOCKED|DECLINING/.test(step.status);
+    return {
+      isPro: pro,
+      setSimple: () => this.setState({pro: false}), setPro: () => this.setState({pro: true}),
+      simpleBg: pro ? 'transparent' : '#00E676', simpleFg: pro ? '#6A6A6A' : '#050505',
+      proBg: pro ? '#00E676' : 'transparent', proFg: pro ? '#050505' : '#6A6A6A',
+      dealer: step.dealer, player: step.player,
+      dealerTotal: step.dt, playerTotal: step.pt,
+      dealerColor: step.dt.includes('BUST') ? '#FF5252' : (step.dt.includes('BLACKJACK') ? '#FFB020' : '#DADADA'),
+      playerColor: step.pt.includes('21') ? '#00E676' : '#DADADA',
+      result: step.result || '', resultColor: step.resultColor || '#EDEDED', resultSub: step.sub,
+      bet: step.bet, status: step.status,
+      statusColor: thinking ? '#00E676' : '#DADADA',
+      actorBorder: thinking ? 'rgba(0,230,118,.45)' : 'rgba(255,255,255,.1)',
+      timer: thinking ? Math.max(0, 100 - st.tick * 17) + '%' : '0%',
+      explain: step.explain || 'Explanations appear once the round is complete.',
+      controls: [
+        {k: 'Adjust limits', bg: 'transparent', border: 'rgba(255,255,255,.14)', fg: '#EDEDED'},
+        {k: 'Top up', bg: 'transparent', border: 'rgba(255,255,255,.14)', fg: '#EDEDED'},
+        {k: 'End session', bg: 'rgba(255,82,82,.08)', border: 'rgba(255,82,82,.3)', fg: '#FF8A8A'}
+      ],
+      session: [
+        {k: 'TABLE BALANCE', v: '$1,184', color: '#EDEDED'},
+        {k: 'SESSION P/L', v: '+$184', color: '#00E676'},
+        {k: 'ROUNDS', v: '414', color: '#EDEDED'},
+        {k: 'WALLET LEFT', v: '$6,400', color: '#8A8A8A'}
+      ],
+      stopPct: '68%',
+      perf: [
+        {k: 'RETURN', v: '+18.4%', color: '#00E676'},
+        {k: 'WIN RATE', v: '46.2%', color: '#EDEDED'},
+        {k: 'TOTAL WAGERED', v: '$94,200', color: '#EDEDED'},
+        {k: 'MAX DRAWDOWN', v: '−11.8%', color: '#FF5252'},
+        {k: 'STREAK', v: '2 W', color: '#00E676'},
+        {k: 'AVG BET', v: '$228', color: '#EDEDED'}
+      ],
+      log: st.log.length ? st.log : [{n: '411', act: 'Double 11 · dealer 20', bet: '$400', pnl: '−$400', color: '#FF5252'}],
+      fairness: [
+        {k: 'ENGINE VERSION', v: 'Mozetto 2.4.1', color: '#DADADA'},
+        {k: 'SHOE COMMITMENT', v: '0x71ad…4e28', color: '#DADADA'},
+        {k: 'HUMAN INTERVENTION', v: 'NONE', color: '#00E676'},
+        {k: 'SETTLEMENT', v: 'PER ROUND · ON-CHAIN', color: '#00E676'}
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

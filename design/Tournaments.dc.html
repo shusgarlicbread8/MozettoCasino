@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+html,body{margin:0;background:#080808;color:#EDEDED;font-family:'Geist',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+a{color:#00E676;text-decoration:none}a:hover{color:#5BFFAA}
+::-webkit-scrollbar{width:9px}::-webkit-scrollbar-track{background:#0B0B0B}::-webkit-scrollbar-thumb{background:#232323;border-radius:9px}
+@keyframes ar-pulse{0%,100%{opacity:.35;transform:scale(1)}50%{opacity:1;transform:scale(1.18)}}
+</style>
+</helmet>
+
+<div style="display:flex;min-height:100vh;min-width:1320px;background:#080808">
+  <dc-import name="Nav" active="tour" hint-size="216px,100vh"></dc-import>
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <dc-import name="Topbar" hint-size="100%,52px"></dc-import>
+
+    <main style="flex:1;padding:26px 28px 56px;max-width:1240px">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between">
+        <div>
+          <h1 style="margin:0;font-size:29px;font-weight:600;letter-spacing:-.035em">Tournaments</h1>
+          <p style="margin:8px 0 0;font-size:13.5px;color:#7A7A7A">Fixed league entries, equal starting stacks, one winner. Your AI plays the whole run alone.</p>
+        </div>
+        <div style="display:flex;gap:6px">
+          <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="4">
+            <div onClick="{{ t.go }}" style="padding:8px 15px;border-radius:9px;font:500 11px 'Geist Mono',monospace;letter-spacing:.04em;cursor:pointer;background:{{ t.bg }};border:1px solid {{ t.border }};color:{{ t.fg }};transition:all .18s">{{ t.k }}</div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="border-radius:18px;border:1px solid rgba(255,82,82,.22);background:linear-gradient(140deg,rgba(255,82,82,.07),#0A0A0A 58%);padding:26px 28px;margin-top:18px;display:flex;align-items:center;gap:28px">
+        <div style="flex:1">
+          <div style="display:flex;align-items:center;gap:9px">
+            <div style="width:6px;height:6px;border-radius:50%;background:#FF5252;animation:ar-pulse 1.4s infinite"></div>
+            <div style="font:500 10px 'Geist Mono',monospace;letter-spacing:.16em;color:#FF8A8A">RUNNING NOW · LEVEL 14</div>
+          </div>
+          <h2 style="margin:12px 0 0;font-size:28px;font-weight:600;letter-spacing:-.035em">Diamond Championship</h2>
+          <div style="font:400 12px 'Geist Mono',monospace;color:#8A8A8A;margin-top:9px">$100,000 ENTRY · 32 AI PLAYERS · 11 REMAINING · $3,200,000 POOL</div>
+        </div>
+        <div style="display:flex;gap:26px;flex:none">
+          <div style="text-align:right"><div style="font:400 9.5px 'Geist Mono',monospace;letter-spacing:.11em;color:#4A4A4A">CHIP LEADER</div><div style="font:500 18px 'Geist Mono',monospace;margin-top:6px">NULLSET v11</div></div>
+          <div style="text-align:right"><div style="font:400 9.5px 'Geist Mono',monospace;letter-spacing:.11em;color:#4A4A4A">FIRST PRIZE</div><div style="font:500 18px 'Geist Mono',monospace;margin-top:6px;color:#00E676">$1,120,000</div></div>
+        </div>
+        <a href="Live.dc.html" style="padding:13px 24px;border-radius:10px;background:#00E676;color:#050505;font-size:13.5px;font-weight:600;flex:none" style-hover="box-shadow:0 0 32px rgba(0,230,118,.42);color:#050505">Watch final table</a>
+      </div>
+
+      <div style="border-radius:16px;border:1px solid rgba(255,255,255,.07);background:#0A0A0A;margin-top:14px;overflow:hidden">
+        <div style="display:grid;grid-template-columns:118px 1.5fr 120px 110px 130px 120px 128px;gap:12px;padding:12px 22px;border-bottom:1px solid rgba(255,255,255,.06);font:500 9px 'Geist Mono',monospace;letter-spacing:.12em;color:#4A4A4A">
+          <span>STATUS</span><span>TOURNAMENT</span><span style="text-align:right">ENTRY</span><span style="text-align:right">SEATS</span><span style="text-align:right">STARTING STACK</span><span style="text-align:right">PRIZE POOL</span><span></span>
+        </div>
+        <sc-for list="{{ rows }}" as="r" hint-placeholder-count="8">
+          <div style="display:grid;grid-template-columns:118px 1.5fr 120px 110px 130px 120px 128px;gap:12px;align-items:center;padding:15px 22px;border-bottom:1px solid rgba(255,255,255,.04);font:400 11.5px 'Geist Mono',monospace" style-hover="background:rgba(255,255,255,.025)">
+            <div>
+              <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.08em;color:{{ r.stColor }}">{{ r.st }}</div>
+              <div style="font:400 9.5px 'Geist Mono',monospace;color:#5A5A5A;margin-top:4px">{{ r.when }}</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:11px;min-width:0">
+              <div style="width:5px;height:30px;border-radius:3px;background:{{ r.leagueColor }};flex:none"></div>
+              <div style="min-width:0">
+                <div style="font-family:'Geist',sans-serif;font-size:13.5px;font-weight:600;letter-spacing:-.02em;color:#EDEDED">{{ r.name }}</div>
+                <div style="font:400 9.5px 'Geist Mono',monospace;color:{{ r.leagueColor }};margin-top:3px;letter-spacing:.08em">{{ r.league }} · {{ r.meta }}</div>
+              </div>
+            </div>
+            <span style="font:500 13px 'Geist Mono',monospace;color:#EDEDED;text-align:right">{{ r.entry }}</span>
+            <div style="text-align:right">
+              <div style="color:#DADADA">{{ r.seats }}</div>
+              <div style="height:3px;border-radius:3px;background:rgba(255,255,255,.06);margin-top:6px"><div style="height:100%;border-radius:3px;background:{{ r.barColor }};width:{{ r.bar }}"></div></div>
+            </div>
+            <span style="color:#8A8A8A;text-align:right">{{ r.stack }}</span>
+            <span style="color:#00E676;text-align:right;font-weight:500">{{ r.pool }}</span>
+            <div style="display:flex;justify-content:flex-end">
+              <div style="padding:8px 18px;border-radius:9px;font-family:'Geist',sans-serif;font-size:12px;font-weight:600;cursor:pointer;background:{{ r.btnBg }};border:1px solid {{ r.btnBorder }};color:{{ r.btnFg }}">{{ r.cta }}</div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px">
+        <div style="border-radius:16px;border:1px solid rgba(255,255,255,.07);background:#0A0A0A;padding:22px 24px">
+          <div style="font-size:14.5px;font-weight:600;letter-spacing:-.02em">Your tournament record</div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px">
+            <sc-for list="{{ record }}" as="r" hint-placeholder-count="4">
+              <div style="border-radius:11px;background:#0C0C0C;border:1px solid rgba(255,255,255,.06);padding:13px 14px">
+                <div style="font:400 8.5px 'Geist Mono',monospace;color:#4A4A4A;letter-spacing:.1em">{{ r.k }}</div>
+                <div style="font:500 18px 'Geist Mono',monospace;margin-top:6px;color:{{ r.color }}">{{ r.v }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="font-size:11.5px;line-height:1.6;color:#5A5A5A;margin-top:14px">Tournament rating is tracked separately from cash-table rating. Both belong to the AI version, not to you.</div>
+        </div>
+        <div style="border-radius:16px;border:1px solid rgba(255,255,255,.07);background:#0A0A0A;padding:22px 24px">
+          <div style="font-size:14.5px;font-weight:600;letter-spacing:-.02em">How league entries work</div>
+          <div style="display:flex;flex-direction:column;gap:12px;margin-top:16px">
+            <sc-for list="{{ rules }}" as="r" hint-placeholder-count="4">
+              <div style="display:flex;gap:11px;align-items:flex-start">
+                <div style="width:20px;height:20px;border-radius:6px;background:rgba(0,230,118,.09);border:1px solid rgba(0,230,118,.25);display:flex;align-items:center;justify-content:center;font:500 9.5px 'Geist Mono',monospace;color:#00E676;flex:none">{{ r.n }}</div>
+                <div style="font-size:12.5px;line-height:1.55;color:#9A9A9A;text-wrap:pretty">{{ r.t }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+const LC = {Bronze: '#B87333', Silver: '#B8C0C8', Gold: '#C9A227', Platinum: '#8FE3D2', Diamond: '#8FB8FF', Sovereign: '#C89BFF'};
+const ROWS = [
+  {st: '● RUNNING', stColor: '#FF8A8A', when: 'LEVEL 14', name: 'Diamond Championship', league: 'Diamond', meta: '11 of 32 remaining', entry: '$100,000', seats: '32 / 32', bar: '100%', stack: '100,000', pool: '$3.2M', cta: 'Watch', kind: 'live'},
+  {st: 'REGISTERING', stColor: '#00E676', when: 'IN 3H 12M', name: 'Gold Invitational', league: 'Gold', meta: '6-max NLHE · 30 min levels', entry: '$1,000', seats: '58 / 64', bar: '91%', stack: '50,000', pool: '$58,000', cta: 'Register', kind: 'open'},
+  {st: 'REGISTERING', stColor: '#00E676', when: 'IN 40M', name: 'Silver Open', league: 'Silver', meta: '6-max NLHE · turbo', entry: '$100', seats: '94 / 128', bar: '73%', stack: '20,000', pool: '$12,800', cta: 'Register', kind: 'open'},
+  {st: 'REGISTERING', stColor: '#00E676', when: 'IN 12M', name: 'Bronze Daily', league: 'Bronze', meta: '6-max NLHE · hyper turbo', entry: '$10', seats: '208 / 256', bar: '81%', stack: '10,000', pool: '$2,560', cta: 'Register', kind: 'open'},
+  {st: 'REGISTERING', stColor: '#00E676', when: 'IN 2H', name: 'Omaha Silver Cup', league: 'Silver', meta: 'PLO 6-max · 20 min levels', entry: '$100', seats: '41 / 128', bar: '32%', stack: '20,000', pool: '$4,100', cta: 'Register', kind: 'open'},
+  {st: 'ANNOUNCED', stColor: '#5A5A5A', when: 'TOMORROW', name: 'Platinum Shootout', league: 'Platinum', meta: 'Heads-up bracket · 64 seats', entry: '$10,000', seats: '18 / 64', bar: '28%', stack: '75,000', pool: '$180,000', cta: 'Notify me', kind: 'soon'},
+  {st: 'ANNOUNCED', stColor: '#5A5A5A', when: 'SEPT 04', name: 'Season 4 World Final', league: 'Sovereign', meta: '16 AI players · points qualification', entry: 'Qualify', seats: '9 / 16', bar: '56%', stack: '200,000', pool: '$8.4M', cta: 'Standings', kind: 'soon'},
+  {st: 'ANNOUNCED', stColor: '#5A5A5A', when: 'SEPT 18', name: 'Short Deck Invitational', league: 'Gold', meta: 'Short Deck · highest variance format', entry: '$1,000', seats: '0 / 128', bar: '0%', stack: '50,000', pool: '$128,000', cta: 'Notify me', kind: 'soon'}
+];
+class Component extends DCLogic {
+  state = {tab: 0};
+  renderVals() {
+    const TABS = ['ALL', 'REGISTERING', 'RUNNING', 'MY ENTRIES'];
+    const t = TABS[this.state.tab];
+    const rows = ROWS.filter(r => t === 'ALL' || (t === 'REGISTERING' && r.kind === 'open') || (t === 'RUNNING' && r.kind === 'live') || (t === 'MY ENTRIES' && r.league === 'Gold'));
+    return {
+      tabs: TABS.map((k, i) => ({k, go: () => this.setState({tab: i}),
+        bg: this.state.tab === i ? 'rgba(0,230,118,.09)' : 'transparent',
+        border: this.state.tab === i ? 'rgba(0,230,118,.35)' : 'rgba(255,255,255,.09)',
+        fg: this.state.tab === i ? '#00E676' : '#6A6A6A'})),
+      rows: rows.map(r => ({
+        ...r, leagueColor: LC[r.league],
+        barColor: r.kind === 'live' ? '#FF5252' : (parseInt(r.bar) > 70 ? '#00E676' : '#6EA8FF'),
+        btnBg: r.kind === 'open' ? '#00E676' : 'transparent',
+        btnBorder: r.kind === 'open' ? '#00E676' : 'rgba(255,255,255,.14)',
+        btnFg: r.kind === 'open' ? '#050505' : '#BABABA'
+      })),
+      record: [
+        {k: 'ENTRIES', v: '11', color: '#EDEDED'},
+        {k: 'CASHES', v: '3', color: '#00E676'},
+        {k: 'ROI', v: '+18%', color: '#00E676'},
+        {k: 'BEST FINISH', v: '6th', color: '#EDEDED'}
+      ],
+      rules: [
+        {n: '1', t: 'Every entrant in a tournament pays the same fixed entry and starts with the same stack.'},
+        {n: '2', t: 'Your league decides which entries you can take. Bronze starts at $10; Sovereign is invitation only.'},
+        {n: '3', t: 'Your AI profile and session settings lock at registration and cannot be changed once cards are dealt.'},
+        {n: '4', t: 'Prize pools settle on-chain the moment the final hand ends, minus the disclosed entry fee.'}
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "name": "@mozetto/settlement-worker",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file=../../.env.local src/index.ts",
+    "start": "tsx --env-file=../../.env.local src/index.ts"
+  },
+  "dependencies": {
+    "@mozetto/database": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}

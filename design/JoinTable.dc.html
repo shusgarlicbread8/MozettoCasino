@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="position:fixed;inset:0;z-index:80;display:flex;justify-content:flex-end">
+  <div onClick="{{ close }}" style="position:absolute;inset:0;background:rgba(2,2,2,.72);backdrop-filter:blur(6px);animation:ar-fade .2s ease-out both"></div>
+  <div style="position:relative;width:580px;height:100%;background:#0A0A0A;border-left:1px solid rgba(255,255,255,.09);box-shadow:-40px 0 100px rgba(0,0,0,.7);display:flex;flex-direction:column;animation:ar-sheet .26s cubic-bezier(.2,.9,.3,1) both">
+
+    <div style="flex:none;padding:20px 26px 18px;border-bottom:1px solid rgba(255,255,255,.07);background:linear-gradient(180deg,{{ leagueWash }},transparent)">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.14em;color:{{ leagueColor }};padding:3px 9px;border-radius:5px;border:1px solid {{ leagueBorder }};background:{{ leagueWash }}">{{ league }} LEAGUE</div>
+          <div style="font:400 10.5px 'Geist Mono',monospace;color:#5A5A5A">{{ game }}</div>
+        </div>
+        <div onClick="{{ close }}" style="width:28px;height:28px;border-radius:8px;border:1px solid rgba(255,255,255,.09);display:flex;align-items:center;justify-content:center;font-size:13px;color:#7A7A7A;cursor:pointer" style-hover="border-color:rgba(255,255,255,.3);color:#EDEDED">✕</div>
+      </div>
+      <h2 style="margin:14px 0 0;font-size:26px;font-weight:600;letter-spacing:-.035em">{{ tableName }}</h2>
+      <div style="display:flex;gap:22px;margin-top:12px">
+        <sc-for list="{{ facts }}" as="f" hint-placeholder-count="5">
+          <div>
+            <div style="font:400 8.5px 'Geist Mono',monospace;letter-spacing:.11em;color:#4A4A4A">{{ f.k }}</div>
+            <div style="font:500 13px 'Geist Mono',monospace;margin-top:4px;color:{{ f.color }}">{{ f.v }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="flex:1;min-height:0;overflow-y:auto;padding:22px 26px 26px">
+
+      <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.14em;color:#4A4A4A">1 · BRING TO TABLE</div>
+      <div style="border-radius:15px;border:1px solid rgba(255,255,255,.08);background:#0D0D0D;padding:18px 20px;margin-top:11px">
+        <div style="display:flex;justify-content:space-between;font:400 11.5px 'Geist Mono',monospace"><span style="color:#6A6A6A">WALLET BALANCE</span><span style="color:#EDEDED">{{ walletLabel }}</span></div>
+        <div style="display:flex;justify-content:space-between;font:400 11.5px 'Geist Mono',monospace;margin-top:8px"><span style="color:#6A6A6A">ALLOWED BUY-IN</span><span style="color:#EDEDED">{{ rangeLabel }}</span></div>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:16px;padding:14px 16px;border-radius:12px;background:#080808;border:1px solid {{ inputBorder }}">
+          <span style="font:500 22px 'Geist Mono',monospace;color:#5A5A5A">$</span>
+          <input value="{{ buyInText }}" onChange="{{ setBuyIn }}" style="flex:1;background:transparent;border:none;outline:none;color:#EDEDED;font:500 26px 'Geist Mono',monospace;letter-spacing:-.02em;min-width:0">
+          <span style="font:400 12px 'Geist Mono',monospace;color:#6A6A6A;flex:none">{{ bbLabel }}</span>
+        </div>
+        <div style="display:flex;gap:7px;margin-top:12px">
+          <sc-for list="{{ quick }}" as="q" hint-placeholder-count="4">
+            <div onClick="{{ q.pick }}" style="flex:1;padding:9px 0;border-radius:9px;text-align:center;font:500 11px 'Geist Mono',monospace;cursor:pointer;background:{{ q.bg }};border:1px solid {{ q.border }};color:{{ q.fg }};transition:all .16s" style-hover="border-color:rgba(255,255,255,.3)">{{ q.k }}</div>
+          </sc-for>
+        </div>
+        <div style="font-size:11.5px;line-height:1.55;color:{{ warnColor }};margin-top:12px">{{ warn }}</div>
+      </div>
+
+      <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.14em;color:#4A4A4A;margin-top:24px">2 · AI PROFILE FOR THIS SESSION</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:11px">
+        <sc-for list="{{ profiles }}" as="p" hint-placeholder-count="4">
+          <div onClick="{{ p.pick }}" style="padding:14px 16px;border-radius:13px;background:{{ p.bg }};border:1px solid {{ p.border }};cursor:pointer;transition:all .18s" style-hover="border-color:rgba(255,255,255,.3)">
+            <div style="display:flex;align-items:center;gap:9px">
+              <div style="width:26px;height:26px;border-radius:8px;background:rgba(0,0,0,.5);border:1px solid {{ p.ring }};display:flex;align-items:center;justify-content:center;font-size:12px;color:{{ p.color }};flex:none">{{ p.glyph }}</div>
+              <div style="font-size:13.5px;font-weight:600;letter-spacing:-.02em;color:{{ p.fg }}">{{ p.name }}</div>
+            </div>
+            <div style="font-size:11.5px;line-height:1.5;color:#6A6A6A;margin-top:9px;text-wrap:pretty">{{ p.desc }}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.14em;color:#4A4A4A;margin-top:24px">3 · SESSION SETTINGS</div>
+      <div style="border-radius:15px;border:1px solid rgba(255,255,255,.08);background:#0D0D0D;padding:18px 20px;margin-top:11px">
+        <div style="font-size:12.5px;font-weight:500;color:#BABABA">Risk approach</div>
+        <div style="display:flex;gap:7px;margin-top:9px">
+          <sc-for list="{{ risks }}" as="r" hint-placeholder-count="3">
+            <div onClick="{{ r.pick }}" style="flex:1;padding:10px 0;border-radius:10px;text-align:center;font:500 11.5px 'Geist Mono',monospace;cursor:pointer;background:{{ r.bg }};border:1px solid {{ r.border }};color:{{ r.fg }};transition:all .16s" style-hover="border-color:rgba(255,255,255,.3)">{{ r.k }}</div>
+          </sc-for>
+        </div>
+
+        <div style="font-size:12.5px;font-weight:500;color:#BABABA;margin-top:18px">Session instruction <span style="font-weight:400;color:#5A5A5A">· optional</span></div>
+        <textarea placeholder="Play patiently against loose opponents." style="width:100%;margin-top:9px;padding:11px 13px;border-radius:11px;background:#080808;border:1px solid rgba(255,255,255,.08);color:#DADADA;font:400 12.5px/1.5 'Geist',sans-serif;resize:none;height:58px;outline:none"></textarea>
+        <div style="font-size:11px;line-height:1.5;color:#5A5A5A;margin-top:7px">Translated into approved table settings. It cannot change the engine or reach the AI mid-hand.</div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:18px">
+          <sc-for list="{{ stops }}" as="s" hint-placeholder-count="2">
+            <div>
+              <div style="font-size:12.5px;font-weight:500;color:#BABABA">{{ s.k }}</div>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:9px;padding:10px 13px;border-radius:11px;background:#080808;border:1px solid rgba(255,255,255,.08)">
+                <span style="font:500 12px 'Geist Mono',monospace;color:#5A5A5A">$</span>
+                <input value="{{ s.v }}" onChange="{{ s.set }}" style="flex:1;background:transparent;border:none;outline:none;color:#EDEDED;font:500 14px 'Geist Mono',monospace;min-width:0">
+              </div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:18px">
+          <div>
+            <div style="font-size:12.5px;font-weight:500;color:#BABABA">Maximum session</div>
+            <div style="display:flex;gap:6px;margin-top:9px">
+              <sc-for list="{{ durations }}" as="d" hint-placeholder-count="3">
+                <div onClick="{{ d.pick }}" style="flex:1;padding:9px 0;border-radius:9px;text-align:center;font:500 11px 'Geist Mono',monospace;cursor:pointer;background:{{ d.bg }};border:1px solid {{ d.border }};color:{{ d.fg }}" style-hover="border-color:rgba(255,255,255,.3)">{{ d.k }}</div>
+              </sc-for>
+            </div>
+          </div>
+          <div>
+            <div style="font-size:12.5px;font-weight:500;color:#BABABA">Auto-rebuy</div>
+            <div style="display:flex;gap:6px;margin-top:9px">
+              <sc-for list="{{ rebuys }}" as="b" hint-placeholder-count="3">
+                <div onClick="{{ b.pick }}" style="flex:1;padding:9px 0;border-radius:9px;text-align:center;font:500 11px 'Geist Mono',monospace;cursor:pointer;background:{{ b.bg }};border:1px solid {{ b.border }};color:{{ b.fg }}" style-hover="border-color:rgba(255,255,255,.3)">{{ b.k }}</div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="font:500 9.5px 'Geist Mono',monospace;letter-spacing:.14em;color:#4A4A4A;margin-top:24px">4 · CONFIRM</div>
+      <div style="border-radius:15px;border:1px solid rgba(0,230,118,.2);background:linear-gradient(165deg,rgba(0,230,118,.05),#0A0A0A);padding:18px 20px;margin-top:11px;display:flex;flex-direction:column;gap:11px">
+        <sc-for list="{{ receipt }}" as="r" hint-placeholder-count="7">
+          <div style="display:flex;justify-content:space-between;font:400 12.5px 'Geist Mono',monospace"><span style="color:#7A7A7A">{{ r.k }}</span><span style="color:{{ r.color }}">{{ r.v }}</span></div>
+        </sc-for>
+      </div>
+      <div style="font-size:11.5px;line-height:1.6;color:#5A5A5A;margin-top:12px">Only your table balance is at risk. The rest of your wallet is never exposed to this session. Configuration locks the moment your AI is seated and cannot be changed until it leaves.</div>
+    </div>
+
+    <div style="flex:none;padding:16px 26px 20px;border-top:1px solid rgba(255,255,255,.07);display:flex;gap:11px;background:#0A0A0A">
+      <div onClick="{{ close }}" style="padding:13px 22px;border-radius:11px;border:1px solid rgba(255,255,255,.12);font-size:13.5px;color:#BABABA;cursor:pointer" style-hover="border-color:rgba(255,255,255,.3);color:#EDEDED">Cancel</div>
+      <a href="{{ tableHref }}" style="flex:1;padding:13px 0;border-radius:11px;background:#00E676;color:#050505;font-size:14px;font-weight:600;text-align:center;transition:box-shadow .2s" style-hover="box-shadow:0 0 34px rgba(0,230,118,.45);color:#050505">Join next hand · {{ buyInLabel }}</a>
+    </div>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:580,&quot;height&quot;:900},&quot;table&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;object&quot;},&quot;wallet&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:7400,&quot;tsType&quot;:&quot;number&quot;},&quot;onClose&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;}}">
+const PROFILES = [
+  {id: 'shark', name: 'The Shark', glyph: '●', color: '#FF5252', ring: 'rgba(255,82,82,.45)', desc: 'Applies pressure, raises frequently, accepts greater volatility.'},
+  {id: 'prof', name: 'The Professor', glyph: '◈', color: '#6EA8FF', ring: 'rgba(110,168,255,.45)', desc: 'Patient and analytical, spends more reasoning on important decisions.'},
+  {id: 'fox', name: 'The Fox', glyph: '✦', color: '#FFB020', ring: 'rgba(255,177,32,.45)', desc: 'Adapts to opponents and changes patterns over time.'},
+  {id: 'machine', name: 'The Machine', glyph: '◆', color: '#00E676', ring: 'rgba(0,230,118,.45)', desc: 'Disciplined and consistent, avoids unnecessary variance.'}
+];
+const money = n => '$' + Number(n).toLocaleString('en-US', {maximumFractionDigits: 2});
+class Component extends DCLogic {
+  constructor(p) {
+    super(p);
+    const t = p.table || {};
+    this.state = {buyIn: t.min || 10, touched: false, profile: 'fox', risk: 1, dur: 1, rebuy: 1, stop: '', target: ''};
+  }
+  renderVals() {
+    const t = this.props.table || {};
+    const wallet = this.props.wallet ?? 7400;
+    const min = t.min || 10, max = t.max || 100, bb = t.bb || 0.5;
+    const cap = Math.min(max, wallet);
+    const v = this.state.buyIn;
+    const bad = v < min || v > cap;
+    const stopDefault = Math.round(v * 0.5), targetDefault = Math.round(v * 1.5);
+    const set = k => e => {
+      const n = e.target.value.replace(/[^0-9.]/g, '');
+      this.setState({[k]: n});
+    };
+    const mkChip = (list, key) => list.map((o, i) => ({
+      k: o, pick: () => this.setState({[key]: i}),
+      bg: this.state[key] === i ? 'rgba(255,255,255,.07)' : 'transparent',
+      border: this.state[key] === i ? 'rgba(0,230,118,.45)' : 'rgba(255,255,255,.09)',
+      fg: this.state[key] === i ? '#EDEDED' : '#6A6A6A'
+    }));
+    const quickVals = [
+      {k: 'MIN', v: min},
+      {k: '100 BB', v: bb * 100},
+      {k: '150 BB', v: bb * 150},
+      {k: 'MAX', v: cap}
+    ].filter(q => q.v >= min && q.v <= cap);
+    return {
+      close: this.props.onClose || (() => {}),
+      league: (t.league || 'GOLD').toUpperCase(),
+      leagueColor: t.leagueColor || '#C9A227',
+      leagueBorder: (t.leagueColor || '#C9A227') + '55',
+      leagueWash: (t.leagueColor || '#C9A227') + '14',
+      game: t.game || '6-Max No-Limit Hold’em',
+      tableName: t.name || 'Monaco 12',
+      tableHref: t.href || 'Arena.dc.html',
+      facts: [
+        {k: 'BLINDS', v: t.blinds || '$25 / $50', color: '#EDEDED'},
+        {k: 'SEATS', v: (t.seats || 5) + ' / ' + (t.maxSeats || 6), color: '#EDEDED'},
+        {k: 'AVG POT', v: t.avgPot || '$3,850', color: '#00E676'},
+        {k: 'RAKE', v: t.rake || '2.5% capped', color: '#8A8A8A'},
+        {k: 'PACE', v: t.speed || 'Standard', color: '#8A8A8A'}
+      ],
+      walletLabel: money(wallet),
+      rangeLabel: money(min) + ' – ' + (max >= 1e9 ? 'Uncapped' : money(max)),
+      buyInText: String(v),
+      buyInLabel: money(v),
+      setBuyIn: e => {
+        const n = parseFloat(e.target.value.replace(/[^0-9.]/g, '')) || 0;
+        this.setState({buyIn: n, touched: true});
+      },
+      inputBorder: bad ? 'rgba(255,82,82,.5)' : 'rgba(0,230,118,.28)',
+      bbLabel: (v / bb).toFixed(0) + ' BB',
+      quick: quickVals.map(q => ({
+        k: q.k, pick: () => this.setState({buyIn: q.v, touched: true}),
+        bg: v === q.v ? 'rgba(0,230,118,.09)' : 'transparent',
+        border: v === q.v ? 'rgba(0,230,118,.45)' : 'rgba(255,255,255,.09)',
+        fg: v === q.v ? '#00E676' : '#8A8A8A'
+      })),
+      warn: bad
+        ? (v < min ? 'Below the table minimum of ' + money(min) + '.' : 'Above what you can bring — your wallet allows ' + money(cap) + '.')
+        : 'This is the only money at risk in this session. Your remaining ' + money(wallet - v) + ' stays in your wallet.',
+      warnColor: bad ? '#FF8A8A' : '#5A5A5A',
+      profiles: PROFILES.map(p => ({
+        ...p, pick: () => this.setState({profile: p.id}),
+        bg: this.state.profile === p.id ? 'rgba(255,255,255,.05)' : '#0D0D0D',
+        border: this.state.profile === p.id ? p.ring : 'rgba(255,255,255,.08)',
+        fg: this.state.profile === p.id ? '#EDEDED' : '#BABABA'
+      })),
+      risks: mkChip(['CONSERVATIVE', 'BALANCED', 'AGGRESSIVE'], 'risk'),
+      durations: mkChip(['1 H', '4 H', 'NO LIMIT'], 'dur'),
+      rebuys: mkChip(['OFF', 'TO BUY-IN', 'CUSTOM'], 'rebuy'),
+      stops: [
+        {k: 'Leave below', v: this.state.stop || String(stopDefault), set: set('stop')},
+        {k: 'Leave at profit', v: this.state.target || String(targetDefault), set: set('target')}
+      ],
+      receipt: [
+        {k: 'Wallet balance', v: money(wallet), color: '#EDEDED'},
+        {k: 'Moving to table', v: money(v), color: '#EDEDED'},
+        {k: 'Maximum session exposure', v: money(v), color: '#FFB020'},
+        {k: 'Wallet left untouched', v: money(Math.max(0, wallet - v)), color: '#8A8A8A'},
+        {k: 'Rake', v: t.rake || '2.5% capped, per eligible pot', color: '#8A8A8A'},
+        {k: 'AI compute', v: 'Included', color: '#8A8A8A'},
+        {k: 'AI profile', v: (PROFILES.find(p => p.id === this.state.profile) || PROFILES[2]).name, color: '#EDEDED'},
+        {k: 'Stop rules', v: 'Below $' + (this.state.stop || stopDefault) + ' · at $' + (this.state.target || targetDefault), color: '#8A8A8A'}
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>
