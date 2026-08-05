@@ -18,6 +18,7 @@ export type SessionMe = {
     handle: string;
     display_name: string;
     league: string;
+    active_arena_mode?: string;
   } | null;
   agent: {
     id: string;
@@ -33,9 +34,16 @@ export type SessionMe = {
     risk: string;
     instruction: string | null;
   } | null;
+  arenaMode?: ArenaMode;
   available: number;
   atTables: number;
+  balances?: {
+    demo: { available: number; atTables: number };
+    onchain: { available: number; atTables: number };
+  };
 };
+
+export type ArenaMode = "demo" | "onchain";
 
 export type PlatformStats = {
   activeTables: number;

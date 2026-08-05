@@ -66,6 +66,7 @@ export default function WalletPage() {
   const [hoverAdv, setHoverAdv] = useState(false);
   const [sessions, setSessions] = useState<any[]>([]);
   const [ledgerRows, setLedgerRows] = useState<any[]>([]);
+  const [faucetBusy, setFaucetBusy] = useState(false);
 
   useEffect(() => {
     const load = () =>
@@ -88,6 +89,8 @@ export default function WalletPage() {
 
   const available = me?.available ?? 0;
   const atTables = me?.atTables ?? 0;
+  const arenaMode = me?.arenaMode ?? "demo";
+  const isOnchain = arenaMode === "onchain";
   const league = (me?.profile?.league || "bronze").toUpperCase();
   const leagueStatus = [
     { k: "CURRENT LEAGUE", v: league, color: "#C9A227" },
@@ -104,11 +107,38 @@ export default function WalletPage() {
     href: `/table/${s.table_id}`,
   }));
   const kpis = [
-    { k: "AVAILABLE", v: money(available), color: "#EDEDED", sub: "fake USDC wallet" },
+    {
+      k: "AVAILABLE",
+      v: money(available),
+      color: "#EDEDED",
+      sub: isOnchain ? "on-chain vault mirror" : "demo paper USDC",
+    },
     { k: "AT TABLES", v: money(atTables), color: "#FFB020", sub: "escrowed buy-ins" },
-    { k: "OPEN SESSIONS", v: String(tables.length), color: "#EDEDED", sub: "live poker only" },
-    { k: "CURRENCY", v: "USDC", color: "#8A8A8A", sub: "demo ledger" },
+    { k: "OPEN SESSIONS", v: String(tables.length), color: "#EDEDED", sub: "this mode only" },
+    {
+      k: "MODE",
+      v: isOnchain ? "ON-CHAIN" : "DEMO",
+      color: isOnchain ? "#00E676" : "#8A8A8A",
+      sub: isOnchain ? "Base USDC path" : "isolated paper ledger",
+    },
   ];
+
+  async function runOnchainFaucet() {
+    if (faucetBusy) return;
+    setFaucetBusy(true);
+    try {
+      await api("/v1/wallet/onchain/faucet", {
+        method: "POST",
+        body: JSON.stringify({ amount: 1000 }),
+      });
+      await refresh();
+      const r = await api<{ sessions: any[]; ledger: any[] }>("/v1/wallet");
+      setSessions(r.sessions || []);
+      setLedgerRows(r.ledger || []);
+    } finally {
+      setFaucetBusy(false);
+    }
+  }
   const ledger = ledgerRows
     .filter((row) => {
       if (f === 0) return true; // ALL
@@ -142,47 +172,75 @@ export default function WalletPage() {
 
       <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 14 }}>
         <div style={{ borderRadius: 16, border: "1px solid rgba(255,255,255,.07)", background: "linear-gradient(165deg,#101010,#0A0A0A)", padding: 26 }}>
-          <div style={{ font: `400 10px ${FONT_MONO}`, letterSpacing: ".13em", color: "#5A5A5A" }}>WALLET BALANCE</div>
+          <div style={{ font: `400 10px ${FONT_MONO}`, letterSpacing: ".13em", color: "#5A5A5A" }}>
+            {isOnchain ? "ON-CHAIN BALANCE" : "DEMO WALLET BALANCE"}
+          </div>
           <div style={{ font: `500 48px ${FONT_MONO}`, letterSpacing: "-.035em", marginTop: 10 }}>{money(available)}</div>
-          <div style={{ fontSize: 12.5, color: "#6A6A6A", marginTop: 8 }}>Never at risk. Money is only exposed once you move it to a table.</div>
-          <div style={{ display: "flex", gap: 10, marginTop: 22 }}>
-            <Link
-              href="/wallet/deposit"
-              onMouseEnter={() => setHoverDeposit(true)}
-              onMouseLeave={() => setHoverDeposit(false)}
-              style={{
-                padding: "11px 22px",
-                borderRadius: 10,
-                background: "#00E676",
-                color: "#050505",
-                fontSize: 13.5,
-                fontWeight: 600,
-                cursor: "pointer",
-                transition: "box-shadow .2s",
-                boxShadow: hoverDeposit ? "0 0 28px rgba(0,230,118,.4)" : "none",
-                textDecoration: "none",
-                display: "inline-block",
-              }}
-            >
-              Deposit
-            </Link>
-            <Link
-              href="/wallet/withdraw"
-              onMouseEnter={() => setHoverWithdraw(true)}
-              onMouseLeave={() => setHoverWithdraw(false)}
-              style={{
-                padding: "11px 22px",
-                borderRadius: 10,
-                border: `1px solid ${hoverWithdraw ? "rgba(255,255,255,.3)" : "rgba(255,255,255,.12)"}`,
-                fontSize: 13.5,
-                cursor: "pointer",
-                color: hoverWithdraw ? "#EDEDED" : "#BABABA",
-                textDecoration: "none",
-                display: "inline-block",
-              }}
-            >
-              Withdraw
-            </Link>
+          <div style={{ fontSize: 12.5, color: "#6A6A6A", marginTop: 8 }}>
+            {isOnchain
+              ? "Mirrored from ArenaVault on Base. Demo and on-chain balances never mix."
+              : "Paper USDC for testing. Switch to On-chain in the top bar for the real-money path."}
+          </div>
+          <div style={{ display: "flex", gap: 10, marginTop: 22, flexWrap: "wrap" }}>
+            {isOnchain ? (
+              <button
+                type="button"
+                disabled={faucetBusy}
+                onClick={() => void runOnchainFaucet()}
+                style={{
+                  padding: "11px 22px",
+                  borderRadius: 10,
+                  background: "#00E676",
+                  color: "#050505",
+                  fontSize: 13.5,
+                  fontWeight: 600,
+                  cursor: faucetBusy ? "wait" : "pointer",
+                  border: "none",
+                }}
+              >
+                {faucetBusy ? "Funding…" : "Testnet faucet +$1,000"}
+              </button>
+            ) : (
+              <>
+                <Link
+                  href="/wallet/deposit"
+                  onMouseEnter={() => setHoverDeposit(true)}
+                  onMouseLeave={() => setHoverDeposit(false)}
+                  style={{
+                    padding: "11px 22px",
+                    borderRadius: 10,
+                    background: "#00E676",
+                    color: "#050505",
+                    fontSize: 13.5,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    transition: "box-shadow .2s",
+                    boxShadow: hoverDeposit ? "0 0 28px rgba(0,230,118,.4)" : "none",
+                    textDecoration: "none",
+                    display: "inline-block",
+                  }}
+                >
+                  Deposit
+                </Link>
+                <Link
+                  href="/wallet/withdraw"
+                  onMouseEnter={() => setHoverWithdraw(true)}
+                  onMouseLeave={() => setHoverWithdraw(false)}
+                  style={{
+                    padding: "11px 22px",
+                    borderRadius: 10,
+                    border: `1px solid ${hoverWithdraw ? "rgba(255,255,255,.3)" : "rgba(255,255,255,.12)"}`,
+                    fontSize: 13.5,
+                    cursor: "pointer",
+                    color: hoverWithdraw ? "#EDEDED" : "#BABABA",
+                    textDecoration: "none",
+                    display: "inline-block",
+                  }}
+                >
+                  Withdraw
+                </Link>
+              </>
+            )}
           </div>
           <div style={{ display: "flex", gap: 22, marginTop: 24, paddingTop: 20, borderTop: "1px solid rgba(255,255,255,.06)" }}>
             {leagueStatus.map((l) => (

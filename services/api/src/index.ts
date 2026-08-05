@@ -17,7 +17,13 @@ import {
   closeIdleArenaTables,
   ARENA_LEAGUES,
   InsufficientFundsError,
+  getUserArenaMode,
+  setUserArenaMode,
+  parseArenaMode,
+  creditOnchainDeposit,
+  ensureModeAccounts,
 } from "@mozetto/database";
+import { getChainConfig } from "@mozetto/blockchain";
 import { readSession, registerAuthRoutes, requireUser } from "./auth.js";
 
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:3000";
@@ -70,6 +76,8 @@ app.get("/v1/me", async (req, reply) => {
     [agent.rows[0]?.id],
   );
   await ensureAccountRatings(userId).catch(() => null);
+  const arenaMode = await getUserArenaMode(userId);
+  await ensureModeAccounts(userId, arenaMode);
   return {
     authenticated: true,
     session: {
@@ -82,9 +90,43 @@ app.get("/v1/me", async (req, reply) => {
     profile: profile.rows[0],
     agent: agent.rows[0],
     config: config.rows[0],
-    available: await getAvailableBalance(userId),
-    atTables: await getEscrowBalance(userId),
+    arenaMode,
+    available: await getAvailableBalance(userId, arenaMode),
+    atTables: await getEscrowBalance(userId, arenaMode),
+    balances: {
+      demo: {
+        available: await getAvailableBalance(userId, "demo"),
+        atTables: await getEscrowBalance(userId, "demo"),
+      },
+      onchain: {
+        available: await getAvailableBalance(userId, "onchain"),
+        atTables: await getEscrowBalance(userId, "onchain"),
+      },
+    },
+    chain: getChainConfig(),
   };
+});
+
+app.patch("/v1/me/arena-mode", async (req, reply) => {
+  const session = await requireUser(req, reply);
+  if (!session) return;
+  const mode = parseArenaMode((req.body as { mode?: string }).mode);
+  if (mode !== "demo" && mode !== "onchain") {
+    return reply.code(400).send({ error: "invalid_mode", message: "mode must be demo or onchain" });
+  }
+  // Block switch while seated in the *other* mode's active session? Allow view switch;
+  // matchmaking always uses the selected mode.
+  const next = await setUserArenaMode(session.profileId, mode);
+  return {
+    arenaMode: next,
+    available: await getAvailableBalance(session.profileId, next),
+    atTables: await getEscrowBalance(session.profileId, next),
+    chain: getChainConfig(),
+  };
+});
+
+app.get("/v1/chain", async () => {
+  return { chain: getChainConfig() };
 });
 
 app.patch("/v1/me/profile", async (req, reply) => {
@@ -333,47 +375,104 @@ app.get("/v1/wallet", async (req, reply) => {
   const session = await requireUser(req, reply);
   if (!session) return;
   const userId = session.profileId;
-  const available = await getAvailableBalance(userId);
-  const atTables = await getEscrowBalance(userId);
-  const ledger = await listLedger(userId, 40);
+  const arenaMode = await getUserArenaMode(userId);
+  const available = await getAvailableBalance(userId, arenaMode);
+  const atTables = await getEscrowBalance(userId, arenaMode);
+  const ledger = await listLedger(userId, 40, arenaMode);
   const sessions = await query(
-    `select s.*, t.name as table_name from table_sessions s
+    `select s.*, t.name as table_name, t.arena_mode::text as arena_mode from table_sessions s
      join tables t on t.id = s.table_id
-     where s.owner_id = $1 and s.status = 'active'`,
-    [userId],
+     where s.owner_id = $1 and s.status = 'active' and t.arena_mode = $2::arena_mode`,
+    [userId, arenaMode],
   );
-  return { available, atTables, currency: "USDC", ledger, sessions: sessions.rows };
+  return {
+    available,
+    atTables,
+    arenaMode,
+    currency: "USDC",
+    ledger,
+    sessions: sessions.rows,
+    chain: getChainConfig(),
+    balances: {
+      demo: {
+        available: await getAvailableBalance(userId, "demo"),
+        atTables: await getEscrowBalance(userId, "demo"),
+      },
+      onchain: {
+        available: await getAvailableBalance(userId, "onchain"),
+        atTables: await getEscrowBalance(userId, "onchain"),
+      },
+    },
+  };
 });
 
 app.post("/v1/wallet/deposit", async (req, reply) => {
   const session = await requireUser(req, reply);
   if (!session) return;
+  const arenaMode = await getUserArenaMode(session.profileId);
+  if (arenaMode === "onchain") {
+    return reply.code(400).send({
+      error: "onchain_deposit_required",
+      message:
+        "On-chain mode uses Base USDC via ArenaVault. Connect a wallet and deposit on-chain (or use the testnet faucet).",
+      chain: getChainConfig(),
+    });
+  }
   const amount = Number((req.body as { amount?: number }).amount ?? 0);
   if (amount <= 0 || amount > 100000) return reply.code(400).send({ error: "invalid_amount" });
-  await fakeDeposit(session.profileId, amount, `deposit-${session.profileId}-${Date.now()}`);
-  return { available: await getAvailableBalance(session.profileId) };
+  await fakeDeposit(session.profileId, amount, `deposit-${session.profileId}-${Date.now()}`, "demo");
+  return { available: await getAvailableBalance(session.profileId, "demo"), arenaMode: "demo" };
+});
+
+/** Testnet / local only: credit on-chain ledger so vault wiring can be tested end-to-end. */
+app.post("/v1/wallet/onchain/faucet", async (req, reply) => {
+  const session = await requireUser(req, reply);
+  if (!session) return;
+  if (process.env.MOZETTO_CHAIN_ENV === "base" || process.env.NODE_ENV === "production") {
+    return reply.code(403).send({ error: "faucet_disabled", message: "On-chain faucet is disabled in production." });
+  }
+  const amount = Number((req.body as { amount?: number }).amount ?? 1000);
+  if (amount <= 0 || amount > 50_000) return reply.code(400).send({ error: "invalid_amount" });
+  const key = `onchain-faucet-${session.profileId}-${Date.now()}`;
+  await creditOnchainDeposit(session.profileId, amount, key);
+  await setUserArenaMode(session.profileId, "onchain");
+  return {
+    available: await getAvailableBalance(session.profileId, "onchain"),
+    arenaMode: "onchain",
+    note: "Test faucet credited the on-chain ledger mirror. Replace with vault indexer before mainnet.",
+  };
 });
 
 app.post("/v1/wallet/withdraw", async (req, reply) => {
   const session = await requireUser(req, reply);
   if (!session) return;
+  const arenaMode = await getUserArenaMode(session.profileId);
+  if (arenaMode === "onchain") {
+    return reply.code(400).send({
+      error: "onchain_withdraw_required",
+      message: "On-chain withdrawals go through ArenaVault.withdraw on Base.",
+      chain: getChainConfig(),
+    });
+  }
   const amount = Number((req.body as { amount?: number }).amount ?? 0);
-  const available = await getAvailableBalance(session.profileId);
+  const available = await getAvailableBalance(session.profileId, "demo");
   if (amount <= 0 || amount > available) return reply.code(400).send({ error: "invalid_amount" });
   const acc = await query(
-    `select id from ledger_accounts where owner_id = $1 and kind = 'user_available'`,
+    `select id from ledger_accounts where owner_id = $1 and kind = 'user_available' and arena_mode = 'demo'`,
     [session.profileId],
   );
-  const clearing = await query(`select id from ledger_accounts where kind = 'system_clearing'`);
+  const clearing = await query(
+    `select id from ledger_accounts where kind = 'system_clearing' and arena_mode = 'demo'`,
+  );
   await transfer({
     idempotencyKey: `withdraw-${session.profileId}-${Date.now()}`,
-    description: `Fake USDC withdraw ${amount}`,
+    description: `Demo USDC withdraw ${amount}`,
     fromAccountId: acc.rows[0].id,
     toAccountId: clearing.rows[0].id,
     amount,
     referenceType: "withdraw",
   });
-  return { available: await getAvailableBalance(session.profileId) };
+  return { available: await getAvailableBalance(session.profileId, "demo"), arenaMode: "demo" };
 });
 
 app.get("/v1/rankings", async (req) => {
@@ -494,10 +593,13 @@ app.get("/v1/leagues", async () => {
 });
 
 /** Ranked Arena lobby — leagues, buy-in ladders, live occupancy. No public table list. */
-app.get("/v1/arena", async () => {
-  const stats = await arenaLobbyStats();
+app.get("/v1/arena", async (req) => {
+  const session = await readSession(req);
+  const mode = session ? await getUserArenaMode(session.profileId) : "demo";
+  const stats = await arenaLobbyStats(mode);
   const byLeague = Object.fromEntries(stats.map((s) => [s.league_id, s]));
   return {
+    arenaMode: mode,
     leagues: ARENA_LEAGUES.map((l) => ({
       ...l,
       tables: byLeague[l.id]?.tables ?? 0,

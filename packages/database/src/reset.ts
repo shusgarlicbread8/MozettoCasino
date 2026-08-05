@@ -50,7 +50,7 @@ export async function resetAccountsToFresh(opts?: { startingBalance?: number }) 
   );
 
   for (const p of profiles.rows) {
-    await query(`update profiles set league='bronze' where id=$1`, [p.id]);
+    await query(`update profiles set league='bronze', active_arena_mode='demo' where id=$1`, [p.id]);
     await ensureAccountRatings(p.id).catch(() => null);
 
     // Wipe every ledger transaction that ever touched this user's accounts
@@ -71,7 +71,7 @@ export async function resetAccountsToFresh(opts?: { startingBalance?: number }) 
        where not exists (select 1 from ledger_entries e where e.transaction_id = t.id)`,
     );
 
-    await fakeDeposit(p.id, starting, `reset-fund-${p.id}-${stamp}`);
+    await fakeDeposit(p.id, starting, `reset-fund-${p.id}-${stamp}`, "demo");
   }
 
   return {

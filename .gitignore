@@ -28,10 +28,8 @@ coverage
 .pytest_cache/
 
 # Foundry / Solidity
-cache/
-broadcast/
-contracts/out/
 contracts/cache/
+contracts/out/
 contracts/broadcast/
 **/lcov.info
 

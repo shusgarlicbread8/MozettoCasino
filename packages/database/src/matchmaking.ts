@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { query } from "./client.js";
-import { getAvailableBalance } from "./ledger.js";
+import type { ArenaMode } from "./arena-mode.js";
+import { getAvailableBalance, getUserArenaMode } from "./ledger.js";
 
 /**
  * Ranked Arena leagues. Each league has one fixed buy-in — there is no
@@ -125,19 +126,32 @@ async function createArenaTable(opts: {
   leagueId: string;
   buyIn: number;
   createdBy: string;
+  arenaMode: ArenaMode;
 }) {
   const { smallBlind, bigBlind, minBuyIn, maxBuyIn } = stakesForBuyIn(opts.buyIn);
   const short = randomUUID().replace(/-/g, "").slice(0, 6).toUpperCase();
   const league = ARENA_LEAGUES.find((l) => l.id === opts.leagueId);
   const id = `arena_${randomUUID().slice(0, 8)}`;
-  const name = `${league?.name ?? "Arena"} Match #${short}`;
+  const modeTag = opts.arenaMode === "onchain" ? "On-chain" : "Demo";
+  const name = `${modeTag} ${league?.name ?? "Arena"} #${short}`;
 
   await query(
     `insert into tables
        (id, name, variant_id, league_id, small_blind, big_blind, min_buy_in, max_buy_in,
-        max_seats, rake_pct, rake_cap, privacy, pace, is_active, created_by)
-     values ($1,$2,'nlhe_6max',$3,$4,$5,$6,$7,$8,0.025,null,'public','normal',true,$9)`,
-    [id, name, opts.leagueId, smallBlind, bigBlind, minBuyIn, maxBuyIn, HU_SEATS, opts.createdBy],
+        max_seats, rake_pct, rake_cap, privacy, pace, is_active, created_by, arena_mode)
+     values ($1,$2,'nlhe_6max',$3,$4,$5,$6,$7,$8,0.025,null,'public','normal',true,$9,$10::arena_mode)`,
+    [
+      id,
+      name,
+      opts.leagueId,
+      smallBlind,
+      bigBlind,
+      minBuyIn,
+      maxBuyIn,
+      HU_SEATS,
+      opts.createdBy,
+      opts.arenaMode,
+    ],
   );
   for (let i = 0; i < HU_SEATS; i++) {
     await query(`insert into table_seats (table_id, seat_index, status) values ($1,$2,'empty')`, [id, i]);
@@ -155,25 +169,32 @@ async function createArenaTable(opts: {
  * If the wallet can't cover it, we throw InsufficientFundsError so the
  * caller can prompt a top-up instead of silently failing.
  */
-export async function findArenaMatch(opts: { userId: string; leagueId: string }) {
+export async function findArenaMatch(opts: {
+  userId: string;
+  leagueId: string;
+  arenaMode?: ArenaMode;
+}) {
   await closeIdleArenaTables();
+
+  const arenaMode = opts.arenaMode ?? (await getUserArenaMode(opts.userId));
 
   const league = ARENA_LEAGUES.find((l) => l.id === opts.leagueId);
   if (!league || !league.open) throw new Error("League not available");
   const buyIn = league.buyIn;
 
-  const available = await getAvailableBalance(opts.userId);
+  const available = await getAvailableBalance(opts.userId, arenaMode);
   if (available < buyIn) {
     throw new InsufficientFundsError(buyIn, available, league.id);
   }
 
-  // Already in a live session? Send them back.
+  // Already in a live session in this mode? Send them back.
   const seated = await query(
     `select s.table_id, t.name from table_sessions s
      join tables t on t.id = s.table_id
      where s.owner_id = $1 and s.status = 'active' and t.is_active = true
+       and t.arena_mode = $2::arena_mode
      order by s.started_at desc limit 1`,
-    [opts.userId],
+    [opts.userId, arenaMode],
   );
   if (seated.rows[0]) {
     return {
@@ -183,10 +204,11 @@ export async function findArenaMatch(opts: { userId: string; leagueId: string })
       alreadySeated: true,
       buyIn,
       leagueId: opts.leagueId,
+      arenaMode,
     };
   }
 
-  // Candidates: same league + exact buy-in, open seat, HU ranked.
+  // Candidates: same mode + league + exact buy-in, open seat, HU ranked.
   const candidates = await query<{ id: string; name: string; seated: number }>(
     `select t.id, t.name,
             (select count(*)::int from table_seats s where s.table_id = t.id and s.status = 'occupied') as seated
@@ -196,12 +218,13 @@ export async function findArenaMatch(opts: { userId: string; leagueId: string })
        and t.league_id = $1
        and t.min_buy_in = $2
        and t.max_seats = $3
+       and t.arena_mode = $4::arena_mode
        and exists (
          select 1 from table_seats s
          where s.table_id = t.id and s.status = 'empty'
        )
      order by seated desc, t.created_at asc`,
-    [opts.leagueId, buyIn, HU_SEATS],
+    [opts.leagueId, buyIn, HU_SEATS, arenaMode],
   );
 
   for (const c of candidates.rows) {
@@ -222,6 +245,7 @@ export async function findArenaMatch(opts: { userId: string; leagueId: string })
       alreadySeated: false,
       buyIn,
       leagueId: opts.leagueId,
+      arenaMode,
     };
   }
 
@@ -229,6 +253,7 @@ export async function findArenaMatch(opts: { userId: string; leagueId: string })
     leagueId: opts.leagueId,
     buyIn,
     createdBy: opts.userId,
+    arenaMode,
   });
   return {
     tableId: created.id,
@@ -237,19 +262,22 @@ export async function findArenaMatch(opts: { userId: string; leagueId: string })
     alreadySeated: false,
     buyIn,
     leagueId: opts.leagueId,
+    arenaMode,
   };
 }
 
-export async function arenaLobbyStats() {
+export async function arenaLobbyStats(arenaMode?: ArenaMode) {
   await closeIdleArenaTables();
+  const mode = arenaMode ?? "demo";
   const rows = await query(
     `select t.league_id,
             count(*)::int as tables,
             coalesce(sum((select count(*)::int from table_seats s where s.table_id = t.id and s.status='occupied')),0)::int as seated
      from tables t
      where t.is_active = true and t.privacy = 'public' and t.max_seats = $1
+       and t.arena_mode = $2::arena_mode
      group by t.league_id`,
-    [HU_SEATS],
+    [HU_SEATS, mode],
   );
   return rows.rows as { league_id: string; tables: number; seated: number }[];
 }

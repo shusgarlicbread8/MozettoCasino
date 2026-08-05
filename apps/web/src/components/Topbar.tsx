@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { ArenaModeSwitch } from "@/components/ArenaModeSwitch";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { money, useSession } from "@/lib/session";
 
@@ -99,10 +100,11 @@ export function Topbar() {
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 14, flex: "none" }}>
+        <ArenaModeSwitch />
         <Link href="/wallet" style={{ display: "flex", alignItems: "center", gap: 14, textDecoration: "none", color: "#EDEDED" }}>
           <div style={{ textAlign: "right" }}>
             <div style={{ font: "400 9px var(--font-geist-mono), monospace", letterSpacing: ".1em", color: "#4A4A4A" }}>
-              WALLET
+              {me?.arenaMode === "onchain" ? "ON-CHAIN" : "DEMO"} WALLET
             </div>
             <div style={{ font: "500 13px var(--font-geist-mono), monospace" }}>{money(me?.available ?? 0)}</div>
           </div>

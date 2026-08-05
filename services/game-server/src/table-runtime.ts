@@ -47,6 +47,7 @@ type Client = {
 
 export class TableRuntime {
   tableId: string;
+  arenaMode: "demo" | "onchain" = "demo";
   state: HoldemState;
   sequence = 0;
   prevHash: string | null = null;
@@ -98,6 +99,7 @@ export class TableRuntime {
       rakeCap: row.rake_cap != null ? Number(row.rake_cap) : null,
       maxSeats: Number(row.max_seats) || 6,
     });
+    rt.arenaMode = row.arena_mode === "onchain" ? "onchain" : "demo";
     // Resume event chain after restarts — avoids duplicate (table_id, sequence) inserts.
     const seq = await query(`select coalesce(max(sequence), 0)::int as m from hand_events where table_id = $1`, [tableId]);
     rt.sequence = Number(seq.rows[0]?.m ?? 0);
@@ -264,9 +266,10 @@ export class TableRuntime {
     autoRebuy?: boolean;
   }) {
     // Enforce table buy-in window (ranked arena uses fixed equal stacks).
-    const limits = await query(`select min_buy_in, max_buy_in from tables where id=$1`, [this.tableId]);
+    const limits = await query(`select min_buy_in, max_buy_in, arena_mode from tables where id=$1`, [this.tableId]);
     const minBuy = Number(limits.rows[0]?.min_buy_in ?? 0);
     const maxBuy = Number(limits.rows[0]?.max_buy_in ?? Number.POSITIVE_INFINITY);
+    this.arenaMode = limits.rows[0]?.arena_mode === "onchain" ? "onchain" : "demo";
     if (opts.buyIn < minBuy || opts.buyIn > maxBuy) {
       throw new Error(`Buy-in must be $${minBuy}–$${maxBuy}`);
     }
@@ -292,7 +295,7 @@ export class TableRuntime {
     );
     if (!empty) throw new Error("No open seat");
     const sessionId = randomUUID();
-    await lockBuyIn(opts.userId, opts.buyIn, sessionId);
+    await lockBuyIn(opts.userId, opts.buyIn, sessionId, this.arenaMode);
     await query(
       `insert into table_sessions (id, table_id, owner_id, agent_id, agent_config_id, seat_index, buy_in, stack, stop_loss, profit_target, auto_rebuy, server_seed_commit)
        values ($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11)`,
@@ -409,9 +412,11 @@ export class TableRuntime {
     const baseline = this.stackBaseline.get(userId) ?? stack;
     if (baseline !== stack) {
       try {
-        await rebalanceEscrowToStacks(`leave_${this.tableId}_${userId}_${Date.now()}`, [
-          { userId, prevStack: baseline, nextStack: stack },
-        ]);
+        await rebalanceEscrowToStacks(
+          `leave_${this.tableId}_${userId}_${Date.now()}`,
+          [{ userId, prevStack: baseline, nextStack: stack }],
+          this.arenaMode,
+        );
         this.stackBaseline.set(userId, stack);
       } catch (err) {
         console.error("leave escrow rebalance failed", this.tableId, err);
@@ -426,7 +431,7 @@ export class TableRuntime {
     );
     if (sessionId) {
       try {
-        if (stack > 0) await releaseSession(userId, stack, sessionId);
+        if (stack > 0) await releaseSession(userId, stack, sessionId, this.arenaMode);
       } catch (err) {
         console.error("releaseSession failed on leave", this.tableId, err);
       }
@@ -515,7 +520,7 @@ export class TableRuntime {
     );
     for (const r of rows.rows) {
       try {
-        await releaseSession(userId, stack, r.id);
+        await releaseSession(userId, stack, r.id, this.arenaMode);
       } catch {
         /* already released */
       }
@@ -717,7 +722,7 @@ export class TableRuntime {
       if (!sessionId) throw new Error("No active session");
       this.sessions.set(userId, sessionId);
     }
-    await lockBuyIn(userId, amount, `${sessionId}-topup-${Date.now()}`);
+    await lockBuyIn(userId, amount, `${sessionId}-topup-${Date.now()}`, this.arenaMode);
     const nextStack = seat.stack + amount;
     this.state = {
       ...this.state,
@@ -915,7 +920,7 @@ export class TableRuntime {
       }
     }
     try {
-      await rebalanceEscrowToStacks(handId, changes);
+      await rebalanceEscrowToStacks(handId, changes, this.arenaMode);
     } catch (e) {
       console.error("escrow rebalance failed", handId, e);
     }

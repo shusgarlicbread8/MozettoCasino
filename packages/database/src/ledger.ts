@@ -1,34 +1,88 @@
 import { randomUUID } from "node:crypto";
 import { query } from "./client.js";
+import { type ArenaMode, parseArenaMode } from "./arena-mode.js";
 
-export async function getAvailableBalance(userId: string): Promise<number> {
+export type { ArenaMode } from "./arena-mode.js";
+export { isArenaMode, parseArenaMode } from "./arena-mode.js";
+
+export async function getUserArenaMode(userId: string): Promise<ArenaMode> {
+  const res = await query<{ active_arena_mode: string }>(
+    `select active_arena_mode::text from profiles where id = $1`,
+    [userId],
+  );
+  return parseArenaMode(res.rows[0]?.active_arena_mode, "demo");
+}
+
+export async function setUserArenaMode(userId: string, mode: ArenaMode): Promise<ArenaMode> {
+  await ensureModeAccounts(userId, mode);
+  await query(`update profiles set active_arena_mode = $1::arena_mode, updated_at = now() where id = $2`, [
+    mode,
+    userId,
+  ]);
+  return mode;
+}
+
+/** Ensure demo/onchain available+escrow accounts exist for a user. */
+export async function ensureModeAccounts(userId: string, mode: ArenaMode) {
+  await query(
+    `insert into ledger_accounts (owner_id, kind, currency, label, arena_mode)
+     values
+       ($1, 'user_available', 'USDC', 'available', $2::arena_mode),
+       ($1, 'user_table_escrow', 'USDC', 'escrow', $2::arena_mode)
+     on conflict do nothing`,
+    [userId, mode],
+  );
+  await query(
+    `insert into ledger_accounts (owner_id, kind, currency, label, arena_mode)
+     select null, kind, 'USDC', label, $1::arena_mode
+     from (values
+       ('system_clearing'::account_kind, 'clearing'),
+       ('platform_rake'::account_kind, 'rake')
+     ) v(kind, label)
+     where not exists (
+       select 1 from ledger_accounts a
+       where a.owner_id is null and a.kind = v.kind and a.label = v.label and a.arena_mode = $1::arena_mode
+     )`,
+    [mode],
+  );
+}
+
+export async function getAvailableBalance(userId: string, mode?: ArenaMode): Promise<number> {
+  const arenaMode = mode ?? (await getUserArenaMode(userId));
+  await ensureModeAccounts(userId, arenaMode);
   const res = await query<{ balance: string }>(
     `select coalesce(sum(e.amount),0)::text as balance
      from ledger_accounts a
      left join ledger_entries e on e.account_id = a.id
-     where a.owner_id = $1 and a.kind = 'user_available'`,
-    [userId],
+     where a.owner_id = $1 and a.kind = 'user_available' and a.arena_mode = $2::arena_mode`,
+    [userId, arenaMode],
   );
   return Number(res.rows[0]?.balance ?? 0);
 }
 
-export async function getEscrowBalance(userId: string): Promise<number> {
+export async function getEscrowBalance(userId: string, mode?: ArenaMode): Promise<number> {
+  const arenaMode = mode ?? (await getUserArenaMode(userId));
+  await ensureModeAccounts(userId, arenaMode);
   const res = await query<{ balance: string }>(
     `select coalesce(sum(e.amount),0)::text as balance
      from ledger_accounts a
      left join ledger_entries e on e.account_id = a.id
-     where a.owner_id = $1 and a.kind = 'user_table_escrow'`,
-    [userId],
+     where a.owner_id = $1 and a.kind = 'user_table_escrow' and a.arena_mode = $2::arena_mode`,
+    [userId, arenaMode],
   );
   return Number(res.rows[0]?.balance ?? 0);
 }
 
-async function accountId(userId: string | null, kind: string, label: string) {
+async function accountId(userId: string | null, kind: string, label: string, mode: ArenaMode) {
+  if (userId) await ensureModeAccounts(userId, mode);
   const res = await query<{ id: string }>(
-    `select id from ledger_accounts where kind = $1 and label = $2 and ($3::uuid is null or owner_id = $3) limit 1`,
-    [kind, label, userId],
+    `select id from ledger_accounts
+     where kind = $1 and label = $2 and arena_mode = $3::arena_mode
+       and ($4::uuid is null or owner_id = $4)
+     limit 1`,
+    [kind, label, mode, userId],
   );
-  if (!res.rows[0]) throw new Error(`Missing ledger account ${kind}/${label}`);
+  if (!res.rows[0]) throw new Error(`Missing ledger account ${kind}/${label}/${mode}`);
   return res.rows[0].id;
 }
 
@@ -74,14 +128,15 @@ export async function transfer(opts: {
   }
 }
 
-export async function lockBuyIn(userId: string, amount: number, sessionId: string) {
-  const available = await accountId(userId, "user_available", "available");
-  const escrow = await accountId(userId, "user_table_escrow", "escrow");
-  const bal = await getAvailableBalance(userId);
+export async function lockBuyIn(userId: string, amount: number, sessionId: string, mode?: ArenaMode) {
+  const arenaMode = mode ?? (await getUserArenaMode(userId));
+  const available = await accountId(userId, "user_available", "available", arenaMode);
+  const escrow = await accountId(userId, "user_table_escrow", "escrow", arenaMode);
+  const bal = await getAvailableBalance(userId, arenaMode);
   if (bal < amount) throw new Error("Insufficient available balance");
   return transfer({
-    idempotencyKey: `buyin-${sessionId}`,
-    description: `Bought in for $${amount}`,
+    idempotencyKey: `buyin-${arenaMode}-${sessionId}`,
+    description: `Bought in for $${amount} (${arenaMode})`,
     fromAccountId: available,
     toAccountId: escrow,
     amount,
@@ -90,13 +145,14 @@ export async function lockBuyIn(userId: string, amount: number, sessionId: strin
   });
 }
 
-export async function releaseSession(userId: string, amount: number, sessionId: string) {
-  const available = await accountId(userId, "user_available", "available");
-  const escrow = await accountId(userId, "user_table_escrow", "escrow");
+export async function releaseSession(userId: string, amount: number, sessionId: string, mode?: ArenaMode) {
+  const arenaMode = mode ?? (await getUserArenaMode(userId));
+  const available = await accountId(userId, "user_available", "available", arenaMode);
+  const escrow = await accountId(userId, "user_table_escrow", "escrow", arenaMode);
   if (amount <= 0) return null;
   return transfer({
-    idempotencyKey: `cashout-${sessionId}`,
-    description: `Cashed out $${amount} to wallet`,
+    idempotencyKey: `cashout-${arenaMode}-${sessionId}`,
+    description: `Cashed out $${amount} to wallet (${arenaMode})`,
     fromAccountId: escrow,
     toAccountId: available,
     amount,
@@ -105,14 +161,13 @@ export async function releaseSession(userId: string, amount: number, sessionId: 
   });
 }
 
-export async function postRake(amount: number, handId: string) {
+export async function postRake(amount: number, handId: string, mode: ArenaMode = "demo") {
   if (amount <= 0) return null;
-  const clearing = await accountId(null, "system_clearing", "clearing");
-  const rake = await accountId(null, "platform_rake", "rake");
-  // Rake already removed from pot before awarding; book from clearing
+  const clearing = await accountId(null, "system_clearing", "clearing", mode);
+  const rake = await accountId(null, "platform_rake", "rake", mode);
   return transfer({
-    idempotencyKey: `rake-${handId}`,
-    description: `Rake ${amount}`,
+    idempotencyKey: `rake-${mode}-${handId}`,
+    description: `Rake ${amount} (${mode})`,
     fromAccountId: clearing,
     toAccountId: rake,
     amount,
@@ -121,12 +176,16 @@ export async function postRake(amount: number, handId: string) {
   });
 }
 
-export async function fakeDeposit(userId: string, amount: number, key: string) {
-  const available = await accountId(userId, "user_available", "available");
-  const clearing = await accountId(null, "system_clearing", "clearing");
+/** Demo-only paper funding. On-chain mode must deposit real USDC via ArenaVault. */
+export async function fakeDeposit(userId: string, amount: number, key: string, mode: ArenaMode = "demo") {
+  if (mode !== "demo") {
+    throw new Error("On-chain mode requires a Base USDC vault deposit — paper funding is disabled.");
+  }
+  const available = await accountId(userId, "user_available", "available", "demo");
+  const clearing = await accountId(null, "system_clearing", "clearing", "demo");
   return transfer({
     idempotencyKey: key,
-    description: `Fake USDC deposit ${amount}`,
+    description: `Demo USDC deposit ${amount}`,
     fromAccountId: clearing,
     toAccountId: available,
     amount,
@@ -141,16 +200,18 @@ export async function fakeDeposit(userId: string, amount: number, key: string) {
  */
 export async function rebalanceEscrowToStacks(
   handId: string,
-  changes: { userId: string; prevStack: number; nextStack: number }[],
+  changes: { userId: string; prevStack: number; nextStack: number; mode?: ArenaMode }[],
+  mode?: ArenaMode,
 ) {
-  const clearing = await accountId(null, "system_clearing", "clearing");
   for (const c of changes) {
+    const arenaMode = c.mode ?? mode ?? (c.userId ? await getUserArenaMode(c.userId) : "demo");
+    const clearing = await accountId(null, "system_clearing", "clearing", arenaMode);
     const delta = Math.round(c.nextStack - c.prevStack);
     if (delta === 0 || !c.userId || c.userId === "bot") continue;
-    const escrow = await accountId(c.userId, "user_table_escrow", "escrow");
+    const escrow = await accountId(c.userId, "user_table_escrow", "escrow", arenaMode);
     if (delta < 0) {
       await transfer({
-        idempotencyKey: `hand-loss-${handId}-${c.userId}`,
+        idempotencyKey: `hand-loss-${arenaMode}-${handId}-${c.userId}`,
         description: `Lost $${-delta} this hand`,
         fromAccountId: escrow,
         toAccountId: clearing,
@@ -160,7 +221,7 @@ export async function rebalanceEscrowToStacks(
       });
     } else {
       await transfer({
-        idempotencyKey: `hand-win-${handId}-${c.userId}`,
+        idempotencyKey: `hand-win-${arenaMode}-${handId}-${c.userId}`,
         description: `Won $${delta} this hand`,
         fromAccountId: clearing,
         toAccountId: escrow,
@@ -172,24 +233,42 @@ export async function rebalanceEscrowToStacks(
   }
 }
 
-export async function listLedger(userId: string, limit = 50) {
+export async function listLedger(userId: string, limit = 50, mode?: ArenaMode) {
+  const arenaMode = mode ?? (await getUserArenaMode(userId));
   const res = await query(
     `select t.id, t.description, t.created_at, t.reference_type,
             (select sum(e.amount) from ledger_entries e
               join ledger_accounts a on a.id = e.account_id
-              where e.transaction_id = t.id and a.owner_id = $1 and a.kind = 'user_available') as available_delta,
+              where e.transaction_id = t.id and a.owner_id = $1 and a.kind = 'user_available'
+                and a.arena_mode = $3::arena_mode) as available_delta,
             (select sum(e.amount) from ledger_entries e
               join ledger_accounts a on a.id = e.account_id
-              where e.transaction_id = t.id and a.owner_id = $1 and a.kind = 'user_table_escrow') as escrow_delta
+              where e.transaction_id = t.id and a.owner_id = $1 and a.kind = 'user_table_escrow'
+                and a.arena_mode = $3::arena_mode) as escrow_delta
      from ledger_transactions t
      where exists (
        select 1 from ledger_entries e
        join ledger_accounts a on a.id = e.account_id
-       where e.transaction_id = t.id and a.owner_id = $1
+       where e.transaction_id = t.id and a.owner_id = $1 and a.arena_mode = $3::arena_mode
      )
      order by t.created_at desc
      limit $2`,
-    [userId, limit],
+    [userId, limit, arenaMode],
   );
   return res.rows;
+}
+
+/** Credit on-chain mirrored available balance after a confirmed vault deposit (indexer). */
+export async function creditOnchainDeposit(userId: string, amount: number, txHash: string) {
+  const available = await accountId(userId, "user_available", "available", "onchain");
+  const clearing = await accountId(null, "system_clearing", "clearing", "onchain");
+  return transfer({
+    idempotencyKey: `onchain-deposit-${txHash}`,
+    description: `On-chain vault deposit ${amount}`,
+    fromAccountId: clearing,
+    toAccountId: available,
+    amount,
+    referenceType: "chain_deposit",
+    referenceId: txHash,
+  });
 }
