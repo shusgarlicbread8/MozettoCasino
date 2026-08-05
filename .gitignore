@@ -1,15 +1,42 @@
+# Dependencies & builds
 node_modules
 .next
 dist
 build
 .turbo
+out
+coverage
+*.tsbuildinfo
+.cache
+
+# Env / secrets
 .env
 .env.local
 .env.*.local
+.env.production
+
+# Logs & OS
 *.log
 .DS_Store
-coverage
 .vercel
-out
-*.tsbuildinfo
-.cache
+
+# Python (PokerKit oracle)
+**/.venv/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Foundry / Solidity
+cache/
+broadcast/
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+**/lcov.info
+
+# IDE / local
+.idea/
+.vscode/
+*.swp
+.cursor/

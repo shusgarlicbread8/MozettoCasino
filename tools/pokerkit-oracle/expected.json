@@ -1,0 +1,37 @@
+{
+  "note": "Expected values derived from PokerKit StandardHighHand + standard side-pot arithmetic (TDA). Verified 2026-08-05 against pokerkit in this folder's .venv.",
+  "hand_eval": {
+    "six_beats_wheel": true,
+    "sf_beats_quads": true,
+    "ak_kicker_beats_aq": true
+  },
+  "side_pots": {
+    "contributions_100_100_20": {
+      "layers": [
+        { "amount": 60, "eligible": [0, 1, 2] },
+        { "amount": 160, "eligible": [0, 1] }
+      ]
+    },
+    "short_wins_main_kk_wins_side": {
+      "starting": [200, 200, 20],
+      "contributions": [100, 100, 20],
+      "winners": { "main": 2, "side": 0 },
+      "final_stacks": [260, 100, 60]
+    },
+    "aa_wins_both": {
+      "starting": [200, 200, 20],
+      "contributions": [100, 100, 20],
+      "winners": { "main": 0, "side": 0 },
+      "final_stacks": [320, 100, 0]
+    }
+  },
+  "hu_chop": {
+    "starting": [100, 100],
+    "final_stacks": [100, 100]
+  },
+  "pokerkit_live": {
+    "short_AA_main_KK_side": [260, 100, 60],
+    "hu_chop": [100, 100],
+    "triple_allin_short_main": [360, 0, 60]
+  }
+}

@@ -992,8 +992,28 @@ export default function ArenaPage() {
   const modeColor = connecting ? "#FFB020" : "#00E676";
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "1fr 352px", height: "calc(100vh - 52px)" }}>
-      <div style={{ position: "relative", display: "flex", flexDirection: "column", background: "radial-gradient(1000px 700px at 50% 44%,#0C0C0C,#050505)", minWidth: 0 }}>
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: "grid",
+        gridTemplateColumns: "1fr 352px",
+        height: "calc(100vh - 52px)",
+        maxHeight: "calc(100vh - 52px)",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          position: "relative",
+          display: "flex",
+          flexDirection: "column",
+          background: "radial-gradient(1000px 700px at 50% 44%,#0C0C0C,#050505)",
+          minWidth: 0,
+          minHeight: 0,
+          overflow: "hidden",
+        }}
+      >
         <div style={{ flex: "none", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 22px", borderBottom: "1px solid rgba(255,255,255,.05)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
@@ -1027,8 +1047,18 @@ export default function ArenaPage() {
           </div>
         </div>
 
-        <div style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: "34px 30px" }}>
-          <div style={{ position: "relative", width: "100%", maxWidth: 880, aspectRatio: "16/9.6" }}>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "34px 30px",
+            overflow: "hidden",
+          }}
+        >
+          <div style={{ position: "relative", width: "100%", maxWidth: 880, maxHeight: "100%", aspectRatio: "16/9.6" }}>
             <div
               style={{
                 position: "absolute",
