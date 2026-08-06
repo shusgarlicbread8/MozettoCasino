@@ -3,9 +3,9 @@ export {
   type ChainManifestEntry,
   type HexAddress,
   type NetworkKey,
-} from "./generated.js";
+} from "./generated";
 
-import { chainManifest, type NetworkKey } from "./generated.js";
+import { chainManifest, type NetworkKey } from "./generated";
 
 export function resolveNetworkKey(raw?: string | null): NetworkKey {
   const v = (raw || process.env.MOZETTO_CHAIN_ENV || "base-sepolia").toLowerCase();
@@ -30,8 +30,7 @@ export function getManifest(network?: NetworkKey) {
 
   return {
     ...base,
-    network: key,
-    usdc: addr("USDC_ADDRESS") ?? base.usdc,
+    usdc: addr("USDC_ADDRESS") ?? addr("NEXT_PUBLIC_USDC_ADDRESS") ?? base.usdc,
     arenaVault: addr("ARENA_VAULT_ADDRESS") ?? addr("NEXT_PUBLIC_ARENA_VAULT_ADDRESS") ?? base.arenaVault,
     tableRegistry: addr("TABLE_REGISTRY_ADDRESS") ?? base.tableRegistry,
     settlementHub: addr("SETTLEMENT_HUB_ADDRESS") ?? base.settlementHub,
