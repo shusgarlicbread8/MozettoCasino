@@ -92,8 +92,9 @@ const SETTLEMENT_HUB_ABI = [
         name: "players",
         type: "tuple[]",
         components: [
-          { name: "player", type: "address" },
-          { name: "tableBalance", type: "uint256" },
+          { name: "user", type: "address" },
+          { name: "startLocked", type: "uint256" },
+          { name: "endBalance", type: "uint256" },
         ],
       },
       { name: "signatures", type: "bytes[]" },
@@ -107,6 +108,10 @@ function keccakLike(data: string): Hex {
 }
 
 function sessionIdToBytes32(sessionId: string): Hex {
+  // Custody session ids are already bytes32 hex from openSession — do not re-hash.
+  if (/^0x[0-9a-fA-F]{64}$/.test(sessionId)) return sessionId.toLowerCase() as Hex;
+  const hex = sessionId.startsWith("0x") ? sessionId.slice(2) : sessionId;
+  if (/^[0-9a-fA-F]{64}$/.test(hex)) return (`0x${hex.toLowerCase()}`) as Hex;
   return keccak256(toBytes(sessionId));
 }
 
@@ -230,24 +235,49 @@ type SessionRow = {
 };
 
 async function buildProposal(session: SessionRow) {
-  const stacks = await query<{ wallet_address: string; stack: string; buy_in: string; owner_id: string; agent_id: string }>(
-    `select osp.wallet_address, ts.stack::text, ts.buy_in::text, ts.owner_id::text, ts.agent_id::text
-     from onchain_session_players osp
-     join table_sessions ts on ts.id = osp.session_id or ts.owner_id = osp.profile_id
-     where osp.session_id = $1`,
-    [session.session_id],
-  ).catch(() => ({ rows: [] as { wallet_address: string; stack: string; buy_in: string; owner_id: string; agent_id: string }[] }));
-
-  if (!stacks.rows.length && session.table_id) {
-    const fallback = await query<{ owner_id: string; stack: string; buy_in: string; agent_id: string }>(
-      `select owner_id::text, stack::text, buy_in::text, agent_id::text
-       from table_sessions where table_id = $1 and status = 'active'`,
-      [session.table_id],
+  // Prefer latest table_session per player (active or completed). Never join on
+  // osp.session_id = ts.id — custody session ids are bytes32, not table_session UUIDs.
+  type StackRow = {
+    wallet_address: string;
+    stack: string;
+    buy_in: string;
+    owner_id: string;
+    agent_id: string;
+  };
+  let stacks: { rows: StackRow[] };
+  try {
+    stacks = await query<StackRow>(
+      `select osp.wallet_address,
+              coalesce(ts.stack, (osp.buy_in_raw::numeric / 1000000))::text as stack,
+              coalesce(ts.buy_in, (osp.buy_in_raw::numeric / 1000000))::text as buy_in,
+              coalesce(ts.owner_id::text, osp.profile_id::text, '') as owner_id,
+              coalesce(ts.agent_id::text, '') as agent_id
+       from onchain_session_players osp
+       left join lateral (
+         select stack, buy_in, owner_id, agent_id
+         from table_sessions
+         where ($2::text is not null)
+           and table_id = $2
+           and owner_id = osp.profile_id
+         order by case when status = 'active' then 0 else 1 end,
+                  coalesce(ended_at, started_at) desc nulls last
+         limit 1
+       ) ts on true
+       where osp.session_id = $1`,
+      [session.session_id, session.table_id],
     );
-    if (!fallback.rows.length) {
-      console.log("[settlement-worker] skip proposal — no ending stacks", session.session_id);
-      return null;
-    }
+  } catch (e) {
+    console.warn(
+      "[settlement-worker] stack query failed",
+      session.session_id,
+      e instanceof Error ? e.message : e,
+    );
+    stacks = { rows: [] };
+  }
+
+  if (!stacks.rows.length) {
+    console.log("[settlement-worker] skip proposal — no ending stacks", session.session_id, "table", session.table_id);
+    return null;
   }
 
   const canonical = await query<{ sequence: string; event_hash: string }>(
@@ -412,19 +442,33 @@ async function submitHubSettlement(
     return;
   }
 
-  const players = await query<{ wallet_address: string; stack: string }>(
-    `select wallet_address, coalesce(
-       (select stack from table_sessions where owner_id = osp.profile_id and status = 'active' limit 1),
-       buy_in_raw / 1e6
-     )::text as stack
+  const players = await query<{ wallet_address: string; stack: string; buy_in_raw: string }>(
+    `select osp.wallet_address,
+            coalesce(
+              (
+                select ts.stack::text from table_sessions ts
+                join onchain_sessions os on os.table_id = ts.table_id
+                where os.session_id = osp.session_id and ts.owner_id = osp.profile_id
+                order by case when ts.status = 'active' then 0 else 1 end,
+                         coalesce(ts.ended_at, ts.started_at) desc nulls last
+                limit 1
+              ),
+              (osp.buy_in_raw::numeric / 1000000)::text
+            ) as stack,
+            osp.buy_in_raw::text as buy_in_raw
      from onchain_session_players osp where session_id = $1`,
     [proposal.sessionId],
-  ).catch(() => ({ rows: [] as { wallet_address: string; stack: string }[] }));
+  ).catch(() => ({ rows: [] as { wallet_address: string; stack: string; buy_in_raw: string }[] }));
 
-  const settlementPlayers = players.rows.map((p) => ({
-    player: p.wallet_address as `0x${string}`,
-    tableBalance: BigInt(Math.floor(Number(p.stack) * 1e6)),
-  }));
+  const settlementPlayers = players.rows.map((p) => {
+    const startLocked = BigInt(p.buy_in_raw);
+    const endBalance = BigInt(Math.floor(Number(p.stack) * 1e6));
+    return {
+      user: p.wallet_address as `0x${string}`,
+      startLocked,
+      endBalance,
+    };
+  });
 
   const { wallet, publicClient } = chainClients(pk);
   try {
@@ -499,9 +543,27 @@ async function processOnchainSettlements() {
   const pk = (process.env.SETTLEMENT_PRIVATE_KEY || process.env.GAME_ATTESTOR_PRIVATE_KEY) as Hex | undefined;
   if (!hub || !pk) return;
 
+  // Also pick opened sessions with no active seats (abandoned / both left) so
+  // Instant buy-ins are not stuck locked forever waiting for a status flip.
   const sessions = await query<SessionRow>(
-    `select session_id, table_id, chain_id from onchain_sessions
-     where status in ('playing', 'settling') and settlement_tx_hash is null
+    `select session_id, table_id, chain_id from onchain_sessions os
+     where settlement_tx_hash is null
+       and (
+         status in ('playing', 'settling')
+         or (
+           status = 'opened'
+           and table_id is not null
+           and not exists (
+             select 1 from table_sessions ts
+             where ts.table_id = os.table_id and ts.status = 'active'
+           )
+           and exists (
+             select 1 from table_sessions ts
+             where ts.table_id = os.table_id and ts.status = 'completed'
+           )
+         )
+       )
+     order by created_at asc
      limit 5`,
   ).catch(() => ({ rows: [] as SessionRow[] }));
 
@@ -534,8 +596,9 @@ async function loop() {
   await mockVrfEpoch().catch((e) => console.error(e));
 }
 
+const SETTLEMENT_POLL_MS = Number(process.env.SETTLEMENT_POLL_MS || 15_000);
 setInterval(() => {
   loop().catch(console.error);
-}, 60_000);
+}, SETTLEMENT_POLL_MS);
 
 loop().catch(console.error);

@@ -29,6 +29,8 @@ import {
   query,
   lockBuyIn,
   releaseSession,
+  markOnchainSessionPlaying,
+  markOnchainSessionReadyForSettlement,
   rebalanceEscrowToStacks,
   settleRatedMatch,
   getOnchainSessionForTable,
@@ -389,7 +391,7 @@ export class TableRuntime {
 
     if (this.arenaMode === "onchain") {
       const onchain = await getOnchainSessionForTable(this.tableId);
-      if (!onchain || onchain.status !== "opened") {
+      if (!onchain || (onchain.status !== "opened" && onchain.status !== "playing")) {
         throw new Error(
           onchain?.status === "pending"
             ? "Session opening on-chain — wait for confirmation before joining"
@@ -460,12 +462,18 @@ export class TableRuntime {
       console.error("PLAYER_JOINED event failed", this.tableId, err);
       this.broadcastSnapshots();
     }
+    const seatedCount = this.state.seats.filter((s) => s.playerId && !s.sitOut).length;
+    if (this.arenaMode === "onchain" && this.onchainSessionId && seatedCount >= 2) {
+      await markOnchainSessionPlaying(this.onchainSessionId).catch((err) =>
+        console.error("markOnchainSessionPlaying failed", this.tableId, err),
+      );
+    }
     this.ensureLoop();
     this.broadcastSnapshots();
     return {
       seatIndex: empty.seatIndex,
       sessionId,
-      seated: this.state.seats.filter((s) => s.playerId && !s.sitOut).length,
+      seated: seatedCount,
       alreadySeated: false,
     };
   }
@@ -590,6 +598,11 @@ export class TableRuntime {
     if (remaining.length < 2 && this.state.street !== "waiting" && this.state.street !== "settlement") {
       await this.settleIfOnePlayerLeft("table_abandoned");
       this.resetToWaiting();
+    }
+    if (this.arenaMode === "onchain" && this.onchainSessionId) {
+      await markOnchainSessionReadyForSettlement(this.onchainSessionId).catch((err) =>
+        console.error("markOnchainSessionReadyForSettlement failed", this.tableId, err),
+      );
     }
     // Always push a fresh snapshot so every client flips the seat to SEAT OPEN.
     this.broadcastSnapshots();

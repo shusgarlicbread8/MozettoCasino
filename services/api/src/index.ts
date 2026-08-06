@@ -766,43 +766,66 @@ app.post("/v1/arena/find-match", async (req, reply) => {
     if (onchain.alreadySeated) {
       return { ...onchain, joined: true };
     }
-    if (onchain.waitingForChain) {
+    if (!onchain.tableId) {
       return { ...onchain, joined: false };
     }
+
+    // Join with retries — Instant mirrors / session opened may land a moment after openSession.
     const auth = req.headers.authorization;
     const cookie = req.headers.cookie;
-    try {
-      const res = await fetch(`${GAME_HTTP}/v1/tables/${onchain.tableId}/join`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(auth ? { authorization: auth } : {}),
-          ...(cookie ? { cookie } : {}),
-        },
-        body: JSON.stringify({ buyIn: onchain.buyIn }),
-      });
-      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-      if (!res.ok) {
-        return reply.code(res.status).send({
-          error: "join_failed",
-          message: (data.message as string) || (data.error as string) || "Could not seat at table",
-          match: onchain,
+    const joinDeadline = Date.now() + 25_000;
+    let lastErr: Record<string, unknown> = {};
+    while (Date.now() < joinDeadline) {
+      try {
+        const res = await fetch(`${GAME_HTTP}/v1/tables/${onchain.tableId}/join`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(auth ? { authorization: auth } : {}),
+            ...(cookie ? { cookie } : {}),
+          },
+          body: JSON.stringify({ buyIn: onchain.buyIn }),
         });
+        const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        if (res.ok) {
+          return {
+            ...onchain,
+            waitingForChain: false,
+            sessionStatus: onchain.sessionStatus === "pending" ? "opened" : onchain.sessionStatus,
+            joined: true,
+            seatIndex: data.seatIndex,
+            sessionId: data.sessionId,
+            alreadySeated: Boolean(data.alreadySeated),
+          };
+        }
+        lastErr = data;
+        const msg = String(data.message || data.error || "");
+        const retryable =
+          /opening on-chain|not opened|Insufficient available|indexer|mirror/i.test(msg) ||
+          res.status === 400 ||
+          res.status === 503;
+        if (!retryable) {
+          return reply.code(res.status).send({
+            error: "join_failed",
+            message: msg || "Could not seat at table",
+            match: onchain,
+          });
+        }
+      } catch (e) {
+        lastErr = { message: e instanceof Error ? e.message : "error" };
       }
-      return {
-        ...onchain,
-        joined: true,
-        seatIndex: data.seatIndex,
-        sessionId: data.sessionId,
-        alreadySeated: Boolean(data.alreadySeated),
-      };
-    } catch (e) {
-      return reply.code(502).send({
-        error: "game_server_unreachable",
-        message: e instanceof Error ? e.message : "error",
-        match: onchain,
-      });
+      await new Promise((r) => setTimeout(r, 800));
     }
+
+    // Session is on-chain; client can keep polling Find Match / table until seated.
+    return {
+      ...onchain,
+      joined: false,
+      waitingForChain: true,
+      message:
+        (lastErr.message as string) ||
+        "Match opened on-chain — seating as soon as Instant balance mirror is ready.",
+    };
   }
 
   let match: Awaited<ReturnType<typeof findArenaMatch>>;

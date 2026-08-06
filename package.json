@@ -17,6 +17,7 @@
     "typecheck": "pnpm -r run typecheck",
     "smoke:custody": "node ./scripts/anvil-custody-smoke.mjs",
     "smoke:custody:run": "node ./scripts/anvil-custody-smoke.mjs --run",
+    "e2e:instant": "node ./scripts/anvil-e2e-instant-match.mjs",
     "test:db": "pnpm --filter @mozetto/database test"
   },
   "devDependencies": {

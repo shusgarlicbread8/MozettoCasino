@@ -35,8 +35,13 @@ contract DeployLocal is Script {
         CheckpointRegistryV1 checkpoints = new CheckpointRegistryV1(deployer);
         RandomnessCoordinatorV1 randomness = new RandomnessCoordinatorV1(deployer);
 
+        // Distinct Anvil attestors so 2-of-N quorum works with GAME/REPLAY/DEALER keys.
+        // #0 deployer (relayer), #1 game, #7 replay, #8 dealer.
         hub.setAttestor(deployer, true);
-        hub.setMinSignatures(1);
+        hub.setAttestor(0x70997970C51812dc3A010C7d01b50e0d17dc79C8, true);
+        hub.setAttestor(0x14dC79964da2C08b23698B3D3cc7Ca32193d9955, true);
+        hub.setAttestor(0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f, true);
+        hub.setMinSignatures(2);
 
         registry.registerTemplate(
             NLHE_HU_STANDARD_V1,

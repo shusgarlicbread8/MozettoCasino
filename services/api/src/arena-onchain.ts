@@ -37,8 +37,10 @@ import {
   isFeatureEnabled,
   leagueBuyInRaw,
   linkTicketsToBatch,
+  getAvailableBalance,
   markBatchFailed,
   markBatchSubmitted,
+  markOnchainSessionOpened,
   query,
   suggestTicketNonce,
 } from "@mozetto/database";
@@ -780,7 +782,7 @@ export async function handleOnchainFindMatch(
       tableId: existing.table_id,
       tableName: existing.table_name,
       created: false,
-      alreadySeated: false,
+      alreadySeated: Boolean(existing.already_seated),
       buyIn: league.buyIn,
       leagueId,
       arenaMode: "onchain" as const,
@@ -911,10 +913,26 @@ export async function handleOnchainFindMatch(
     } as any);
     await publicClient.waitForTransactionReceipt({ hash: openTxHash });
     await markBatchSubmitted(batchId, openTxHash);
-    await query(
-      `update onchain_sessions set open_tx_hash = $2 where session_id = $1`,
-      [sessionId, openTxHash],
-    );
+    await insertOnchainSessionPlayers(sessionId, [
+      {
+        profileId: pair.self.profile_id,
+        walletAddress: pair.self.wallet_address,
+        buyInRaw,
+        seat: 0,
+        controllerHash: pair.self.controller_hash,
+        agentProfileHash: pair.self.agent_profile_hash,
+      },
+      {
+        profileId: pair.opponent.profile_id,
+        walletAddress: pair.opponent.wallet_address,
+        buyInRaw,
+        seat: 1,
+        controllerHash: pair.opponent.controller_hash,
+        agentProfileHash: pair.opponent.agent_profile_hash,
+      },
+    ]);
+    // Receipt is proof of lock — mark opened so game-server join is not blocked on indexer lag.
+    await markOnchainSessionOpened(sessionId, openTxHash);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "open_session_failed";
     req.log.error({ err: e, sessionId }, "openSession failed");
@@ -922,24 +940,12 @@ export async function handleOnchainFindMatch(
     return reply.code(502).send({ error: "open_session_failed", message: msg });
   }
 
-  await insertOnchainSessionPlayers(sessionId, [
-    {
-      profileId: pair.self.profile_id,
-      walletAddress: pair.self.wallet_address,
-      buyInRaw,
-      seat: 0,
-      controllerHash: pair.self.controller_hash,
-      agentProfileHash: pair.self.agent_profile_hash,
-    },
-    {
-      profileId: pair.opponent.profile_id,
-      walletAddress: pair.opponent.wallet_address,
-      buyInRaw,
-      seat: 1,
-      controllerHash: pair.opponent.controller_hash,
-      agentProfileHash: pair.opponent.agent_profile_hash,
-    },
-  ]);
+  // Wait briefly for chain-indexer Instant mirrors so lockBuyIn can succeed.
+  const mirrorReady = await waitForBuyInMirrors(
+    [pair.self.profile_id, pair.opponent.profile_id],
+    league.buyIn,
+    20_000,
+  );
 
   return {
     tableId: table.id,
@@ -951,10 +957,20 @@ export async function handleOnchainFindMatch(
     arenaMode: "onchain" as const,
     chainId,
     sessionId,
-    sessionStatus: "pending" as const,
-    waitingForChain: true,
+    sessionStatus: "opened" as const,
+    waitingForChain: !mirrorReady,
     openTxHash,
   };
+}
+
+async function waitForBuyInMirrors(profileIds: string[], buyIn: number, timeoutMs: number) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const bals = await Promise.all(profileIds.map((id) => getAvailableBalance(id, "onchain")));
+    if (bals.every((b) => b + 1e-9 >= buyIn)) return true;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return false;
 }
 
 async function createAutomaticInstantTicket(opts: {

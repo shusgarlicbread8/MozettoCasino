@@ -204,6 +204,29 @@ export async function markBatchSubmitted(batchId: string, openTxHash: string) {
   );
 }
 
+/** Mark custody session opened immediately after a confirmed openSession receipt (don't wait solely on indexer). */
+export async function markOnchainSessionOpened(sessionId: string, openTxHash?: string | null) {
+  await query(
+    `update onchain_sessions
+     set status = 'opened',
+         open_tx_hash = coalesce($2, open_tx_hash),
+         opened_at = coalesce(opened_at, now())
+     where session_id = $1
+       and status in ('pending', 'opened')`,
+    [sessionId, openTxHash ?? null],
+  );
+  await query(
+    `update seat_tickets set status = 'opened'
+     where session_id = $1 and status in ('matched', 'queued', 'opened')`,
+    [sessionId],
+  );
+  await query(
+    `update matchmaking_batches set status = 'opened'
+     where session_id = $1 and status in ('submitted', 'pending', 'matched', 'opened')`,
+    [sessionId],
+  );
+}
+
 export async function markBatchFailed(batchId: string, error: string) {
   await query(
     `update matchmaking_batches set status = 'failed', error = $2 where id = $1`,
@@ -323,18 +346,84 @@ export async function getOnchainSessionForTable(tableId: string) {
 }
 
 export async function getActiveOnchainTableForProfile(profileId: string, chainId: number) {
-  const res = await query<{ table_id: string; table_name: string; session_status: string }>(
-    `select os.table_id, t.name as table_name, os.status as session_status
+  // Return a live custody match the player still owes a join (or is seated at).
+  // - Include players listed on an opened session who have not completed a table_session
+  //   yet (waiting opponent must discover tableId after openSession).
+  // - Exclude sessions where they already completed/left, so leave does not sticky-loop.
+  const res = await query<{
+    table_id: string;
+    table_name: string;
+    session_status: string;
+    already_seated: boolean;
+  }>(
+    `select os.table_id,
+            t.name as table_name,
+            os.status as session_status,
+            exists (
+              select 1 from table_sessions ts
+              where ts.table_id = os.table_id
+                and ts.owner_id = osp.profile_id
+                and ts.status = 'active'
+            ) as already_seated
      from onchain_session_players osp
      join onchain_sessions os on os.session_id = osp.session_id
      join tables t on t.id = os.table_id
      where osp.profile_id = $1 and os.chain_id = $2
-       and os.status in ('pending', 'opened', 'playing')
        and t.is_active = true
-     order by os.created_at desc limit 1`,
+       and (
+         -- Still seated at the table
+         exists (
+           select 1 from table_sessions ts
+           where ts.table_id = os.table_id
+             and ts.owner_id = osp.profile_id
+             and ts.status = 'active'
+         )
+         -- Or matched/opened and nobody has cashed out yet (safe to join)
+         or (
+           os.status in ('pending', 'opened')
+           and not exists (
+             select 1 from table_sessions ts
+             where ts.table_id = os.table_id and ts.status = 'completed'
+           )
+         )
+       )
+     order by os.created_at desc
+     limit 1`,
     [profileId, chainId],
   );
   return res.rows[0] ?? null;
+}
+
+/** Mark custody session as playing once seats are live (enables settlement-worker pickup). */
+export async function markOnchainSessionPlaying(sessionId: string) {
+  await query(
+    `update onchain_sessions
+     set status = 'playing'
+     where session_id = $1 and status = 'opened'`,
+    [sessionId],
+  );
+}
+
+/**
+ * When no active table_sessions remain, mark the custody session ready for settlement.
+ * Settlement-worker picks `playing` / `settling`.
+ */
+export async function markOnchainSessionReadyForSettlement(sessionId: string) {
+  await query(
+    `update onchain_sessions
+     set status = case
+       when status in ('opened', 'playing') then 'playing'
+       else status
+     end
+     where session_id = $1
+       and status in ('opened', 'playing')
+       and not exists (
+         select 1 from table_sessions ts
+         join onchain_sessions os2 on os2.table_id = ts.table_id
+         where os2.session_id = $1 and ts.status = 'active'
+       )`,
+    [sessionId],
+  );
 }
 
 export function assertLeague(leagueId: string) {

@@ -418,7 +418,9 @@ Seat tickets embed `CONTROLLER_HASH` + `agentProfileHash` so the locked funds ar
 - Collects game + replay + dealer attestations.
 - Submits `PokerSettlementHub.settle` when keys/config present.
 - Also hooks Glicko after successful settle.
-- **Known gap:** ABI field naming drift vs current Solidity has been observed historically — treat live mainnet settle path as needing continuous alignment tests.
+- Players ABI: `SettlementPlayer { user, startLocked, endBalance }` (aligned with `ArenaVaultV1`).
+- Session ids that are already bytes32 hex are passed through (not re-hashed).
+- Requires **distinct** attestor private keys (hub dedupes signers).
 
 ### Quorum model
 Default hub `minSignatures = 2` among configured attestors (game, replay, dealer). This is **attested off-chain execution**, not on-chain card dealing.
@@ -607,24 +609,59 @@ Innovation sits at the **boundary**: lock money on-chain with cryptographic comm
 
 1. Anvil on `:8545`, contracts redeployed, manifest synced to `.env.local`.  
 2. `INSTANT_SESSION_SIGNER_PRIVATE_KEY` set and **≠** relayer key.  
-3. Import **current** MockUSDC address in MetaMask (redeploys change it).  
-4. Get Test mUSDC → Enable Instant Play → Find Match (no seat-ticket popup).  
-5. Navbar wallet = ERC-20; At Tables = locked.  
-6. After settle, funds return to wallet; Instant remaining budget decreased.  
-7. Smoke: `pnpm smoke:custody:run`.  
-8. Foundry: `pnpm test:contracts`.
+3. Distinct `GAME_ATTESTOR_*` / `REPLAY_ATTESTOR_*` / `DEALER_ATTESTOR_*` keys registered on the hub (`setAttestor`) — hub dedupes by signer.  
+4. Import **current** MockUSDC address in MetaMask (redeploys change it).  
+5. Get Test mUSDC → Enable Instant Play → Find Match (no seat-ticket popup).  
+6. Navbar wallet = ERC-20; At Tables = locked.  
+7. After settle, funds return to wallet; Instant remaining budget decreased.  
+8. Smoke: `pnpm smoke:custody:run`.  
+9. Multi-wallet Instant match E2E: `pnpm e2e:instant` (Anvil #3/#4).  
+10. Foundry: `pnpm test:contracts`.
 
 ---
 
-## 20. Related docs
+## 20. Anvil Instant E2E results (person-test readiness)
+
+Script: `scripts/anvil-e2e-instant-match.mjs` (`pnpm e2e:instant`).
+
+### Proven green on local Anvil
+- SIWE for two wallets → faucet → InstantPermission → Find Match → `openSession` → both join → AI hand advances → leave → rematch queues cleanly (no sticky seat).  
+- Live table status via `GET /v1/tables/:id`.  
+- UI routes `/`, `/poker`, `/wallet`, `/wallet/test-musdc`, `/home` return 200.  
+- Settlement-worker can submit `hub.settle` with correct `SettlementPlayer{user,startLocked,endBalance}` ABI; locks return to `0`.
+
+### Bugs fixed during E2E hardening
+| Issue | Fix |
+|-------|-----|
+| Join stuck on indexer `SessionOpened` | Mark session `opened` on `openSession` receipt; wait briefly for Instant ledger mirrors; retry join |
+| Waiting player never discovered table | `getActiveOnchainTableForProfile` returns joinable opened sessions (not only active `table_sessions`) |
+| Sticky redirect after leave | Exclude sessions with completed `table_sessions`; leave marks settlement-ready |
+| Empty JSON leave body 400 | Lenient JSON parser + E2E always sends `{}` |
+| No table status HTTP API | `GET /v1/tables/:id` on game-server |
+| Poker waiting UI required second click | Client polls Find Match until seated |
+| Settlement stack query broken | Lateral join on `table_id` + `profile_id`; fall back to `buy_in_raw` |
+| `sessionIdToBytes32` re-hashed bytes32 | Pass-through when already `0x`+64 hex |
+| Hub settle ABI drift (`tableBalance`) | Align to `startLocked` / `endBalance` |
+| Quorum collapsed (same attestor key) | Distinct Anvil #1/#7/#8 keys + `setAttestor` |
+
+### Still operator-aware for Sepolia person testing
+- Redeploy Base Sepolia contracts + sync manifest/env.  
+- Keep Instant session signer ≠ relayer; register three distinct attestors.  
+- Run dealer `:4003`, replay-verifier `:4004`, indexer, settlement-worker with the API/game/web stack.  
+- Human HTTP actions need a WebSocket seat client (`HUMAN_PLAY`); without WS, seats are AI-controlled — that is expected for loadout play.
+
+---
+
+## 21. Related docs
 
 - [`contracts/README.md`](../contracts/README.md) — truth hierarchy + contract index  
 - [`docs/MAINNET_READINESS.md`](./MAINNET_READINESS.md) — production gates  
 - Migrations: `packages/database/migrations/001`…`014`  
 - Instant / arena API: `services/api/src/arena-onchain.ts`  
 - Engine: `packages/game-rules/src/holdem.ts`  
-- Runtime: `services/game-server/src/table-runtime.ts`
+- Runtime: `services/game-server/src/table-runtime.ts`  
+- E2E: `scripts/anvil-e2e-instant-match.mjs`
 
 ---
 
-*Last updated to reflect InstantPermission, settle-to-wallet Instant Mode, live Mozetto balances, net-worth snapshots, and Anvil-first DEX-style custody as implemented in-repo.*
+*Last updated after Anvil multi-wallet Instant E2E: join/mirror races, sticky leave, table status API, settlement ABI/attestor quorum, and settle-to-wallet unlock verified.*

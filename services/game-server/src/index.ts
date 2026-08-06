@@ -9,6 +9,20 @@ import { resolvePlayer, resolvePlayerFromToken } from "./auth.js";
 import { acquireTableLease, leaseEnabled, renewTableLease } from "./lease.js";
 
 const app = Fastify({ logger: true });
+// Allow empty JSON bodies (leave/action clients often send Content-Type without payload).
+app.removeContentTypeParser("application/json");
+app.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
+  try {
+    const raw = typeof body === "string" ? body : Buffer.isBuffer(body) ? body.toString("utf8") : "";
+    if (!raw.trim()) {
+      done(null, {});
+      return;
+    }
+    done(null, JSON.parse(raw));
+  } catch (err) {
+    done(err as Error, undefined);
+  }
+});
 await app.register(cookie);
 await app.register(cors, {
   origin: corsOriginCheck,
@@ -51,6 +65,41 @@ app.get("/health", async () => ({
     };
   }),
 }));
+
+app.get("/v1/tables/:id", async (req, reply) => {
+  const tableId = (req.params as { id: string }).id;
+  try {
+    const rt = await getRuntime(tableId);
+    const seated = rt.state.seats
+      .filter((s) => s.playerId && !s.sitOut)
+      .map((s) => ({
+        seatIndex: s.seatIndex,
+        playerId: s.playerId,
+        stack: s.stack,
+        folded: s.folded,
+        allIn: s.allIn,
+      }));
+    return {
+      tableId,
+      street: rt.state.street,
+      pot: rt.state.pot,
+      handId: rt.state.handId,
+      handNumber: rt.state.handNumber,
+      actingIndex: rt.state.actingIndex,
+      board: rt.state.board,
+      arenaMode: rt.arenaMode,
+      onchainSessionId: rt.onchainSessionId,
+      seated,
+      legalHint:
+        rt.state.actingIndex != null
+          ? { actingIndex: rt.state.actingIndex }
+          : null,
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "table_unavailable";
+    return reply.code(404).send({ error: "table_not_found", message });
+  }
+});
 
 app.post("/v1/tables/:id/join", async (req, reply) => {
   const player = await resolvePlayer(req);

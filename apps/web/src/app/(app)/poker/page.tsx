@@ -186,12 +186,59 @@ export default function PokerPage() {
 
       if (result.status === "waiting") {
         setStatus(result.message ?? "Waiting for an opponent…");
+        // Poll until paired — Instant Mode should not require a second click.
+        for (let i = 0; i < 45; i++) {
+          await new Promise((r) => setTimeout(r, 2000));
+          const again = await api<{
+            tableId?: string;
+            joined?: boolean;
+            waitingForChain?: boolean;
+            status?: string;
+            message?: string;
+          }>("/v1/arena/find-match", {
+            method: "POST",
+            body: JSON.stringify({ leagueId: league.id, profileKey: profile }),
+          });
+          if (again.status === "waiting") {
+            setStatus(again.message ?? "Waiting for an opponent…");
+            continue;
+          }
+          if (again.tableId && (again.joined || !again.waitingForChain)) {
+            setStatus("Match found — seating you…");
+            await refresh();
+            window.location.assign(`/table/${again.tableId}`);
+            return;
+          }
+          if (again.tableId && again.waitingForChain) {
+            setStatus(again.message ?? "Session opening on-chain — seating shortly…");
+            continue;
+          }
+        }
         setBusy(false);
         return;
       }
 
-      if (result.waitingForChain && result.tableId) {
-        setStatus("Session opening on-chain — redirecting when ready…");
+      if (result.waitingForChain && result.tableId && !result.joined) {
+        setStatus(result.message ?? "Session opening on-chain — seating shortly…");
+        for (let i = 0; i < 30; i++) {
+          await new Promise((r) => setTimeout(r, 1000));
+          const again = await api<{
+            tableId?: string;
+            joined?: boolean;
+            waitingForChain?: boolean;
+            message?: string;
+          }>("/v1/arena/find-match", {
+            method: "POST",
+            body: JSON.stringify({ leagueId: league.id, profileKey: profile }),
+          });
+          if (again.tableId && (again.joined || !again.waitingForChain)) {
+            await refresh();
+            window.location.assign(`/table/${again.tableId}`);
+            return;
+          }
+          setStatus(again.message ?? "Session opening on-chain — seating shortly…");
+        }
+        // Fall through to table — JoinTableSheet / runtime will seat when ready.
         await refresh();
         window.location.assign(`/table/${result.tableId}`);
         return;
