@@ -94,7 +94,13 @@ export function getWagmiConfig() {
       shimDisconnect: true,
       unstable_shimAsyncInject: 2_000,
     }),
-    // Requires peer `@coinbase/wallet-sdk`. eoaOnly prefers the browser extension over Smart Wallet.
+    // Browser extension path (when Coinbase injects into window.ethereum).
+    injected({
+      target: "coinbaseWallet",
+      shimDisconnect: true,
+      unstable_shimAsyncInject: 2_000,
+    }),
+    // SDK path — required peer `@coinbase/wallet-sdk`. Prefer EOA extension over Smart Wallet.
     coinbaseWallet({
       appName: "Mozetto Arena",
       preference: { options: "eoaOnly" },

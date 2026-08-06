@@ -15,8 +15,9 @@ import { anvil, base, baseSepolia } from "wagmi/chains";
 import { SoftSwap } from "@/components/PageFade";
 import { api, ApiError } from "@/lib/api";
 import { createClient } from "@/lib/supabase/client";
-import { checkingWallet, useWalletBrand } from "@/lib/wallet-brand";
+import { checkingWallet, rememberConnector, useWalletBrand } from "@/lib/wallet-brand";
 import { preferredChainId } from "@/lib/wagmi";
+import { useRouter } from "next/navigation";
 
 const localAnvil =
   (process.env.NEXT_PUBLIC_CHAIN_ENV || "").toLowerCase() === "anvil" ||
@@ -31,6 +32,7 @@ export default function OnchainPortalPage() {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
   const wallet = useWalletBrand();
+  const router = useRouter();
   const { connectAsync, connectors, isPending: connecting, reset: resetConnect } = useConnect();
   const { disconnectAsync, isPending: disconnecting } = useDisconnect();
   const { switchChainAsync, isPending: switching } = useSwitchChain();
@@ -111,6 +113,7 @@ export default function OnchainPortalPage() {
           connector,
           chainId: preferredChainId,
         });
+        rememberConnector(connector);
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Connection failed";
         // Already linked in this tab — treat as success and show the sign-in step.
@@ -185,7 +188,8 @@ export default function OnchainPortalPage() {
       const signedInName = res.user?.displayName || walletAccount.displayName || name;
       const funded = res.welcomeFaucet ? ` Funded with $${res.welcomeFaucet.toLocaleString()} test chips.` : "";
       setStatus(`${res.isNewAccount ? "Account created" : "Welcome back"}, ${signedInName}.${funded} Entering arena…`);
-      window.location.href = "/home";
+      // Soft navigate — hard reload drops Coinbase SDK connection state.
+      router.push("/home");
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Sign-in failed";
       if (/rejected|denied|user rejected/i.test(msg)) {
@@ -196,7 +200,7 @@ export default function OnchainPortalPage() {
     } finally {
       setBusy(false);
     }
-  }, [address, chainId, displayName, signMessageAsync, switchChainAsync, wallet.short, walletAccount]);
+  }, [address, chainId, displayName, router, signMessageAsync, switchChainAsync, wallet.short, walletAccount]);
 
   const pending = connecting || connectBusy || disconnecting;
 
@@ -435,19 +439,33 @@ export default function OnchainPortalPage() {
 
 /** Prefer MetaMask / Coinbase labels; drop duplicate “Injected” siblings. */
 function dedupeConnectors(connectors: readonly Connector[]) {
-  const seen = new Set<string>();
+  const seenBrand = new Set<string>();
   const out: Connector[] = [];
-  for (const c of connectors) {
-    const key = c.id || c.name;
-    if (seen.has(key)) continue;
-    seen.add(key);
+  const ranked = [...connectors].sort((a, b) => {
+    const rank = (c: Connector) => {
+      const n = `${c.id} ${c.name}`;
+      if (/metamask/i.test(n)) return 0;
+      // Prefer injected Coinbase extension over SDK duplicate.
+      if (/coinbase/i.test(n) && c.type === "injected") return 1;
+      if (/coinbase/i.test(n)) return 2;
+      if (/walletconnect/i.test(n)) return 3;
+      return 4;
+    };
+    return rank(a) - rank(b);
+  });
+  for (const c of ranked) {
+    const brand = /metamask/i.test(`${c.id}${c.name}`)
+      ? "metamask"
+      : /coinbase/i.test(`${c.id}${c.name}`)
+        ? "coinbase"
+        : /walletconnect/i.test(`${c.id}${c.name}`)
+          ? "walletconnect"
+          : c.id || c.name;
+    if (seenBrand.has(brand)) continue;
+    seenBrand.add(brand);
     out.push(c);
   }
-  return out.sort((a, b) => {
-    const rank = (n: string) =>
-      /metamask/i.test(n) ? 0 : /coinbase/i.test(n) ? 1 : /walletconnect/i.test(n) ? 2 : 3;
-    return rank(a.name) - rank(b.name);
-  });
+  return out;
 }
 
 function friendlyConnectError(msg: string) {

@@ -1,6 +1,7 @@
 import { Nav } from "./Nav";
 import { Topbar } from "./Topbar";
 import { PageFade } from "./PageFade";
+import { WalletReconnect } from "./WalletReconnect";
 import { LeaveGuardProvider } from "@/lib/leave-guard";
 import { SessionProvider } from "@/lib/session";
 
@@ -12,7 +13,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Nav />
           <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, width: "100%" }}>
             <Topbar />
-            <PageFade>{children}</PageFade>
+            <PageFade>
+              <WalletReconnect />
+              {children}
+            </PageFade>
           </div>
         </div>
       </LeaveGuardProvider>

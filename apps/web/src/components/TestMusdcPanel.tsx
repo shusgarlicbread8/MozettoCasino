@@ -15,13 +15,18 @@ import { SoftSwap } from "@/components/PageFade";
 import { api, ApiError } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { confirmInWallet, useWalletBrand } from "@/lib/wallet-brand";
+import {
+  ensureAnvilNetwork,
+  getActiveEthereumProvider,
+  watchErc20Token,
+} from "@/lib/wallet-provider";
 import { erc20Abi, getChainAsset, isMockUsdcChain, preferredChainId } from "@/lib/wagmi";
 
 const DEFAULT_FAUCET = "10000";
 
 /** Mint wallet-visible mUSDC via the MockUSDC.faucet() contract call. */
 export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, connector } = useAccount();
   const chainId = useChainId();
   const wallet = useWalletBrand();
   const { me } = useSession();
@@ -56,31 +61,37 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
     );
   }
 
+  async function prepareProvider() {
+    const provider = await getActiveEthereumProvider(
+      connector ? () => connector.getProvider() : undefined,
+    );
+    if (!provider) throw new Error(`Open ${wallet.name} and reconnect to this site.`);
+    await ensureAnvilNetwork(provider);
+    return provider;
+  }
+
   async function watchAsset() {
-    if (!asset?.usdc || typeof window === "undefined") return;
-    const eth = (window as unknown as { ethereum?: { request: (args: unknown) => Promise<unknown> } })
-      .ethereum;
-    if (!eth?.request) return;
+    if (!asset?.usdc) return;
     try {
-      await eth.request({
-        method: "wallet_watchAsset",
-        params: {
-          type: "ERC20",
-          options: {
-            address: asset.usdc,
-            symbol: asset.symbol || "mUSDC",
-            decimals: asset.decimals || 6,
-          },
-        },
+      const provider = await prepareProvider();
+      const ok = await watchErc20Token(provider, {
+        address: asset.usdc,
+        symbol: asset.symbol || "mUSDC",
+        decimals: asset.decimals || 6,
       });
-    } catch {
-      /* user rejected — show address instead */
+      setMsg(
+        ok
+          ? `${asset.symbol} import requested in ${wallet.short}. If it does not appear, add token ${asset.usdc} manually on Anvil.`
+          : `Could not auto-import. In ${wallet.short}, add custom token ${asset.usdc} on network Anvil (31337).`,
+      );
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : `Import failed in ${wallet.short}.`);
     }
   }
 
   async function runFaucet() {
     if (!address || !asset?.usdc || !publicClient) {
-      setMsg(`Connect ${wallet.name} first.`);
+      setMsg(`Connect ${wallet.name} first (use Reconnect above if you are already signed in).`);
       return;
     }
     if (!walletMatch) {
@@ -92,6 +103,11 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
     setBusy(true);
     setMsg(null);
     try {
+      try {
+        await prepareProvider();
+      } catch {
+        /* wagmi switch below is backup */
+      }
       if (chainId !== anvil.id && preferredChainId === anvil.id) {
         await switchChainAsync({ chainId: anvil.id });
       }
@@ -113,7 +129,7 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
       await refetch();
       await watchAsset();
       setMsg(
-        `Minted ${amount} mUSDC to your wallet. Token: ${asset.usdc}. Now deposit into ArenaVault below.`,
+        `Minted ${amount} mUSDC to ${wallet.short}. Token ${asset.usdc}. Now deposit into ArenaVault below.`,
       );
       onUpdated?.();
     } catch (e) {
@@ -141,10 +157,21 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
       <p style={{ margin: "8px 0 0", fontSize: 13, color: "#9A9A9A", lineHeight: 1.5 }}>
         Mints real ERC-20 tokens into {wallet.name} (not database chips). Then approve + deposit to
         fund your playable vault balance.
+        {!isConnected && (
+          <>
+            {" "}
+            <span style={{ color: "#FFB020" }}>Wallet disconnected — reconnect to load balances.</span>
+          </>
+        )}
       </p>
       <div style={{ marginTop: 10, font: "500 13px var(--font-geist-mono), monospace", color: "#EDEDED" }}>
-        Wallet mUSDC: {bal != null ? formatUnits(bal as bigint, 6) : "—"}
+        Wallet mUSDC: {bal != null ? formatUnits(bal as bigint, 6) : isConnected ? "…" : "—"}
       </div>
+      {asset?.usdc && (
+        <div style={{ marginTop: 6, fontSize: 11, color: "#6A6A6A", wordBreak: "break-all" }}>
+          Token contract: {asset.usdc}
+        </div>
+      )}
       <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
         <input
           value={amount}
@@ -171,6 +198,7 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
             color: "#050505",
             fontWeight: 600,
             cursor: busy ? "wait" : "pointer",
+            opacity: !isConnected ? 0.5 : 1,
           }}
         >
           {busy ? "Minting…" : "Get Test mUSDC"}
@@ -178,6 +206,7 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
         <button
           type="button"
           onClick={() => void watchAsset()}
+          disabled={!isConnected}
           className="mz-soft-btn"
           style={{
             padding: "10px 14px",
@@ -186,6 +215,7 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
             background: "transparent",
             color: "#9A9A9A",
             cursor: "pointer",
+            opacity: !isConnected ? 0.5 : 1,
           }}
         >
           Import in {wallet.short}
@@ -198,7 +228,9 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
             style={{
               margin: "10px 0 0",
               fontSize: 12.5,
-              color: msg.toLowerCase().includes("minted") ? "#00E676" : "#FF8A8A",
+              color: msg.toLowerCase().includes("minted") || msg.toLowerCase().includes("import")
+                ? "#00E676"
+                : "#FF8A8A",
               lineHeight: 1.45,
             }}
           >
