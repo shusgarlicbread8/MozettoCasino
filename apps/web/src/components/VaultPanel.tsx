@@ -8,6 +8,7 @@ import {
   useReadContract,
   useWriteContract,
   useWaitForTransactionReceipt,
+  usePublicClient,
 } from "wagmi";
 import { api } from "@/lib/api";
 import {
@@ -17,12 +18,14 @@ import {
   usdcAddresses,
 } from "@/lib/wagmi";
 
-/** On-chain vault deposit / withdraw UI (Base Sepolia or Base). */
+/** On-chain vault deposit / withdraw — mirror credits come from chain-indexer only. */
 export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
   const { address } = useAccount();
   const chainId = useChainId();
+  const publicClient = usePublicClient();
   const [amount, setAmount] = useState("100");
   const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const vault = arenaVaultAddress;
   const usdc = usdcAddresses[chainId as keyof typeof usdcAddresses];
   const { writeContractAsync, data: hash, isPending } = useWriteContract();
@@ -36,7 +39,7 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
     query: { enabled: Boolean(address && usdc) },
   });
 
-  const { data: vaultAvail } = useReadContract({
+  const { data: vaultAvail, refetch: refetchVault } = useReadContract({
     address: vault || undefined,
     abi: arenaVaultAbi,
     functionName: "available",
@@ -47,9 +50,9 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
   if (!vault) {
     return (
       <div style={{ marginTop: 16, fontSize: 13, color: "#8A8A8A", lineHeight: 1.5 }}>
-        Vault contract not configured. Set <code>NEXT_PUBLIC_ARENA_VAULT_ADDRESS</code> after{" "}
-        <code>forge script</code> deploy, or use the Sepolia test faucet below to fund the ledger
-        mirror while developing.
+        Vault contract not configured. Set <code>NEXT_PUBLIC_ARENA_VAULT_ADDRESS</code> from the
+        chain manifest after deploy. Use the Sepolia test faucet for ledger-only chips while the
+        vault is unset.
       </div>
     );
   }
@@ -58,50 +61,79 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
     return <div style={{ marginTop: 16, color: "#FF8A8A", fontSize: 13 }}>Switch to Base or Base Sepolia.</div>;
   }
 
+  async function pollMirror(prevAvailable: number) {
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      try {
+        const w = (await api("/v1/wallet")) as { available?: number };
+        if (typeof w.available === "number" && w.available > prevAvailable) {
+          return true;
+        }
+      } catch {
+        /* indexer may lag */
+      }
+      void refetchVault();
+    }
+    return false;
+  }
+
   async function deposit() {
-    if (!address || !vault) return;
+    if (!address || !vault || !publicClient) return;
     setMsg(null);
+    setBusy(true);
     try {
+      const before = ((await api("/v1/wallet").catch(() => null)) as { available?: number } | null)
+        ?.available ?? 0;
       const raw = parseUnits(amount || "0", 6);
-      await writeContractAsync({
+      const approveHash = await writeContractAsync({
         address: usdc,
         abi: erc20Abi,
         functionName: "approve",
         args: [vault as `0x${string}`, raw],
       });
+      await publicClient.waitForTransactionReceipt({ hash: approveHash });
       const tx = await writeContractAsync({
         address: vault as `0x${string}`,
         abi: arenaVaultAbi,
         functionName: "deposit",
         args: [raw],
       });
-      // Mirror into platform ledger (indexer will replace this for production)
-      await api("/v1/wallet/onchain/credit-deposit", {
-        method: "POST",
-        body: JSON.stringify({ amount: Number(amount), txHash: tx }),
-      });
-      setMsg("Deposit submitted and mirrored.");
+      setMsg("Deposit confirmed on-chain. Waiting for indexer…");
+      await publicClient.waitForTransactionReceipt({ hash: tx });
+      const mirrored = await pollMirror(before);
+      setMsg(
+        mirrored
+          ? "Deposit indexed — mirror balance updated."
+          : "Deposit on-chain. Indexer mirror still pending — refresh shortly.",
+      );
       onUpdated?.();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Deposit failed");
+    } finally {
+      setBusy(false);
     }
   }
 
   async function withdraw() {
-    if (!address || !vault) return;
+    if (!address || !vault || !publicClient) return;
     setMsg(null);
+    setBusy(true);
     try {
       const raw = parseUnits(amount || "0", 6);
-      await writeContractAsync({
+      const tx = await writeContractAsync({
         address: vault as `0x${string}`,
         abi: arenaVaultAbi,
         functionName: "withdraw",
         args: [raw, address],
       });
-      setMsg("Withdraw submitted on-chain.");
+      await publicClient.waitForTransactionReceipt({ hash: tx });
+      setMsg("Withdraw confirmed on-chain.");
+      void refetchVault();
       onUpdated?.();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Withdraw failed");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -122,6 +154,10 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
         Wallet USDC: {walletBal != null ? formatUnits(walletBal as bigint, 6) : "—"} · Vault available:{" "}
         {vaultAvail != null ? formatUnits(vaultAvail as bigint, 6) : "—"}
       </div>
+      <p style={{ margin: "8px 0 0", fontSize: 11, color: "#636363" }}>
+        Available balance in the UI updates after the chain indexer confirms the Deposited event —
+        the client never credits itself.
+      </p>
       <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
         <input
           value={amount}
@@ -135,17 +171,12 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
             color: "#EDEDED",
           }}
         />
-        <button
-          type="button"
-          disabled={isPending || confirming}
-          onClick={() => void deposit()}
-          style={btn}
-        >
+        <button type="button" disabled={isPending || confirming || busy} onClick={() => void deposit()} style={btn}>
           Deposit
         </button>
         <button
           type="button"
-          disabled={isPending || confirming}
+          disabled={isPending || confirming || busy}
           onClick={() => void withdraw()}
           style={{ ...btn, background: "transparent", color: "#BABABA", border: "1px solid rgba(255,255,255,.14)" }}
         >

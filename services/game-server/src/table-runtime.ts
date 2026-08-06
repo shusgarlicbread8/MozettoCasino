@@ -19,10 +19,29 @@ import {
   type EngineEvent,
   type EquityRow,
   type HoldemState,
+  buildCanonicalEvent,
+  hashEvent,
+  GENESIS_EVENT_HASH,
 } from "@mozetto/game-rules";
+import { fetchHandSeed, fallbackHandSeed } from "@mozetto/dealer/client";
 import type { Card } from "@mozetto/shared-types";
-import { query, lockBuyIn, releaseSession, rebalanceEscrowToStacks, settleRatedMatch } from "@mozetto/database";
+import {
+  query,
+  lockBuyIn,
+  releaseSession,
+  rebalanceEscrowToStacks,
+  settleRatedMatch,
+  getOnchainSessionForTable,
+} from "@mozetto/database";
 import type { PokerAction, TableEvent } from "@mozetto/shared-types";
+import {
+  hashObservation,
+  resolveSeatController,
+  timeoutFallbackController,
+  type SeatController,
+} from "./controllers.js";
+
+type Hex = `0x${string}`;
 
 /** Action clock for human play (seconds). */
 export const TURN_SECONDS = 15;
@@ -30,6 +49,7 @@ const TURN_MS = TURN_SECONDS * 1000;
 
 /** Temporary: humans play; bots/agents do not auto-act. */
 const HUMAN_PLAY = process.env.HUMAN_PLAY !== "0";
+const DEALER_URL = process.env.DEALER_URL ?? "http://localhost:4003";
 
 type PendingHuman = {
   seatIndex: number;
@@ -67,6 +87,11 @@ export class TableRuntime {
   runoutRevealPublished = false;
   /** Cached private hero odds: `${seat}:${boardLen}:${handId}` → pct */
   privateEquityCache = new Map<string, { hand: string; equity: number }>();
+  /** On-chain session id for canonical events + dealer seeds (when arenaMode=onchain). */
+  onchainSessionId: string | null = null;
+  canonicalPrevHash: Hex = GENESIS_EVENT_HASH;
+  canonicalSequence = 0;
+  seatControllers = new Map<number, SeatController>();
 
   constructor(
     tableId: string,
@@ -100,6 +125,9 @@ export class TableRuntime {
       maxSeats: Number(row.max_seats) || 6,
     });
     rt.arenaMode = row.arena_mode === "onchain" ? "onchain" : "demo";
+    if (rt.arenaMode === "onchain") {
+      await rt.loadOnchainSession();
+    }
     // Resume event chain after restarts — avoids duplicate (table_id, sequence) inserts.
     const seq = await query(`select coalesce(max(sequence), 0)::int as m from hand_events where table_id = $1`, [tableId]);
     rt.sequence = Number(seq.rows[0]?.m ?? 0);
@@ -138,6 +166,88 @@ export class TableRuntime {
     // treat "now" as the start so only hands going forward count toward rated matches.
     for (const s of sessions.rows) rt.sessionStartHand.set(s.id, rt.state.handNumber);
     return rt;
+  }
+
+  async loadOnchainSession() {
+    try {
+      const row = await query<{ session_id: string }>(
+        `select session_id from onchain_sessions
+         where table_id = $1 and status in ('opened', 'playing', 'settling')
+         order by created_at desc limit 1`,
+        [this.tableId],
+      );
+      this.onchainSessionId = row.rows[0]?.session_id ?? null;
+      if (this.onchainSessionId) {
+        const last = await query<{ sequence: string; event_hash: string }>(
+          `select sequence::text, event_hash from canonical_game_events
+           where session_id = $1 order by sequence desc limit 1`,
+          [this.onchainSessionId],
+        );
+        if (last.rows[0]) {
+          this.canonicalSequence = Number(last.rows[0].sequence);
+          const h = last.rows[0].event_hash;
+          this.canonicalPrevHash = (h.startsWith("0x") ? h : `0x${h}`) as Hex;
+        }
+      }
+    } catch (err) {
+      console.warn("loadOnchainSession failed", this.tableId, err);
+    }
+  }
+
+  isBotSeat(seatIndex: number): boolean {
+    if (!HUMAN_PLAY) return true;
+    const seat = this.state.seats.find((s) => s.seatIndex === seatIndex);
+    if (!seat?.playerId) return false;
+    return !this.clients.some((c) => c.userId === seat.playerId && c.role === "player");
+  }
+
+  seatControllerFor(seatIndex: number): SeatController {
+    const cached = this.seatControllers.get(seatIndex);
+    if (cached) return cached;
+    const profile = this.agentProfiles.get(seatIndex) ?? "machine";
+    const ctrl = resolveSeatController(profile);
+    this.seatControllers.set(seatIndex, ctrl);
+    return ctrl;
+  }
+
+  async persistCanonicalEvent(
+    eventType: string,
+    publicPayload: Record<string, unknown>,
+    privatePayloadCommitment?: string | null,
+  ) {
+    if (this.arenaMode !== "onchain" || !this.onchainSessionId) return;
+    this.canonicalSequence += 1;
+    const canonical = buildCanonicalEvent({
+      sessionId: this.onchainSessionId,
+      handId: this.state.handId,
+      sequence: this.canonicalSequence,
+      eventType,
+      publicPayload,
+      privatePayloadCommitment,
+      previousEventHash: this.canonicalPrevHash,
+    });
+    const eventHash = hashEvent(canonical);
+    this.canonicalPrevHash = eventHash;
+    try {
+      await query(
+        `insert into canonical_game_events
+         (session_id, hand_id, sequence, event_hash, previous_event_hash, event_type, public_payload, private_payload_commitment, timestamp_ms)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          this.onchainSessionId,
+          this.state.handId,
+          this.canonicalSequence,
+          eventHash,
+          canonical.previousEventHash,
+          eventType,
+          JSON.stringify(publicPayload),
+          privatePayloadCommitment ?? null,
+          canonical.timestampMs,
+        ],
+      );
+    } catch (err) {
+      console.warn("canonical_game_events insert failed", this.tableId, err);
+    }
   }
 
   subscribe(client: Client) {
@@ -250,6 +360,9 @@ export class TableRuntime {
         eventHash,
       ],
     );
+    if (this.arenaMode === "onchain" && visibility !== "owner_private") {
+      await this.persistCanonicalEvent(eventType, payload);
+    }
     this.broadcast(full);
     return full;
   }
@@ -272,6 +385,18 @@ export class TableRuntime {
     this.arenaMode = limits.rows[0]?.arena_mode === "onchain" ? "onchain" : "demo";
     if (opts.buyIn < minBuy || opts.buyIn > maxBuy) {
       throw new Error(`Buy-in must be $${minBuy}–$${maxBuy}`);
+    }
+
+    if (this.arenaMode === "onchain") {
+      const onchain = await getOnchainSessionForTable(this.tableId);
+      if (!onchain || onchain.status !== "opened") {
+        throw new Error(
+          onchain?.status === "pending"
+            ? "Session opening on-chain — wait for confirmation before joining"
+            : "On-chain session not opened for this table",
+        );
+      }
+      this.onchainSessionId = onchain.session_id;
     }
 
     const already = this.state.seats.find((s) => s.playerId === opts.userId && !s.sitOut);
@@ -477,6 +602,19 @@ export class TableRuntime {
    * of victory is ignored per spec: only who ended up ahead matters.
    */
   async maybeSettleHeadsUpMatch(userId: string, agentId: string | undefined, sessionId: string, finalStack: number) {
+    // On-chain rated matches are settled after hub confirmation (settlement-worker).
+    if (this.arenaMode === "onchain") {
+      if (this.onchainSessionId) {
+        const oc = await query<{ status: string }>(
+          `select status from onchain_sessions where session_id = $1 limit 1`,
+          [this.onchainSessionId],
+        );
+        if (oc.rows[0]?.status !== "settled") return;
+      } else {
+        return;
+      }
+    }
+
     const others = [...this.sessions.entries()].filter(([uid]) => uid !== userId);
     if (others.length !== 1) return; // only rate clean 1-on-1 stretches for now
     const [opponentId, opponentSessionId] = others[0];
@@ -693,7 +831,43 @@ export class TableRuntime {
     ]);
     this.state = { ...this.state, handNumber: Number(hn.rows[0]?.m ?? 0) };
 
-    const seed = randomBytes(32).toString("hex");
+    const nextHandNumber = this.state.handNumber + 1;
+    let seed: string;
+    if (this.arenaMode === "onchain" && this.onchainSessionId) {
+      const vrfRow = await query<{ vrf_word: string }>(
+        `select vrf_word::text from randomness_fulfillments where session_id = $1 order by fulfilled_at desc limit 1`,
+        [this.onchainSessionId],
+      ).catch(() => ({ rows: [] as { vrf_word: string }[] }));
+      const vrfWord = vrfRow.rows[0]?.vrf_word ?? "0";
+      const secretIndex = nextHandNumber % 256;
+      const fromDealer = await fetchHandSeed(
+        {
+          sessionId: this.onchainSessionId,
+          handNumber: nextHandNumber,
+          vrfWord,
+          secretIndex,
+        },
+        DEALER_URL,
+      );
+      if (fromDealer?.handSeed) {
+        seed = fromDealer.handSeed;
+      } else {
+        console.warn(
+          "[table-runtime] dealer hand-seed unavailable — using deterministic fallback",
+          this.tableId,
+          this.onchainSessionId,
+        );
+        seed = fallbackHandSeed({
+          sessionId: this.onchainSessionId,
+          handNumber: nextHandNumber,
+          vrfWord,
+          secretIndex,
+        });
+      }
+    } else {
+      seed = randomBytes(32).toString("hex");
+    }
+
     const handId = `hand_${this.tableId}_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
     const { state, events } = startHand(this.state, seed, handId);
 
@@ -805,22 +979,73 @@ export class TableRuntime {
     });
 
     let decided: { action: PokerAction; amount?: number; reasonCode: string };
-    if (HUMAN_PLAY) {
+    const useController = !HUMAN_PLAY || this.isBotSeat(seatIndex);
+
+    if (useController) {
+      const profile = this.agentProfiles.get(seatIndex) ?? "machine";
+      const controller = this.seatControllerFor(seatIndex);
+      const botDecision = await controller.decide({
+        state: this.state,
+        seatIndex,
+        profileKey: profile,
+        computeRemainingMs: TURN_MS,
+        sessionId: this.onchainSessionId ?? this.sessions.get(seat.playerId ?? "") ?? undefined,
+        handId: this.state.handId,
+      });
+      decided = {
+        action: botDecision.action,
+        amount: botDecision.amount,
+        reasonCode: botDecision.reasonCode,
+      };
+      try {
+        const obsHash = hashObservation({
+          state: this.state,
+          seatIndex,
+          profileKey: profile,
+          computeRemainingMs: TURN_MS,
+          sessionId: this.onchainSessionId ?? undefined,
+          handId: this.state.handId,
+        });
+        await query(
+          `insert into agent_invocations
+           (session_id, hand_id, sequence, model_id, observation_hash, response_hash, legal_action, fallback_used, latency_ms)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [
+            this.onchainSessionId ?? this.sessions.get(seat.playerId ?? "") ?? "demo",
+            this.state.handId,
+            this.sequence + 1,
+            botDecision.modelId ?? profile,
+            obsHash,
+            createHash("sha256").update(JSON.stringify(decided)).digest("hex"),
+            botDecision.action,
+            botDecision.fallbackUsed ?? false,
+            botDecision.latencyMs ?? null,
+          ],
+        );
+      } catch (err) {
+        console.warn("agent_invocations insert failed", this.tableId, err);
+      }
+      await sleep(Math.min(400, TURN_MS / 4));
+    } else if (HUMAN_PLAY) {
       decided = await new Promise((resolve) => {
         // Replace any stranded waiter from a previous turn.
         if (this.pendingHuman) this.clearPendingHuman("replaced");
-        const timer = setTimeout(() => {
+        const timer = setTimeout(async () => {
           if (this.pendingHuman?.seatIndex !== seatIndex) return;
           const pending = this.pendingHuman;
           this.pendingHuman = null;
-          // Timeout = fold (never auto-check).
-          const fold = legal.find((l) => l.action === "fold");
-          const check = legal.find((l) => l.action === "check");
-          const fallback = fold ?? check ?? legal[0];
+          const timeoutDecision = await timeoutFallbackController.decide({
+            state: this.state,
+            seatIndex,
+            profileKey: this.agentProfiles.get(seatIndex) ?? "machine",
+            computeRemainingMs: 0,
+            sessionId: this.onchainSessionId ?? undefined,
+            handId: this.state.handId,
+          });
           pending.resolve({
-            action: fallback.action,
-            amount: fallback.minAmount,
-            reasonCode: "turn_timeout",
+            action: timeoutDecision.action,
+            amount: timeoutDecision.amount,
+            reasonCode: timeoutDecision.reasonCode,
           });
         }, TURN_MS);
         this.pendingHuman = { seatIndex, legal, resolve, timer };

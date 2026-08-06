@@ -6,6 +6,7 @@ import { WsClientMessageSchema } from "@mozetto/shared-types";
 import { corsOriginCheck } from "@mozetto/server-env";
 import { TableRuntime } from "./table-runtime.js";
 import { resolvePlayer, resolvePlayerFromToken } from "./auth.js";
+import { acquireTableLease, leaseEnabled, renewTableLease } from "./lease.js";
 
 const app = Fastify({ logger: true });
 await app.register(cookie);
@@ -20,6 +21,10 @@ const tables = new Map<string, TableRuntime>();
 async function getRuntime(tableId: string) {
   let rt = tables.get(tableId);
   if (!rt) {
+    const leased = await acquireTableLease(tableId);
+    if (!leased) {
+      throw new Error("table_lease_held_by_another_replica");
+    }
     rt = await TableRuntime.load(tableId);
     tables.set(tableId, rt);
     // restore baselines from DB stacks
@@ -27,12 +32,15 @@ async function getRuntime(tableId: string) {
       if (s.playerId) rt.stackBaseline.set(s.playerId, s.stack);
     }
     rt.ensureLoop();
+  } else {
+    await renewTableLease(tableId);
   }
   return rt;
 }
 
 app.get("/health", async () => ({
   ok: true,
+  tableLease: leaseEnabled() ? "redis" : "disabled",
   tables: [...tables.keys()].map((id) => {
     const rt = tables.get(id)!;
     return {

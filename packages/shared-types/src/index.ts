@@ -101,6 +101,8 @@ export const LEAGUES = [
   { id: "sovereign", name: "Sovereign", color: "#C89BFF", minBuyIn: 25000 },
 ] as const;
 
+export * from "./seat-ticket";
+
 export const AI_PROFILES = [
   { key: "shark", label: "The Shark", blurb: "Aggressive opens and pressure on weaker ranges." },
   { key: "professor", label: "Professor", blurb: "Tight-aggressive, solver-flavored lines." },

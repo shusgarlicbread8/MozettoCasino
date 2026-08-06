@@ -41,3 +41,4 @@ contracts/broadcast/
 .env*
 
 !.env.example
+.admin-token.txt

@@ -1,15 +1,19 @@
 "use client";
 
 import { http, createConfig, createStorage, cookieStorage } from "wagmi";
-import { base, baseSepolia } from "wagmi/chains";
+import { anvil, base, baseSepolia } from "wagmi/chains";
 // Deep imports avoid wagmi/connectors barrel pulling optional tempo/`accounts` deps.
 import { coinbaseWallet } from "@wagmi/connectors/coinbaseWallet";
 import { injected } from "@wagmi/connectors/injected";
 import { walletConnect } from "@wagmi/connectors/walletConnect";
 
 const wcProjectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "";
+const chainEnv = (process.env.NEXT_PUBLIC_CHAIN_ENV || "base-sepolia").toLowerCase();
+const useAnvil = chainEnv === "anvil" || chainEnv === "local";
 
-export const supportedChains = [baseSepolia, base] as const;
+export const supportedChains = useAnvil
+  ? ([anvil, baseSepolia, base] as const)
+  : ([baseSepolia, base] as const);
 
 export function getWagmiConfig() {
   const connectors = [
@@ -36,15 +40,18 @@ export function getWagmiConfig() {
     storage: createStorage({ storage: cookieStorage }),
     ssr: true,
     transports: {
+      [anvil.id]: http(process.env.NEXT_PUBLIC_ANVIL_RPC_URL || "http://127.0.0.1:8545"),
       [baseSepolia.id]: http(process.env.NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org"),
       [base.id]: http(process.env.NEXT_PUBLIC_BASE_RPC_URL || "https://mainnet.base.org"),
     },
   });
 }
 
-export const usdcAddresses = {
-  [baseSepolia.id]: "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as const,
-  [base.id]: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const,
+export const usdcAddresses: Record<number, `0x${string}`> = {
+  [anvil.id]: (process.env.NEXT_PUBLIC_USDC_ADDRESS ||
+    "0x5FbDB2315678afecb367f032d93F642f64180aa3") as `0x${string}`,
+  [baseSepolia.id]: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  [base.id]: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
 };
 
 export const arenaVaultAddress = (process.env.NEXT_PUBLIC_ARENA_VAULT_ADDRESS ||

@@ -6,47 +6,120 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 
-/// @title ArenaVaultV1 — player USDC custody (available + table-locked)
-/// @dev Operator cannot withdraw user available balances. Settlement hub moves locked funds.
-contract ArenaVaultV1 is Ownable, Pausable, ReentrancyGuard {
+/// @title ArenaVaultV1 — session-custody USDC vault (available + session-locked)
+/// @dev Solvency invariant (tested off-chain): usdcBalance() == sum(available) + sum(locked) + accruedProtocolFees
+///      Summing all users on-chain is intentionally not exposed — liabilities are tracked per-user in storage.
+contract ArenaVaultV1 is Ownable, Pausable, ReentrancyGuard, EIP712 {
     using SafeERC20 for IERC20;
+
+    bytes32 public constant SEAT_TICKET_TYPEHASH = keccak256(
+        "SeatTicket(address player,bytes32 gameTemplateId,uint256 buyIn,bytes32 controllerHash,bytes32 agentProfileHash,uint64 expiresAt,uint256 nonce,bytes32 matchmakingPool)"
+    );
 
     IERC20 public immutable usdc;
     address public settlementHub;
     address public feeTreasury;
+    address public sessionRelayer;
 
     mapping(address => uint256) public available;
-    mapping(address => mapping(bytes32 => uint256)) public lockedByTable;
+    mapping(bytes32 => mapping(address => uint256)) public lockedBySession;
     mapping(address => uint256) public totalLocked;
-    uint256 public accruedFees;
+    uint256 public accruedProtocolFees;
+    mapping(address => mapping(uint256 => bool)) public usedNonces;
+
+    struct Session {
+        bytes32 sessionId;
+        bytes32 templateId;
+        bytes32 dealerRoot;
+        bytes32 engineHash;
+        bytes32 profileSetHash;
+        uint64 openedAt;
+        bool settled;
+        uint64 lastSequence;
+        bytes32 lastBalanceRoot;
+        uint64 emergencyExitAfter;
+    }
+
+    mapping(bytes32 => Session) public sessions;
+
+    struct SeatTicket {
+        address player;
+        bytes32 gameTemplateId;
+        uint256 buyIn;
+        bytes32 controllerHash;
+        bytes32 agentProfileHash;
+        uint64 expiresAt;
+        uint256 nonce;
+        bytes32 matchmakingPool;
+    }
+
+    struct SessionConfig {
+        bytes32 sessionId;
+        bytes32 gameTemplateId;
+        bytes32 dealerRoot;
+        bytes32 engineHash;
+        bytes32 profileSetHash;
+        uint64 emergencyExitDelay;
+    }
+
+    struct SettlementPlayer {
+        address user;
+        uint256 startLocked;
+        uint256 endBalance;
+    }
 
     event Deposited(address indexed user, uint256 amount);
     event Withdrawn(address indexed user, address indexed to, uint256 amount);
-    event SeatLocked(address indexed user, bytes32 indexed tableId, uint256 amount, bytes32 controllerHash);
-    event SeatToppedUp(address indexed user, bytes32 indexed tableId, uint256 amount);
-    event SeatCancelled(address indexed user, bytes32 indexed tableId, uint256 amount);
-    event SettlementApplied(
-        bytes32 indexed tableId,
-        uint256 epoch,
-        uint256 rake,
-        uint256 playerCount
+    event SessionOpened(bytes32 indexed sessionId, bytes32 indexed templateId, uint256 playerCount);
+    event SessionToppedUp(bytes32 indexed sessionId, address indexed player, uint256 amount);
+    event CheckpointApplied(bytes32 indexed sessionId, uint64 sequence, bytes32 balanceRoot, bytes32 eventRoot);
+    event SessionSettled(bytes32 indexed sessionId, uint256 rake, uint256 playerCount);
+    event EmergencyExit(
+        bytes32 indexed sessionId, address indexed player, uint256 tableBalance, uint64 lastSequence
     );
+    event ProtocolFeesWithdrawn(address indexed treasury, uint256 amount);
     event SettlementHubUpdated(address indexed hub);
     event FeeTreasuryUpdated(address indexed treasury);
+    event SessionRelayerUpdated(address indexed relayer);
 
     error Unauthorized();
     error InsufficientAvailable();
     error InsufficientLocked();
     error ZeroAmount();
     error BadSettlement();
+    error SessionExists();
+    error UnknownSession();
+    error AlreadySettled();
+    error SessionNotSettled();
+    error TicketExpired();
+    error BadSignature();
+    error NonceUsed();
+    error TemplateMismatch();
+    error EmergencyExitNotReady();
+    error BadMerkleProof();
+    error SequenceRegression();
+    error InsufficientFees();
+    error Deprecated();
 
     modifier onlySettlement() {
         if (msg.sender != settlementHub) revert Unauthorized();
         _;
     }
 
-    constructor(address usdc_, address feeTreasury_, address owner_) Ownable(owner_) {
+    modifier onlyRelayerOrSettlement() {
+        if (msg.sender != settlementHub && msg.sender != sessionRelayer && msg.sender != owner()) {
+            revert Unauthorized();
+        }
+        _;
+    }
+
+    constructor(address usdc_, address feeTreasury_, address owner_)
+        Ownable(owner_)
+        EIP712("MozettoArenaVault", "1")
+    {
         require(usdc_ != address(0) && feeTreasury_ != address(0), "ZERO");
         usdc = IERC20(usdc_);
         feeTreasury = feeTreasury_;
@@ -61,6 +134,11 @@ contract ArenaVaultV1 is Ownable, Pausable, ReentrancyGuard {
         require(treasury != address(0), "ZERO");
         feeTreasury = treasury;
         emit FeeTreasuryUpdated(treasury);
+    }
+
+    function setSessionRelayer(address relayer) external onlyOwner {
+        sessionRelayer = relayer;
+        emit SessionRelayerUpdated(relayer);
     }
 
     function pause() external onlyOwner {
@@ -86,87 +164,208 @@ contract ArenaVaultV1 is Ownable, Pausable, ReentrancyGuard {
         emit Withdrawn(msg.sender, to, amount);
     }
 
-    /// @notice Lock available USDC for a table seat (explicit buy-in).
-    function lockForSeat(bytes32 tableId, uint256 amount, bytes32 controllerHash)
+    /// @notice Open a new session and atomically lock buy-ins from signed SeatTickets.
+    function openSession(SessionConfig calldata config, SeatTicket[] calldata tickets, bytes[] calldata signatures)
         external
+        onlyRelayerOrSettlement
         nonReentrant
         whenNotPaused
     {
-        if (amount == 0) revert ZeroAmount();
-        if (available[msg.sender] < amount) revert InsufficientAvailable();
-        available[msg.sender] -= amount;
-        lockedByTable[msg.sender][tableId] += amount;
-        totalLocked[msg.sender] += amount;
-        emit SeatLocked(msg.sender, tableId, amount, controllerHash);
+        if (sessions[config.sessionId].openedAt != 0) revert SessionExists();
+        if (tickets.length == 0 || tickets.length != signatures.length) revert BadSettlement();
+
+        uint64 openedAt = uint64(block.timestamp);
+        sessions[config.sessionId] = Session({
+            sessionId: config.sessionId,
+            templateId: config.gameTemplateId,
+            dealerRoot: config.dealerRoot,
+            engineHash: config.engineHash,
+            profileSetHash: config.profileSetHash,
+            openedAt: openedAt,
+            settled: false,
+            lastSequence: 0,
+            lastBalanceRoot: bytes32(0),
+            emergencyExitAfter: openedAt + config.emergencyExitDelay
+        });
+
+        for (uint256 i = 0; i < tickets.length; i++) {
+            _lockFromTicket(config.sessionId, config.gameTemplateId, tickets[i], signatures[i]);
+        }
+
+        emit SessionOpened(config.sessionId, config.gameTemplateId, tickets.length);
     }
 
-    function topUpSeat(bytes32 tableId, uint256 amount) external nonReentrant whenNotPaused {
-        if (amount == 0) revert ZeroAmount();
-        if (available[msg.sender] < amount) revert InsufficientAvailable();
-        if (lockedByTable[msg.sender][tableId] == 0) revert InsufficientLocked();
-        available[msg.sender] -= amount;
-        lockedByTable[msg.sender][tableId] += amount;
-        totalLocked[msg.sender] += amount;
-        emit SeatToppedUp(msg.sender, tableId, amount);
+    function topUpSession(bytes32 sessionId, SeatTicket calldata ticket, bytes calldata signature)
+        external
+        onlyRelayerOrSettlement
+        nonReentrant
+        whenNotPaused
+    {
+        Session storage session = sessions[sessionId];
+        if (session.openedAt == 0) revert UnknownSession();
+        if (session.settled) revert AlreadySettled();
+
+        _lockFromTicket(sessionId, session.templateId, ticket, signature);
+        emit SessionToppedUp(sessionId, ticket.player, ticket.buyIn);
     }
 
-    /// @notice Cancel a pending seat lock before the player becomes active (no chips in play).
-    function cancelPendingSeat(bytes32 tableId) external nonReentrant whenNotPaused {
-        uint256 locked = lockedByTable[msg.sender][tableId];
-        if (locked == 0) revert InsufficientLocked();
-        lockedByTable[msg.sender][tableId] = 0;
-        totalLocked[msg.sender] -= locked;
-        available[msg.sender] += locked;
-        emit SeatCancelled(msg.sender, tableId, locked);
+    function applyCheckpoint(bytes32 sessionId, uint64 sequence, bytes32 balanceRoot, bytes32 eventRoot)
+        external
+        onlySettlement
+    {
+        Session storage session = sessions[sessionId];
+        if (session.openedAt == 0) revert UnknownSession();
+        if (session.settled) revert AlreadySettled();
+        if (sequence <= session.lastSequence) revert SequenceRegression();
+
+        session.lastSequence = sequence;
+        session.lastBalanceRoot = balanceRoot;
+        emit CheckpointApplied(sessionId, sequence, balanceRoot, eventRoot);
     }
 
-    struct SettlementPlayer {
-        address user;
-        uint256 startLocked;
-        uint256 endBalance;
-    }
+    /// @notice Settle a session. Invariant: sum(startLocked) == sum(endBalance) + rake.
+    function settleSession(bytes32 sessionId, SettlementPlayer[] calldata players, uint256 rake)
+        external
+        onlySettlement
+        nonReentrant
+    {
+        Session storage session = sessions[sessionId];
+        if (session.openedAt == 0) revert UnknownSession();
+        if (session.settled) revert AlreadySettled();
 
-    /// @notice Apply epoch settlement. Invariant: sum(start) == sum(end) + rake.
-    function applyTableSettlement(
-        bytes32 tableId,
-        uint256 epoch,
-        SettlementPlayer[] calldata players,
-        uint256 rake
-    ) external onlySettlement nonReentrant {
         uint256 startSum;
         uint256 endSum;
         for (uint256 i = 0; i < players.length; i++) {
             SettlementPlayer calldata p = players[i];
             startSum += p.startLocked;
             endSum += p.endBalance;
-            uint256 locked = lockedByTable[p.user][tableId];
+
+            uint256 locked = lockedBySession[sessionId][p.user];
             if (locked < p.startLocked) revert BadSettlement();
-            // Release startLocked accounting, then credit endBalance to available.
-            lockedByTable[p.user][tableId] = locked - p.startLocked;
+
+            lockedBySession[sessionId][p.user] = locked - p.startLocked;
             totalLocked[p.user] -= p.startLocked;
+
             if (p.endBalance > 0) {
                 available[p.user] += p.endBalance;
             }
         }
+
         if (startSum != endSum + rake) revert BadSettlement();
+
         if (rake > 0) {
-            accruedFees += rake;
-            usdc.safeTransfer(feeTreasury, rake);
-            accruedFees -= rake;
+            accruedProtocolFees += rake;
         }
-        emit SettlementApplied(tableId, epoch, rake, players.length);
+
+        session.settled = true;
+        emit SessionSettled(sessionId, rake, players.length);
     }
 
-    /// @notice Emergency unlock of a user's last known locked amount by settlement hub (checkpoint path).
-    function emergencyRelease(address user, bytes32 tableId, uint256 amount)
-        external
-        onlySettlement
-        nonReentrant
+    function withdrawProtocolFees(uint256 amount) external onlyOwner nonReentrant {
+        if (amount == 0) revert ZeroAmount();
+        if (accruedProtocolFees < amount) revert InsufficientFees();
+        accruedProtocolFees -= amount;
+        usdc.safeTransfer(feeTreasury, amount);
+        emit ProtocolFeesWithdrawn(feeTreasury, amount);
+    }
+
+    /// @notice Player-initiated exit after emergency delay using a checkpoint Merkle proof.
+    function emergencyExit(
+        bytes32 sessionId,
+        address player,
+        uint256 tableBalance,
+        uint64 lastSequence,
+        bytes32[] calldata proof
+    ) external nonReentrant whenNotPaused {
+        Session storage session = sessions[sessionId];
+        if (session.openedAt == 0) revert UnknownSession();
+        if (session.settled) revert AlreadySettled();
+        if (block.timestamp < session.emergencyExitAfter) revert EmergencyExitNotReady();
+        if (session.lastBalanceRoot == bytes32(0)) revert BadMerkleProof();
+
+        bytes32 leaf = keccak256(abi.encodePacked(player, tableBalance, lastSequence));
+        if (!_verifyMerkleProof(leaf, session.lastBalanceRoot, proof)) revert BadMerkleProof();
+
+        uint256 locked = lockedBySession[sessionId][player];
+        if (locked < tableBalance) revert InsufficientLocked();
+
+        lockedBySession[sessionId][player] = locked - tableBalance;
+        totalLocked[player] -= tableBalance;
+        available[player] += tableBalance;
+
+        emit EmergencyExit(sessionId, player, tableBalance, lastSequence);
+    }
+
+    /// @dev Deprecated table-seat lock — use openSession with signed SeatTickets.
+    function lockForSeat(bytes32, uint256, bytes32) external pure {
+        revert Deprecated();
+    }
+
+    /// @notice On-chain USDC held by this vault (solvency numerator for off-chain audits).
+    function usdcBalance() external view returns (uint256) {
+        return usdc.balanceOf(address(this));
+    }
+
+    function hashSeatTicket(SeatTicket calldata ticket) external view returns (bytes32) {
+        return _hashSeatTicket(ticket);
+    }
+
+    function _lockFromTicket(
+        bytes32 sessionId,
+        bytes32 expectedTemplateId,
+        SeatTicket calldata ticket,
+        bytes calldata signature
+    ) internal {
+        if (ticket.buyIn == 0) revert ZeroAmount();
+        if (ticket.gameTemplateId != expectedTemplateId) revert TemplateMismatch();
+        if (block.timestamp > ticket.expiresAt) revert TicketExpired();
+        if (usedNonces[ticket.player][ticket.nonce]) revert NonceUsed();
+
+        bytes32 digest = _hashSeatTicket(ticket);
+        if (!SignatureChecker.isValidSignatureNow(ticket.player, digest, signature)) {
+            revert BadSignature();
+        }
+
+        if (available[ticket.player] < ticket.buyIn) revert InsufficientAvailable();
+
+        usedNonces[ticket.player][ticket.nonce] = true;
+        available[ticket.player] -= ticket.buyIn;
+        lockedBySession[sessionId][ticket.player] += ticket.buyIn;
+        totalLocked[ticket.player] += ticket.buyIn;
+    }
+
+    function _hashSeatTicket(SeatTicket calldata ticket) internal view returns (bytes32) {
+        return _hashTypedDataV4(
+            keccak256(
+                abi.encode(
+                    SEAT_TICKET_TYPEHASH,
+                    ticket.player,
+                    ticket.gameTemplateId,
+                    ticket.buyIn,
+                    ticket.controllerHash,
+                    ticket.agentProfileHash,
+                    ticket.expiresAt,
+                    ticket.nonce,
+                    ticket.matchmakingPool
+                )
+            )
+        );
+    }
+
+    function _verifyMerkleProof(bytes32 leaf, bytes32 root, bytes32[] calldata proof)
+        internal
+        pure
+        returns (bool)
     {
-        uint256 locked = lockedByTable[user][tableId];
-        if (locked < amount) revert InsufficientLocked();
-        lockedByTable[user][tableId] = locked - amount;
-        totalLocked[user] -= amount;
-        available[user] += amount;
+        bytes32 computed = leaf;
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 sibling = proof[i];
+            if (computed < sibling) {
+                computed = keccak256(abi.encodePacked(computed, sibling));
+            } else {
+                computed = keccak256(abi.encodePacked(sibling, computed));
+            }
+        }
+        return computed == root;
     }
 }

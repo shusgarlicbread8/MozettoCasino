@@ -8,7 +8,9 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useSignTypedData } from "wagmi";
 import { api, ApiError } from "@/lib/api";
+import { signAndSubmitSeatTicket } from "@/lib/seat-ticket";
 import { useSession } from "@/lib/session";
 
 const MONO = "var(--font-geist-mono), 'Geist Mono', monospace";
@@ -74,7 +76,9 @@ function stakesForBuyIn(buyIn: number) {
 
 export default function PokerPage() {
   const { me, refresh } = useSession();
+  const { signTypedDataAsync } = useSignTypedData();
   const wallet = me?.available ?? 0;
+  const isOnchain = me?.profileKind === "onchain";
 
   const [leagues, setLeagues] = useState<ArenaLeague[]>([]);
   const [leagueId, setLeagueId] = useState("bronze");
@@ -110,17 +114,47 @@ export default function PokerPage() {
     setBusy(true);
     setError(null);
     setNeedsTopUp(null);
-    setStatus("Searching for opponents…");
+    setStatus(isOnchain ? "Sign seat ticket…" : "Searching for opponents…");
     try {
+      if (isOnchain) {
+        await signAndSubmitSeatTicket({
+          leagueId: league.id,
+          profileKey: profile,
+          signTypedDataAsync,
+        });
+        setStatus("Searching for opponents…");
+      }
+
       const result = await api<{
-        tableId: string;
-        tableName: string;
-        created: boolean;
+        tableId?: string;
+        tableName?: string;
+        created?: boolean;
         alreadySeated?: boolean;
+        status?: string;
+        waitingForChain?: boolean;
+        message?: string;
       }>("/v1/arena/find-match", {
         method: "POST",
         body: JSON.stringify({ leagueId: league.id, profileKey: profile }),
       });
+
+      if (result.status === "waiting") {
+        setStatus(result.message ?? "Waiting for an opponent…");
+        setBusy(false);
+        return;
+      }
+
+      if (result.waitingForChain && result.tableId) {
+        setStatus("Session opening on-chain — redirecting when ready…");
+        await refresh();
+        window.location.assign(`/table/${result.tableId}`);
+        return;
+      }
+
+      if (!result.tableId) {
+        throw new Error("Matchmaking did not return a table");
+      }
+
       setStatus(
         result.alreadySeated
           ? "Returning to your table…"

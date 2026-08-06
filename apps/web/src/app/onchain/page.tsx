@@ -10,7 +10,10 @@ import {
   useSignMessage,
   useSwitchChain,
 } from "wagmi";
-import { base, baseSepolia } from "wagmi/chains";
+import { anvil, base, baseSepolia } from "wagmi/chains";
+const localAnvil =
+  (process.env.NEXT_PUBLIC_CHAIN_ENV || "").toLowerCase() === "anvil" ||
+  (process.env.NEXT_PUBLIC_CHAIN_ENV || "").toLowerCase() === "local";
 import { api, ApiError } from "@/lib/api";
 import { createClient } from "@/lib/supabase/client";
 
@@ -56,9 +59,11 @@ export default function OnchainPortalPage() {
       }
 
       let useChain = chainId;
-      if (useChain !== base.id && useChain !== baseSepolia.id) {
-        await switchChainAsync(switchChain, baseSepolia.id);
-        useChain = baseSepolia.id;
+      const allowed = new Set([anvil.id, baseSepolia.id, base.id]);
+      if (!allowed.has(useChain)) {
+        const target = localAnvil ? anvil.id : baseSepolia.id;
+        await switchChainAsync(switchChain, target);
+        useChain = target;
       }
       const nonceRes = await api<{ message: string; chainId: number }>(
         `/v1/auth/wallet/nonce?address=${address}&chainId=${useChain}`,
@@ -154,7 +159,15 @@ export default function OnchainPortalPage() {
           >
             NETWORK
           </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+            {localAnvil && (
+              <NetBtn
+                label="Anvil (local)"
+                active={chainId === anvil.id}
+                disabled={switching}
+                onClick={() => switchChain?.({ chainId: anvil.id })}
+              />
+            )}
             <NetBtn
               label="Base Sepolia"
               active={chainId === baseSepolia.id}

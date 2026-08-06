@@ -1,16 +1,26 @@
-/** Chain + contract configuration for Mozetto Arena (Base / Anvil). */
+/** Chain + contract configuration — delegates to @mozetto/chain-manifest. */
+
+import {
+  chainManifest,
+  getManifest,
+  resolveNetworkKey,
+  type NetworkKey,
+} from "@mozetto/chain-manifest";
 
 export type ChainEnv = "anvil" | "base-sepolia" | "base";
+export type { NetworkKey };
+export { chainManifest, getManifest, resolveNetworkKey };
 
 export type ChainConfig = {
   env: ChainEnv;
   chainId: number;
   name: string;
   usdc: `0x${string}`;
-  /** Native Circle USDC unless Mock on Anvil */
   usdcIsMock: boolean;
   rpcUrlEnv: string;
   wsUrlEnv: string;
+  protocolVersion: string;
+  deploymentBlock: bigint;
   contracts: {
     arenaVault: `0x${string}` | null;
     tableRegistry: `0x${string}` | null;
@@ -19,99 +29,68 @@ export type ChainConfig = {
     randomnessCoordinator: `0x${string}` | null;
     feeTreasury: `0x${string}` | null;
   };
+  vrfCoordinator: `0x${string}` | null;
+  vrfKeyHash: `0x${string}` | null;
 };
 
-/** Circle native USDC on Base networks. */
 export const CIRCLE_USDC = {
-  baseSepolia: "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as const,
-  base: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const,
+  baseSepolia: chainManifest.baseSepolia.usdc,
+  base: chainManifest.base.usdc,
 };
 
-export const chains: Record<ChainEnv, ChainConfig> = {
-  anvil: {
-    env: "anvil",
-    chainId: 31337,
-    name: "Anvil",
-    usdc: "0x0000000000000000000000000000000000000000",
-    usdcIsMock: true,
-    rpcUrlEnv: "ANVIL_RPC_URL",
-    wsUrlEnv: "ANVIL_WS_URL",
-    contracts: {
-      arenaVault: null,
-      tableRegistry: null,
-      settlementHub: null,
-      checkpointRegistry: null,
-      randomnessCoordinator: null,
-      feeTreasury: null,
-    },
-  },
-  "base-sepolia": {
-    env: "base-sepolia",
-    chainId: 84532,
-    name: "Base Sepolia",
-    usdc: CIRCLE_USDC.baseSepolia,
-    usdcIsMock: false,
-    rpcUrlEnv: "BASE_SEPOLIA_RPC_URL",
-    wsUrlEnv: "BASE_SEPOLIA_WS_URL",
-    contracts: {
-      arenaVault: null,
-      tableRegistry: null,
-      settlementHub: null,
-      checkpointRegistry: null,
-      randomnessCoordinator: null,
-      feeTreasury: null,
-    },
-  },
-  base: {
-    env: "base",
-    chainId: 8453,
-    name: "Base",
-    usdc: CIRCLE_USDC.base,
-    usdcIsMock: false,
-    rpcUrlEnv: "BASE_RPC_URL",
-    wsUrlEnv: "BASE_WS_URL",
-    contracts: {
-      arenaVault: null,
-      tableRegistry: null,
-      settlementHub: null,
-      checkpointRegistry: null,
-      randomnessCoordinator: null,
-      feeTreasury: null,
-    },
-  },
-};
-
-export function resolveChainEnv(raw?: string | null): ChainEnv {
-  const v = (raw || process.env.MOZETTO_CHAIN_ENV || "base-sepolia").toLowerCase();
-  if (v === "anvil" || v === "local") return "anvil";
-  if (v === "base" || v === "mainnet") return "base";
+function toChainEnv(n: NetworkKey): ChainEnv {
+  if (n === "anvil") return "anvil";
+  if (n === "base") return "base";
   return "base-sepolia";
 }
 
+export function resolveChainEnv(raw?: string | null): ChainEnv {
+  return toChainEnv(resolveNetworkKey(raw));
+}
+
 export function getChainConfig(env?: ChainEnv): ChainConfig {
-  const resolved = env ?? resolveChainEnv();
-  const base = chains[resolved];
-  // Optional runtime overrides from env after deploy
-  const override = (key: string): `0x${string}` | null => {
-    const v = process.env[key];
-    return v && /^0x[a-fA-F0-9]{40}$/.test(v) ? (v as `0x${string}`) : null;
+  const network: NetworkKey =
+    env === "anvil" ? "anvil" : env === "base" ? "base" : resolveNetworkKey(env);
+  const m = getManifest(network);
+  const names: Record<NetworkKey, string> = {
+    anvil: "Anvil",
+    baseSepolia: "Base Sepolia",
+    base: "Base",
   };
   return {
-    ...base,
-    usdc: override("USDC_ADDRESS") ?? base.usdc,
+    env: toChainEnv(network),
+    chainId: m.chainId,
+    name: names[network],
+    usdc: m.usdc,
+    usdcIsMock: network === "anvil",
+    rpcUrlEnv:
+      network === "anvil"
+        ? "ANVIL_RPC_URL"
+        : network === "base"
+          ? "BASE_RPC_URL"
+          : "BASE_SEPOLIA_RPC_URL",
+    wsUrlEnv:
+      network === "anvil"
+        ? "ANVIL_WS_URL"
+        : network === "base"
+          ? "BASE_WS_URL"
+          : "BASE_SEPOLIA_WS_URL",
+    protocolVersion: m.protocolVersion,
+    deploymentBlock: m.deploymentBlock,
     contracts: {
-      arenaVault: override("ARENA_VAULT_ADDRESS") ?? base.contracts.arenaVault,
-      tableRegistry: override("TABLE_REGISTRY_ADDRESS") ?? base.contracts.tableRegistry,
-      settlementHub: override("SETTLEMENT_HUB_ADDRESS") ?? base.contracts.settlementHub,
-      checkpointRegistry: override("CHECKPOINT_REGISTRY_ADDRESS") ?? base.contracts.checkpointRegistry,
-      randomnessCoordinator:
-        override("RANDOMNESS_COORDINATOR_ADDRESS") ?? base.contracts.randomnessCoordinator,
-      feeTreasury: override("FEE_TREASURY_ADDRESS") ?? base.contracts.feeTreasury,
+      arenaVault: m.arenaVault,
+      tableRegistry: m.tableRegistry,
+      settlementHub: m.settlementHub,
+      checkpointRegistry: m.checkpointRegistry,
+      randomnessCoordinator: m.randomnessCoordinator,
+      feeTreasury: m.feeTreasury,
     },
+    vrfCoordinator: m.vrfCoordinator,
+    vrfKeyHash: m.vrfKeyHash,
   };
 }
 
-/** Minimal ABI fragments for wagmi / viem (expand after forge build). */
+/** Minimal ABI fragments for wagmi / viem / indexer. */
 export const arenaVaultAbi = [
   {
     type: "function",
@@ -132,12 +111,36 @@ export const arenaVaultAbi = [
   },
   {
     type: "function",
-    name: "lockForSeat",
+    name: "openSession",
     stateMutability: "nonpayable",
     inputs: [
-      { name: "tableId", type: "bytes32" },
-      { name: "amount", type: "uint256" },
-      { name: "controllerHash", type: "bytes32" },
+      {
+        name: "config",
+        type: "tuple",
+        components: [
+          { name: "sessionId", type: "bytes32" },
+          { name: "gameTemplateId", type: "bytes32" },
+          { name: "dealerRoot", type: "bytes32" },
+          { name: "engineHash", type: "bytes32" },
+          { name: "profileSetHash", type: "bytes32" },
+          { name: "emergencyExitDelay", type: "uint64" },
+        ],
+      },
+      {
+        name: "tickets",
+        type: "tuple[]",
+        components: [
+          { name: "player", type: "address" },
+          { name: "gameTemplateId", type: "bytes32" },
+          { name: "buyIn", type: "uint256" },
+          { name: "controllerHash", type: "bytes32" },
+          { name: "agentProfileHash", type: "bytes32" },
+          { name: "expiresAt", type: "uint64" },
+          { name: "nonce", type: "uint256" },
+          { name: "matchmakingPool", type: "bytes32" },
+        ],
+      },
+      { name: "signatures", type: "bytes[]" },
     ],
     outputs: [],
   },
@@ -146,6 +149,16 @@ export const arenaVaultAbi = [
     name: "available",
     stateMutability: "view",
     inputs: [{ name: "user", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "lockedBySession",
+    stateMutability: "view",
+    inputs: [
+      { name: "sessionId", type: "bytes32" },
+      { name: "player", type: "address" },
+    ],
     outputs: [{ type: "uint256" }],
   },
   {
@@ -158,14 +171,54 @@ export const arenaVaultAbi = [
   },
   {
     type: "event",
-    name: "SeatLocked",
+    name: "Withdrawn",
     inputs: [
       { name: "user", type: "address", indexed: true },
-      { name: "tableId", type: "bytes32", indexed: true },
+      { name: "to", type: "address", indexed: true },
       { name: "amount", type: "uint256", indexed: false },
-      { name: "controllerHash", type: "bytes32", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "SessionOpened",
+    inputs: [
+      { name: "sessionId", type: "bytes32", indexed: true },
+      { name: "templateId", type: "bytes32", indexed: true },
+      { name: "playerCount", type: "uint256", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "SessionSettled",
+    inputs: [
+      { name: "sessionId", type: "bytes32", indexed: true },
+      { name: "rake", type: "uint256", indexed: false },
+      { name: "playerCount", type: "uint256", indexed: false },
     ],
   },
 ] as const;
 
 export type ArenaMode = "demo" | "onchain";
+
+/** EIP-712 domain for ArenaVault SeatTicket (name/version must match Solidity). */
+export const SEAT_TICKET_TYPES = {
+  SeatTicket: [
+    { name: "player", type: "address" },
+    { name: "gameTemplateId", type: "bytes32" },
+    { name: "buyIn", type: "uint256" },
+    { name: "controllerHash", type: "bytes32" },
+    { name: "agentProfileHash", type: "bytes32" },
+    { name: "expiresAt", type: "uint64" },
+    { name: "nonce", type: "uint256" },
+    { name: "matchmakingPool", type: "bytes32" },
+  ],
+} as const;
+
+export function seatTicketDomain(chainId: number, verifyingContract: `0x${string}`) {
+  return {
+    name: "MozettoArenaVault",
+    version: "1",
+    chainId,
+    verifyingContract,
+  } as const;
+}

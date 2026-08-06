@@ -32,6 +32,33 @@ services:
         sync: false
       - key: NEXT_PUBLIC_GAME_HTTP_URL
         sync: false
+      - key: ADMIN_TOKEN
+        sync: false
+
+  - type: web
+    name: mozetto-chain-indexer
+    runtime: docker
+    dockerfilePath: ./Dockerfile.indexer
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: MOZETTO_CHAIN_ENV
+        sync: false
+      - key: BASE_SEPOLIA_RPC_URL
+        sync: false
+      - key: BASE_RPC_URL
+        sync: false
+      - key: ANVIL_RPC_URL
+        sync: false
+      - key: ARENA_VAULT_ADDRESS
+        sync: false
+      - key: INDEXER_CONFIRMATIONS
+        value: "3"
+      - key: INDEXER_POLL_MS
+        value: "8000"
 
   - type: web
     name: mozetto-game
@@ -57,4 +84,6 @@ services:
       - key: NEXT_PUBLIC_SUPABASE_URL
         sync: false
       - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: REDIS_URL
         sync: false

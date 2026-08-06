@@ -25,6 +25,8 @@ import {
 import { getChainConfig } from "@mozetto/blockchain";
 import { corsOriginCheck } from "@mozetto/server-env";
 import { readSession, registerAuthRoutes, requireUser, requireDemoUser } from "./auth.js";
+import { handleOnchainFindMatch, registerArenaOnchainRoutes } from "./arena-onchain.js";
+import { registerAdminRoutes, registerVerifyRoutes } from "./admin.js";
 
 const GAME_HTTP = process.env.NEXT_PUBLIC_GAME_HTTP_URL ?? "http://localhost:4001";
 
@@ -36,6 +38,9 @@ await app.register(cors, {
 });
 
 await registerAuthRoutes(app);
+registerArenaOnchainRoutes(app);
+registerAdminRoutes(app);
+registerVerifyRoutes(app);
 
 app.get("/health", async () => ({ ok: true }));
 
@@ -453,21 +458,13 @@ app.post("/v1/wallet/onchain/faucet", async (req, reply) => {
   }
 });
 
-/** Record a confirmed vault deposit tx (called by indexer or client after receipt). */
-app.post("/v1/wallet/onchain/credit-deposit", async (req, reply) => {
-  const session = await requireUser(req, reply);
-  if (!session) return;
-  if (session.profileKind !== "onchain") {
-    return reply.code(403).send({ error: "wrong_world" });
-  }
-  const body = req.body as { amount?: number; txHash?: string };
-  const amount = Number(body.amount ?? 0);
-  const txHash = String(body.txHash ?? "").trim();
-  if (!(amount > 0) || !/^0x[a-fA-F0-9]{64}$/.test(txHash)) {
-    return reply.code(400).send({ error: "invalid_request" });
-  }
-  await creditOnchainDeposit(session.profileId, amount, txHash);
-  return { available: await getAvailableBalance(session.profileId, "onchain") };
+/** Removed: client-trusted deposit crediting. Deposits are mirrored solely by chain-indexer. */
+app.post("/v1/wallet/onchain/credit-deposit", async (_req, reply) => {
+  return reply.code(410).send({
+    error: "gone",
+    message:
+      "Client deposit crediting is disabled. Wait for the chain indexer to confirm the ArenaVault Deposited event.",
+  });
 });
 
 app.post("/v1/wallet/withdraw", async (req, reply) => {
@@ -667,6 +664,55 @@ app.post("/v1/arena/find-match", async (req, reply) => {
   }
 
   const arenaMode = session.profileKind === "onchain" ? "onchain" : "demo";
+
+  if (arenaMode === "onchain") {
+    const onchain = await handleOnchainFindMatch(req, reply, session, leagueId, profileKey);
+    if (!onchain || reply.sent) return;
+    if ("status" in onchain && onchain.status === "waiting") {
+      return onchain;
+    }
+    if (onchain.alreadySeated) {
+      return { ...onchain, joined: true };
+    }
+    if (onchain.waitingForChain) {
+      return { ...onchain, joined: false };
+    }
+    const auth = req.headers.authorization;
+    const cookie = req.headers.cookie;
+    try {
+      const res = await fetch(`${GAME_HTTP}/v1/tables/${onchain.tableId}/join`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(auth ? { authorization: auth } : {}),
+          ...(cookie ? { cookie } : {}),
+        },
+        body: JSON.stringify({ buyIn: onchain.buyIn }),
+      });
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok) {
+        return reply.code(res.status).send({
+          error: "join_failed",
+          message: (data.message as string) || (data.error as string) || "Could not seat at table",
+          match: onchain,
+        });
+      }
+      return {
+        ...onchain,
+        joined: true,
+        seatIndex: data.seatIndex,
+        sessionId: data.sessionId,
+        alreadySeated: Boolean(data.alreadySeated),
+      };
+    } catch (e) {
+      return reply.code(502).send({
+        error: "game_server_unreachable",
+        message: e instanceof Error ? e.message : "error",
+        match: onchain,
+      });
+    }
+  }
+
   let match: Awaited<ReturnType<typeof findArenaMatch>>;
   try {
     match = await findArenaMatch({

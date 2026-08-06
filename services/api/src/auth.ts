@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { SignJWT, jwtVerify } from "jose";
-import { createPublicClient, http, type Hex, type Address } from "viem";
-import { base, baseSepolia } from "viem/chains";
+import { createPublicClient, http, type Hex, type Address, type Chain } from "viem";
+import { anvil, base, baseSepolia } from "viem/chains";
 import { query, getAvailableBalance, getEscrowBalance, ensureModeAccounts } from "@mozetto/database";
 import { sessionCookieOpts } from "@mozetto/server-env";
 import { getAdminClient } from "./supabase.js";
@@ -200,12 +200,18 @@ Nonce: ${opts.nonce}
 Issued At: ${issuedAt}`;
 }
 
+const SUPPORTED_CHAIN_IDS = new Set([31337, 84532, 8453]);
+
 function clientForChain(chainId: number) {
-  const chain = chainId === 8453 ? base : baseSepolia;
-  const rpc =
-    chainId === 8453
-      ? process.env.BASE_RPC_URL || "https://mainnet.base.org"
-      : process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org";
+  let chain: Chain = baseSepolia;
+  let rpc = process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org";
+  if (chainId === 8453) {
+    chain = base;
+    rpc = process.env.BASE_RPC_URL || "https://mainnet.base.org";
+  } else if (chainId === 31337) {
+    chain = anvil;
+    rpc = process.env.ANVIL_RPC_URL || "http://127.0.0.1:8545";
+  }
   return createPublicClient({ chain, transport: http(rpc) });
 }
 
@@ -252,8 +258,11 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "invalid_address" });
     }
     const chainId = Number((req.query as { chainId?: string }).chainId ?? 84532);
-    if (chainId !== 84532 && chainId !== 8453) {
-      return reply.code(400).send({ error: "unsupported_chain", message: "Use Base Sepolia (84532) or Base (8453)." });
+    if (!SUPPORTED_CHAIN_IDS.has(chainId)) {
+      return reply.code(400).send({
+        error: "unsupported_chain",
+        message: "Use Anvil (31337), Base Sepolia (84532), or Base (8453).",
+      });
     }
     const nonce = randomNonce();
     const expires = new Date(Date.now() + 10 * 60 * 1000);
@@ -287,7 +296,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     if (!/^0x[a-f0-9]{40}$/.test(address) || !message || !signature) {
       return reply.code(400).send({ error: "invalid_request" });
     }
-    if (chainId !== 84532 && chainId !== 8453) {
+    if (!SUPPORTED_CHAIN_IDS.has(chainId)) {
       return reply.code(400).send({ error: "unsupported_chain" });
     }
     if (displayName && displayName.length < 2) {
@@ -338,7 +347,8 @@ export async function registerAuthRoutes(app: FastifyInstance) {
 
     // Auto-fund Sepolia test chips once so players can sit without a vault deploy.
     let funded = 0;
-    if (chainId === 84532) {
+    // Ledger welcome chips on Sepolia/Anvil (not a substitute for vault USDC deposits).
+    if (chainId === 84532 || chainId === 31337) {
       const { getAvailableBalance, creditOnchainDeposit } = await import("@mozetto/database");
       const bal = await getAvailableBalance(profileId, "onchain");
       if (bal < 100) {
@@ -375,7 +385,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "demo_account", message: "Network switch is for on-chain accounts only." });
     }
     const chainId = Number((req.body as { chainId?: number }).chainId ?? 0);
-    if (chainId !== 84532 && chainId !== 8453) {
+    if (!SUPPORTED_CHAIN_IDS.has(chainId)) {
       return reply.code(400).send({ error: "unsupported_chain" });
     }
     await query(`update profiles set primary_chain_id = $1, updated_at = now() where id = $2`, [

@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@mozetto/database": "workspace:*",
+    "@mozetto/dealer": "workspace:*",
     "viem": "^2.55.11"
   },
   "devDependencies": {
