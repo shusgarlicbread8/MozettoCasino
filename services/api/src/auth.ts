@@ -276,6 +276,30 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     return { address, chainId, nonce, message, domain: DOMAIN, uri: URI };
   });
 
+  app.get("/v1/auth/wallet/account", async (req, reply) => {
+    const address = String((req.query as { address?: string }).address ?? "")
+      .trim()
+      .toLowerCase();
+    if (!/^0x[a-f0-9]{40}$/.test(address)) {
+      return reply.code(400).send({ error: "invalid_address" });
+    }
+    reply.header("Cache-Control", "no-store");
+
+    const account = await query<{ display_name: string }>(
+      `select p.display_name
+       from wallet_identities wi
+       join profiles p on p.id = coalesce(wi.profile_id, wi.user_id)
+       where lower(wi.address) = $1
+       limit 1`,
+      [address],
+    );
+    const displayName = account.rows[0]?.display_name;
+    return {
+      exists: Boolean(account.rowCount),
+      displayName: displayName || null,
+    };
+  });
+
   app.post("/v1/auth/wallet/verify", async (req, reply) => {
     const body = req.body as {
       address?: string;
@@ -301,6 +325,22 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     }
     if (displayName && displayName.length < 2) {
       return reply.code(400).send({ error: "invalid_display_name", message: "Display name must be 2–48 characters." });
+    }
+
+    const existingAccount = await query<{ display_name: string }>(
+      `select p.display_name
+       from wallet_identities wi
+       join profiles p on p.id = coalesce(wi.profile_id, wi.user_id)
+       where lower(wi.address) = $1
+       limit 1`,
+      [address],
+    );
+    const isNewAccount = !existingAccount.rowCount;
+    if (isNewAccount && !displayName) {
+      return reply.code(400).send({
+        error: "display_name_required",
+        message: "Choose a display name to create your on-chain account.",
+      });
     }
 
     const nonceMatch = message.match(/\nNonce: ([^\n]+)/);
@@ -335,7 +375,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     const profileId = boot.rows[0]?.id;
     if (!profileId) return reply.code(500).send({ error: "bootstrap_failed" });
 
-    if (displayName) {
+    if (isNewAccount && displayName) {
       await query(
         `update profiles set display_name = $1, updated_at = now() where id = $2`,
         [displayName, profileId],
@@ -344,18 +384,6 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     }
 
     await ensureModeAccounts(profileId, "onchain");
-
-    // Auto-fund Sepolia test chips once so players can sit without a vault deploy.
-    let funded = 0;
-    // Ledger welcome chips on Sepolia/Anvil (not a substitute for vault USDC deposits).
-    if (chainId === 84532 || chainId === 31337) {
-      const { getAvailableBalance, creditOnchainDeposit } = await import("@mozetto/database");
-      const bal = await getAvailableBalance(profileId, "onchain");
-      if (bal < 100) {
-        await creditOnchainDeposit(profileId, 5000, `welcome-faucet-${profileId}`);
-        funded = 5000;
-      }
-    }
 
     const profile = await loadProfileById(profileId);
     if (!profile) return reply.code(500).send({ error: "profile_missing" });
@@ -370,11 +398,11 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     });
     setSessionCookie(reply, cookie);
     const session = toSession(profile, address, chainId);
-    if (displayName) session.displayName = displayName;
+    if (isNewAccount && displayName) session.displayName = displayName;
     return {
       user: publicUser(session),
-      welcomeFaucet: funded,
-      available: funded || undefined,
+      isNewAccount,
+      available: await getAvailableBalance(profileId, "onchain"),
     };
   });
 

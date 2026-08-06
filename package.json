@@ -11,12 +11,16 @@
     "dev:indexer": "pnpm --filter @mozetto/chain-indexer dev",
     "dev:admin": "pnpm --filter @mozetto/admin dev",
     "manifest:codegen": "pnpm --filter @mozetto/chain-manifest codegen",
+    "test:contracts": "cd contracts && forge test -vv",
     "build": "pnpm -r run build",
     "db:migrate": "pnpm --filter @mozetto/database migrate",
     "typecheck": "pnpm -r run typecheck",
-    "smoke:custody": "node ./scripts/anvil-custody-smoke.mjs"
+    "smoke:custody": "node ./scripts/anvil-custody-smoke.mjs",
+    "smoke:custody:run": "node ./scripts/anvil-custody-smoke.mjs --run",
+    "test:db": "pnpm --filter @mozetto/database test"
   },
   "devDependencies": {
-    "typescript": "^5.8.2"
+    "typescript": "^5.8.2",
+    "viem": "^2.55.11"
   }
 }

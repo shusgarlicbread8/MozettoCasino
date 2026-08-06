@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  transpilePackages: ["@mozetto/shared-types"],
+  transpilePackages: ["@mozetto/shared-types", "@mozetto/chain-manifest"],
   // Existing pages use loose `any` types; don't block production deploys on lint debt.
   eslint: { ignoreDuringBuilds: true },
   webpack: (config) => {

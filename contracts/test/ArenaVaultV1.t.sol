@@ -41,7 +41,7 @@ contract ArenaVaultV1Test is Test {
         bob = vm.addr(bobPk);
         attestor = vm.addr(attestorPk);
 
-        usdc = new MockUSDC();
+        usdc = new MockUSDC(address(this));
         vault = new ArenaVaultV1(address(usdc), treasury, address(this));
         hub = new PokerSettlementHubV1(address(vault), address(this));
         vault.setSettlementHub(address(hub));
@@ -215,6 +215,60 @@ contract ArenaVaultV1Test is Test {
         vault.withdraw(400 * ONE, alice);
         assertEq(vault.available(alice), 600 * ONE);
         assertEq(usdc.balanceOf(alice), 9_400 * ONE);
+        _assertSolvency();
+    }
+
+    function testDepositWithoutAllowanceReverts() public {
+        address charlie = address(0xC4A);
+        usdc.mint(charlie, 1_000 * ONE);
+        vm.prank(charlie);
+        vm.expectRevert();
+        vault.deposit(100 * ONE);
+    }
+
+    function testDepositExceedsBalanceReverts() public {
+        address dave = address(0xDA7E);
+        usdc.mint(dave, 50 * ONE);
+        vm.prank(dave);
+        usdc.approve(address(vault), type(uint256).max);
+        vm.prank(dave);
+        vm.expectRevert();
+        vault.deposit(100 * ONE);
+    }
+
+    function testWithdrawWhileLockedReverts() public {
+        _openDefaultSession();
+        // Alice locked 5k; available should be 5k of original 10k minted with 5k locked → 5k available after deposit of 10k then lock 5k
+        // setUp mints 10k and approves; _openDefaultSession deposits buy-ins.
+        uint256 avail = vault.available(alice);
+        vm.prank(alice);
+        vm.expectRevert();
+        vault.withdraw(avail + 1, alice);
+    }
+
+    function testSettlementDoesNotMintTokens() public {
+        uint256 supplyBefore = usdc.totalSupply();
+        (uint256 aliceBuyIn, uint256 bobBuyIn) = _openDefaultSession();
+
+        uint256 rake = 200 * ONE;
+        PokerSettlementHubV1.FinalSettlement memory settlement = PokerSettlementHubV1.FinalSettlement({
+            sessionId: sessionId,
+            finalSequence: 1,
+            eventRoot: keccak256("events"),
+            handRoot: keccak256("hands"),
+            balanceRoot: keccak256("balances"),
+            totalRake: rake,
+            deadline: block.timestamp + 1 days
+        });
+        bytes[] memory sigs = new bytes[](1);
+        sigs[0] = _signFinalSettlement(settlement);
+
+        ArenaVaultV1.SettlementPlayer[] memory players = new ArenaVaultV1.SettlementPlayer[](2);
+        players[0] = ArenaVaultV1.SettlementPlayer({user: alice, startLocked: aliceBuyIn, endBalance: 5_800 * ONE});
+        players[1] = ArenaVaultV1.SettlementPlayer({user: bob, startLocked: bobBuyIn, endBalance: 4_000 * ONE});
+
+        hub.settle(settlement, players, sigs);
+        assertEq(usdc.totalSupply(), supplyBefore);
         _assertSolvency();
     }
 

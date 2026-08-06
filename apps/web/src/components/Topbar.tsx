@@ -9,7 +9,7 @@ import { money, useSession } from "@/lib/session";
 type Notif = { id: string; title: string; body: string; href: string | null; created_at: string; read_at: string | null };
 
 export function Topbar() {
-  const { me, stats, signOut } = useSession();
+  const { me, stats, loading, signOut } = useSession();
   const { leaveIfSeated } = useLeaveGuard();
   const [open, setOpen] = useState(false);
   const [notifs, setNotifs] = useState<Notif[]>([]);
@@ -22,6 +22,28 @@ export function Topbar() {
   }, [me?.authenticated]);
 
   const liveCount = stats?.activeTables ?? 0;
+  const accountKind = me?.profileKind ?? me?.arenaMode;
+  const isOnchain = accountKind === "onchain";
+  const accountLabel = loading
+    ? "LOADING"
+    : isOnchain
+      ? me?.chainId === 8453
+        ? "ON-CHAIN · BASE"
+        : me?.chainId === 31337
+          ? "CHAIN TEST · mUSDC"
+          : me?.chainId === 84532
+            ? "CHAIN TEST · SEPOLIA"
+            : "ON-CHAIN"
+      : accountKind === "demo"
+        ? "DEMO"
+        : "SESSION ERROR";
+  const accountTitle = isOnchain
+    ? me?.chainId === 8453
+      ? "Live Base USDC custody"
+      : "Valueless test currency — not Circle USDC"
+    : accountKind === "demo"
+      ? "Demo paper account"
+      : "Account is still loading";
   // One player ↔ one agent at a table — only show PLAYERS (not a separate AGENTS count).
   const ticker = [
     { k: "SEATED", v: String(stats?.occupiedSeats ?? 0), d: "", c: "#8A8A8A" },
@@ -100,30 +122,22 @@ export function Topbar() {
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 14, flex: "none" }}>
         <div
-          title={
-            me?.profileKind === "onchain"
-              ? `On-chain · chain ${me.chainId ?? "—"}`
-              : "Demo paper account"
-          }
+          title={accountTitle}
           style={{
             padding: "5px 10px",
             borderRadius: 8,
             border:
-              me?.profileKind === "onchain"
+              isOnchain
                 ? "1px solid rgba(0,230,118,.35)"
                 : "1px solid rgba(255,255,255,.1)",
             background:
-              me?.profileKind === "onchain" ? "rgba(0,230,118,.1)" : "rgba(255,255,255,.04)",
+              isOnchain ? "rgba(0,230,118,.1)" : "rgba(255,255,255,.04)",
             font: "600 10px var(--font-geist-mono), monospace",
             letterSpacing: ".06em",
-            color: me?.profileKind === "onchain" ? "#00E676" : "#9A9A9A",
+            color: isOnchain ? "#00E676" : "#9A9A9A",
           }}
         >
-          {me?.profileKind === "onchain"
-            ? me.chainId === 8453
-              ? "ON-CHAIN · BASE"
-              : "ON-CHAIN · SEPOLIA"
-            : "DEMO"}
+          {accountLabel}
         </div>
         <Link href="/wallet" style={{ display: "flex", alignItems: "center", gap: 14, textDecoration: "none", color: "#EDEDED" }}>
           <div style={{ textAlign: "right" }}>

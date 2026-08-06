@@ -172,7 +172,7 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
       buyIn: toBigIntField(body.buyIn),
       controllerHash: body.controllerHash as Hex,
       agentProfileHash: body.agentProfileHash as Hex,
-      expiresAt: Number(toBigIntField(body.expiresAt)),
+      expiresAt: toBigIntField(body.expiresAt),
       nonce: toBigIntField(body.nonce),
       matchmakingPool: body.matchmakingPool as Hex,
     };
@@ -213,7 +213,7 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
         buyInUsdc,
         controllerHash: body.controllerHash,
         agentProfileHash: body.agentProfileHash,
-        expiresAt: new Date(message.expiresAt * 1000),
+        expiresAt: new Date(Number(message.expiresAt) * 1000),
         nonce: message.nonce,
         matchmakingPool: body.matchmakingPool,
         signature: body.signature,
@@ -377,7 +377,9 @@ export async function handleOnchainFindMatch(
         tickets,
         signatures,
       ],
-    });
+      chain,
+      account,
+    } as any);
     await publicClient.waitForTransactionReceipt({ hash: openTxHash });
     await markBatchSubmitted(batchId, openTxHash);
     await query(

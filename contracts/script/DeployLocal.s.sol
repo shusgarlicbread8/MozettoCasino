@@ -9,7 +9,7 @@ import {PokerSettlementHubV1} from "../src/PokerSettlementHubV1.sol";
 import {CheckpointRegistryV1} from "../src/CheckpointRegistryV1.sol";
 import {RandomnessCoordinatorV1} from "../src/RandomnessCoordinatorV1.sol";
 
-/// @dev Local Anvil deploy. For Base Sepolia, pass USDC_ADDRESS env (Circle native USDC).
+/// @dev Local Anvil deploy — always deploys mintable mUSDC + protocol stack.
 contract DeployLocal is Script {
     bytes32 internal constant NLHE_HU_STANDARD_V1 = keccak256("NLHE_HU_STANDARD_V1");
 
@@ -20,15 +20,13 @@ contract DeployLocal is Script {
 
         vm.startBroadcast(pk);
 
-        address usdcAddr = vm.envOr("USDC_ADDRESS", address(0));
-        if (usdcAddr == address(0)) {
-            MockUSDC mock = new MockUSDC();
-            mock.mint(deployer, 1_000_000e6);
-            usdcAddr = address(mock);
-            console2.log("MockUSDC", usdcAddr);
-        }
+        // Always deploy fresh MockUSDC on Anvil (ignore stale USDC_ADDRESS).
+        MockUSDC usdc = new MockUSDC(deployer);
+        // Unlimited local faucet.
+        usdc.setFaucetPolicy(type(uint256).max, 0, type(uint256).max);
+        usdc.mint(deployer, 100_000_000e6);
 
-        ArenaVaultV1 vault = new ArenaVaultV1(usdcAddr, treasury, deployer);
+        ArenaVaultV1 vault = new ArenaVaultV1(address(usdc), treasury, deployer);
         PokerSettlementHubV1 hub = new PokerSettlementHubV1(address(vault), deployer);
         vault.setSettlementHub(address(hub));
         vault.setSessionRelayer(deployer);
@@ -59,6 +57,7 @@ contract DeployLocal is Script {
             })
         );
 
+        console2.log("MockUSDC", address(usdc));
         console2.log("ArenaVaultV1", address(vault));
         console2.log("PokerSettlementHubV1", address(hub));
         console2.log("TableRegistryV1", address(registry));
@@ -71,7 +70,11 @@ contract DeployLocal is Script {
         string memory json = string.concat(
             "{\n",
             '  "chainId": 31337,\n',
-            '  "usdc": "', vm.toString(usdcAddr), '",\n',
+            '  "usdc": "', vm.toString(address(usdc)), '",\n',
+            '  "symbol": "mUSDC",\n',
+            '  "decimals": 6,\n',
+            '  "isTestAsset": true,\n',
+            '  "faucetEnabled": true,\n',
             '  "arenaVault": "', vm.toString(address(vault)), '",\n',
             '  "tableRegistry": "', vm.toString(address(registry)), '",\n',
             '  "settlementHub": "', vm.toString(address(hub)), '",\n',

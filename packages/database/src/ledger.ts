@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { query } from "./client.js";
-import { type ArenaMode, parseArenaMode } from "./arena-mode.js";
+import {
+  type ArenaMode,
+  parseArenaMode,
+  parseProfileKind,
+  economyForProfile,
+} from "./arena-mode.js";
 
 export type { ArenaMode, ProfileKind } from "./arena-mode.js";
 export {
@@ -276,19 +281,58 @@ export async function listLedger(userId: string, limit = 50, mode?: ArenaMode) {
   return res.rows;
 }
 
-/** Credit on-chain mirrored available balance after a confirmed vault deposit (indexer) or test faucet. */
+/** Credit on-chain mirrored available balance after a confirmed vault deposit (indexer only). */
 export async function creditOnchainDeposit(userId: string, amount: number, txHash: string) {
+  const hash = normalizeTxHash(txHash);
   await ensureModeAccounts(userId, "onchain");
   const available = await accountId(userId, "user_available", "available", "onchain");
   const clearing = await accountId(null, "system_clearing", "clearing", "onchain");
-  const isFaucet = txHash.startsWith("onchain-faucet-") || txHash.startsWith("welcome-faucet-");
   return transfer({
-    idempotencyKey: `onchain-deposit-${txHash}`,
-    description: isFaucet ? `Testnet faucet +$${amount}` : `On-chain vault deposit ${amount}`,
+    idempotencyKey: `onchain-deposit-${hash}`,
+    description: `On-chain vault deposit ${amount}`,
     fromAccountId: clearing,
     toAccountId: available,
     amount,
-    referenceType: isFaucet ? "faucet" : "chain_deposit",
-    referenceId: txHash,
+    referenceType: "chain_deposit",
+    referenceId: hash,
   });
+}
+
+/** Debit on-chain mirrored available balance after a confirmed vault withdrawal (indexer only). */
+export async function debitOnchainWithdrawal(
+  userId: string,
+  amount: number,
+  txHash: string,
+  opts?: { reason?: "withdraw" | "reorg" },
+) {
+  const hash = normalizeTxHash(txHash);
+  const reason = opts?.reason ?? "withdraw";
+  if (amount <= 0) return null;
+  await ensureModeAccounts(userId, "onchain");
+  const available = await accountId(userId, "user_available", "available", "onchain");
+  const clearing = await accountId(null, "system_clearing", "clearing", "onchain");
+  const bal = await getAvailableBalance(userId, "onchain");
+  // Cap debit to available mirror so orphaned historical faucet skew cannot block withdraw mirrors.
+  const debit = Math.min(amount, bal);
+  if (debit <= 0) return null;
+  return transfer({
+    idempotencyKey: `onchain-${reason}-${hash}`,
+    description:
+      reason === "reorg"
+        ? `Reorg rewind deposit ${debit}`
+        : `On-chain vault withdraw ${debit}`,
+    fromAccountId: available,
+    toAccountId: clearing,
+    amount: debit,
+    referenceType: reason === "reorg" ? "chain_reorg" : "chain_withdraw",
+    referenceId: hash,
+  });
+}
+
+function normalizeTxHash(txHash: string): string {
+  const m = txHash.match(/^(0x[a-fA-F0-9]{64})/);
+  if (!m) {
+    throw new Error("On-chain ledger mutations require a real transaction hash from the indexer");
+  }
+  return m[1].toLowerCase();
 }

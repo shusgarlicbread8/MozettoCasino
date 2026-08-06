@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Connector } from "wagmi";
 import {
   useAccount,
   useChainId,
@@ -11,47 +12,136 @@ import {
   useSwitchChain,
 } from "wagmi";
 import { anvil, base, baseSepolia } from "wagmi/chains";
+import { api, ApiError } from "@/lib/api";
+import { createClient } from "@/lib/supabase/client";
+import { preferredChainId } from "@/lib/wagmi";
+
 const localAnvil =
   (process.env.NEXT_PUBLIC_CHAIN_ENV || "").toLowerCase() === "anvil" ||
   (process.env.NEXT_PUBLIC_CHAIN_ENV || "").toLowerCase() === "local";
-import { api, ApiError } from "@/lib/api";
-import { createClient } from "@/lib/supabase/client";
+
+type WalletAccount = {
+  exists: boolean;
+  displayName: string | null;
+};
 
 export default function OnchainPortalPage() {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
-  const { connect, connectors, isPending: connecting, error: connectError } = useConnect();
-  const { disconnect } = useDisconnect();
-  const { switchChain, isPending: switching } = useSwitchChain();
+  const { connectAsync, connectors, isPending: connecting, reset: resetConnect } = useConnect();
+  const { disconnectAsync, isPending: disconnecting } = useDisconnect();
+  const { switchChainAsync, isPending: switching } = useSwitchChain();
   const { signMessageAsync, isPending: signing } = useSignMessage();
 
   const [displayName, setDisplayName] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [authed, setAuthed] = useState(false);
+  const [connectBusy, setConnectBusy] = useState(false);
+  const [walletAccount, setWalletAccount] = useState<WalletAccount | null>(null);
+  const [checkingAccount, setCheckingAccount] = useState(false);
+
+  const walletButtons = useMemo(() => dedupeConnectors(connectors), [connectors]);
 
   useEffect(() => {
-    api<{ profileKind?: string; profile?: { display_name?: string } }>("/v1/me")
-      .then((me) => {
-        if (me.profileKind === "onchain") {
-          setAuthed(true);
-          if (me.profile?.display_name) setDisplayName(me.profile.display_name);
+    if (!address) {
+      setWalletAccount(null);
+      setCheckingAccount(false);
+      setAuthed(false);
+      setDisplayName("");
+      return;
+    }
+
+    let active = true;
+    setCheckingAccount(true);
+    setStatus(null);
+
+    Promise.all([
+      api<WalletAccount>(`/v1/auth/wallet/account?address=${address}`),
+      api<{
+        profileKind?: string;
+        walletAddress?: string;
+        session?: { walletAddress?: string };
+      }>("/v1/me").catch(() => null),
+    ])
+      .then(([account, me]) => {
+        if (!active) return;
+        setWalletAccount(account);
+        setDisplayName(account.displayName ?? "");
+        const sessionWallet = me?.walletAddress ?? me?.session?.walletAddress;
+        setAuthed(
+          me?.profileKind === "onchain" &&
+            Boolean(sessionWallet) &&
+            sessionWallet?.toLowerCase() === address.toLowerCase(),
+        );
+      })
+      .catch((error) => {
+        if (active) {
+          setWalletAccount(null);
+          setAuthed(false);
+          setStatus(error instanceof Error ? error.message : "Could not check this wallet.");
         }
       })
-      .catch(() => setAuthed(false));
-  }, []);
+      .finally(() => {
+        if (active) setCheckingAccount(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [address]);
+
+  const connectWallet = useCallback(
+    async (connector: Connector) => {
+      setStatus(null);
+      setConnectBusy(true);
+      resetConnect();
+      try {
+        // Already linked — skip connect (and never disconnect first: that breaks the
+        // user-gesture chain and MetaMask only flashes its toolbar icon).
+        if (isConnected) {
+          setStatus(null);
+          return;
+        }
+
+        await connectAsync({
+          connector,
+          chainId: preferredChainId,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Connection failed";
+        // Already linked in this tab — treat as success and show the sign-in step.
+        if (/already connected/i.test(msg)) {
+          setStatus(null);
+          return;
+        }
+        if (/rejected|denied|user rejected/i.test(msg)) {
+          setStatus("Connection cancelled in the wallet.");
+          return;
+        }
+        setStatus(friendlyConnectError(msg));
+      } finally {
+        setConnectBusy(false);
+      }
+    },
+    [connectAsync, isConnected, resetConnect],
+  );
 
   const signIn = useCallback(async () => {
     if (!address) return;
+    if (!walletAccount) {
+      setStatus("Still checking this wallet. Try again in a moment.");
+      return;
+    }
+    const isReturning = walletAccount.exists;
     const name = displayName.trim();
-    if (name.length < 2 || name.length > 48) {
+    if (!isReturning && (name.length < 2 || name.length > 48)) {
       setStatus("Pick a display name (2–48 characters) before signing in.");
       return;
     }
     setBusy(true);
     setStatus(null);
     try {
-      // Clear any Demo Supabase session so Bearer can't override the wallet cookie.
       try {
         await createClient().auth.signOut();
       } catch {
@@ -59,37 +149,53 @@ export default function OnchainPortalPage() {
       }
 
       let useChain = chainId;
-      const allowed = new Set([anvil.id, baseSepolia.id, base.id]);
+      const allowed = new Set<number>([anvil.id, baseSepolia.id, base.id]);
       if (!allowed.has(useChain)) {
-        const target = localAnvil ? anvil.id : baseSepolia.id;
-        await switchChainAsync(switchChain, target);
-        useChain = target;
+        try {
+          await switchChainAsync({ chainId: preferredChainId });
+          useChain = preferredChainId;
+        } catch {
+          useChain = preferredChainId;
+        }
       }
+
       const nonceRes = await api<{ message: string; chainId: number }>(
         `/v1/auth/wallet/nonce?address=${address}&chainId=${useChain}`,
       );
+      // Must stay in the same user gesture chain after connect for MetaMask to surface the popup.
       const signature = await signMessageAsync({ message: nonceRes.message });
-      const res = await api<{ welcomeFaucet?: number }>("/v1/auth/wallet/verify", {
+      const res = await api<{
+        user?: { displayName?: string };
+        isNewAccount?: boolean;
+        welcomeFaucet?: number;
+      }>("/v1/auth/wallet/verify", {
         method: "POST",
         body: JSON.stringify({
           address,
           chainId: nonceRes.chainId,
           message: nonceRes.message,
           signature,
-          displayName: name,
+          displayName: isReturning ? undefined : name,
         }),
       });
       setAuthed(true);
+      const signedInName = res.user?.displayName || walletAccount.displayName || name;
       const funded = res.welcomeFaucet ? ` Funded with $${res.welcomeFaucet.toLocaleString()} test chips.` : "";
-      setStatus(`Signed in as ${name}.${funded} Entering arena…`);
+      setStatus(`${res.isNewAccount ? "Account created" : "Welcome back"}, ${signedInName}.${funded} Entering arena…`);
       window.location.href = "/home";
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Sign-in failed";
-      setStatus(msg);
+      if (/rejected|denied|user rejected/i.test(msg)) {
+        setStatus("Signature cancelled in MetaMask — click Sign in again.");
+      } else {
+        setStatus(msg);
+      }
     } finally {
       setBusy(false);
     }
-  }, [address, chainId, displayName, signMessageAsync, switchChain]);
+  }, [address, chainId, displayName, signMessageAsync, switchChainAsync, walletAccount]);
+
+  const pending = connecting || connectBusy || disconnecting;
 
   return (
     <main
@@ -109,8 +215,8 @@ export default function OnchainPortalPage() {
           On-chain Arena
         </h1>
         <p style={{ margin: "0 0 28px", color: "#8A8A8A", fontSize: 15, lineHeight: 1.5 }}>
-          Separate wallet account on Base. Choose a display name — your full address stays private in
-          the UI. Sepolia gets free test chips on first sign-in.
+          Connect once, then sign a secure message to enter. Returning players keep their identity;
+          new players choose a display name after connecting.
         </p>
 
         <div
@@ -121,35 +227,6 @@ export default function OnchainPortalPage() {
             padding: 22,
           }}
         >
-          <label style={{ display: "block", marginBottom: 18 }}>
-            <div
-              style={{
-                font: "500 11px var(--font-geist-mono), monospace",
-                color: "#00E676",
-                letterSpacing: ".08em",
-                marginBottom: 8,
-              }}
-            >
-              DISPLAY NAME
-            </div>
-            <input
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="e.g. SKU"
-              maxLength={48}
-              style={{
-                width: "100%",
-                boxSizing: "border-box",
-                padding: "12px 14px",
-                borderRadius: 10,
-                border: "1px solid rgba(255,255,255,.12)",
-                background: "#0A0A0A",
-                color: "#EDEDED",
-                fontSize: 15,
-              }}
-            />
-          </label>
-
           <div
             style={{
               font: "500 11px var(--font-geist-mono), monospace",
@@ -165,54 +242,122 @@ export default function OnchainPortalPage() {
                 label="Anvil (local)"
                 active={chainId === anvil.id}
                 disabled={switching}
-                onClick={() => switchChain?.({ chainId: anvil.id })}
+                onClick={() => void switchChainAsync({ chainId: anvil.id }).catch(() => null)}
               />
             )}
             <NetBtn
               label="Base Sepolia"
               active={chainId === baseSepolia.id}
               disabled={switching}
-              onClick={() => switchChain?.({ chainId: baseSepolia.id })}
+              onClick={() => void switchChainAsync({ chainId: baseSepolia.id }).catch(() => null)}
             />
             <NetBtn
               label="Base Mainnet"
               active={chainId === base.id}
               disabled={switching}
-              onClick={() => switchChain?.({ chainId: base.id })}
+              onClick={() => void switchChainAsync({ chainId: base.id }).catch(() => null)}
             />
           </div>
 
           {!isConnected ? (
             <div style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 10 }}>
-              {connectors.map((c) => (
+              <div style={{ marginBottom: 2 }}>
+                <div style={{ color: "#EDEDED", fontSize: 17, fontWeight: 600 }}>Connect your wallet</div>
+                <div style={{ color: "#707070", fontSize: 13, marginTop: 5 }}>
+                  We’ll recognize your account automatically.
+                </div>
+              </div>
+              {walletButtons.map((c) => (
                 <button
                   key={c.uid}
                   type="button"
-                  disabled={connecting}
-                  onClick={() => connect({ connector: c })}
+                  disabled={pending}
+                  onClick={() => void connectWallet(c)}
                   style={primaryBtn}
                 >
-                  {connecting ? "Connecting…" : `Connect ${c.name}`}
+                  {pending ? "Opening wallet…" : `Connect ${c.name}`}
                 </button>
               ))}
-              {connectError && (
-                <p style={{ color: "#FF8A8A", fontSize: 13, margin: 0 }}>{connectError.message}</p>
-              )}
+              <p style={{ margin: "4px 0 0", fontSize: 12, color: "#636363", lineHeight: 1.45 }}>
+                If MetaMask does not open, click the extension icon in your browser toolbar — some
+                browsers block the popup until you focus it once.
+              </p>
+            </div>
+          ) : checkingAccount ? (
+            <div style={identityCard}>
+              <div style={{ color: "#8A8A8A", fontSize: 14 }}>Checking your player profile…</div>
+              <div style={{ ...walletText, marginTop: 8 }}>{shortAddr(address)}</div>
             </div>
           ) : (
             <div style={{ marginTop: 22 }}>
-              <div style={{ font: "400 12px var(--font-geist-mono), monospace", color: "#8A8A8A" }}>
-                {shortAddr(address)}
+              {walletAccount?.exists ? (
+                <div style={identityCard}>
+                  <div style={eyebrow}>WELCOME BACK</div>
+                  <div style={{ fontSize: 24, fontWeight: 600, letterSpacing: "-.025em", marginTop: 7 }}>
+                    {walletAccount.displayName}
+                  </div>
+                  <div style={{ ...walletText, marginTop: 7 }}>{shortAddr(address)}</div>
+                  <div style={{ color: "#777", fontSize: 12, marginTop: 10 }}>
+                    Your existing player profile is ready.
+                  </div>
+                </div>
+              ) : (
+                <label style={{ display: "block" }}>
+                  <div style={eyebrow}>CREATE YOUR PLAYER IDENTITY</div>
+                  <div style={{ color: "#858585", fontSize: 13, lineHeight: 1.45, margin: "7px 0 12px" }}>
+                    First time here. Pick the name other players will see.
+                  </div>
+                  <input
+                    autoFocus
+                    value={displayName}
+                    onChange={(e) => {
+                      setDisplayName(e.target.value);
+                      setStatus(null);
+                    }}
+                    placeholder="Display name"
+                    minLength={2}
+                    maxLength={48}
+                    autoComplete="nickname"
+                    style={nameInput}
+                  />
+                  <div style={{ ...walletText, marginTop: 9 }}>Wallet · {shortAddr(address)}</div>
+                </label>
+              )}
+              {!walletAccount && (
+                <div style={{ color: "#FF8A8A", fontSize: 13 }}>
+                  We couldn’t load this wallet’s profile. Try disconnecting and reconnecting.
+                </div>
+              )}
+              <div style={{ color: "#666", fontSize: 12, lineHeight: 1.45, marginTop: 15 }}>
+                Signing is free and does not submit a transaction.
               </div>
               <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
                 {!authed ? (
                   <button
                     type="button"
-                    disabled={busy || signing}
+                    disabled={
+                      busy ||
+                      signing ||
+                      !walletAccount ||
+                      (!walletAccount.exists &&
+                        (displayName.trim().length < 2 || displayName.trim().length > 48))
+                    }
                     onClick={() => void signIn()}
-                    style={primaryBtn}
+                    style={{
+                      ...primaryBtn,
+                      opacity:
+                        !walletAccount ||
+                        (!walletAccount.exists &&
+                          (displayName.trim().length < 2 || displayName.trim().length > 48))
+                          ? 0.5
+                          : 1,
+                    }}
                   >
-                    {busy || signing ? "Signing…" : "Sign in with Ethereum"}
+                    {busy || signing
+                      ? "Check MetaMask…"
+                      : walletAccount?.exists
+                        ? `Sign in as ${walletAccount.displayName}`
+                        : "Create account & sign in"}
                   </button>
                 ) : (
                   <Link
@@ -225,9 +370,18 @@ export default function OnchainPortalPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    disconnect();
-                    setAuthed(false);
-                    void api("/v1/auth/logout", { method: "POST" }).catch(() => null);
+                    void (async () => {
+                      try {
+                        await disconnectAsync();
+                      } catch {
+                        /* ignore */
+                      }
+                      setAuthed(false);
+                      setWalletAccount(null);
+                      setDisplayName("");
+                      resetConnect();
+                      void api("/v1/auth/logout", { method: "POST" }).catch(() => null);
+                    })();
                   }}
                   style={ghostBtn}
                 >
@@ -258,6 +412,30 @@ export default function OnchainPortalPage() {
       </div>
     </main>
   );
+}
+
+/** Prefer MetaMask / Coinbase labels; drop duplicate “Injected” siblings. */
+function dedupeConnectors(connectors: readonly Connector[]) {
+  const seen = new Set<string>();
+  const out: Connector[] = [];
+  for (const c of connectors) {
+    const key = c.id || c.name;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(c);
+  }
+  return out.sort((a, b) => {
+    const rank = (n: string) =>
+      /metamask/i.test(n) ? 0 : /coinbase/i.test(n) ? 1 : /walletconnect/i.test(n) ? 2 : 3;
+    return rank(a.name) - rank(b.name);
+  });
+}
+
+function friendlyConnectError(msg: string) {
+  if (/provider not found|no ethereum/i.test(msg)) {
+    return "No wallet detected. Install MetaMask (or unlock it) and refresh.";
+  }
+  return msg.replace(/\s*Version:\s*@wagmi\/core@[\d.]+/i, "").trim();
 }
 
 function shortAddr(addr?: string) {
@@ -296,17 +474,6 @@ function NetBtn({
   );
 }
 
-async function switchChainAsync(
-  switchChain: ReturnType<typeof useSwitchChain>["switchChain"],
-  id: number,
-) {
-  try {
-    await switchChain?.({ chainId: id });
-  } catch {
-    /* ignore */
-  }
-}
-
 const primaryBtn: React.CSSProperties = {
   padding: "12px 18px",
   borderRadius: 10,
@@ -326,4 +493,35 @@ const ghostBtn: React.CSSProperties = {
   color: "#9A9A9A",
   fontSize: 14,
   cursor: "pointer",
+};
+
+const identityCard: React.CSSProperties = {
+  marginTop: 22,
+  padding: "17px 18px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,.09)",
+  background: "rgba(0,0,0,.28)",
+};
+
+const eyebrow: React.CSSProperties = {
+  font: "600 11px var(--font-geist-mono), monospace",
+  color: "#00E676",
+  letterSpacing: ".09em",
+};
+
+const walletText: React.CSSProperties = {
+  font: "400 12px var(--font-geist-mono), monospace",
+  color: "#777",
+};
+
+const nameInput: React.CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "13px 14px",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,.14)",
+  outline: "none",
+  background: "#090909",
+  color: "#EDEDED",
+  fontSize: 15,
 };

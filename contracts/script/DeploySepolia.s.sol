@@ -2,13 +2,14 @@
 pragma solidity ^0.8.24;
 
 import {Script, console2} from "forge-std/Script.sol";
+import {MockUSDC} from "../src/MockUSDC.sol";
 import {ArenaVaultV1} from "../src/ArenaVaultV1.sol";
 import {TableRegistryV1} from "../src/TableRegistryV1.sol";
 import {PokerSettlementHubV1} from "../src/PokerSettlementHubV1.sol";
 import {CheckpointRegistryV1} from "../src/CheckpointRegistryV1.sol";
 import {RandomnessCoordinatorV1} from "../src/RandomnessCoordinatorV1.sol";
 
-/// @dev Base Sepolia — uses Circle native USDC.
+/// @dev Base Sepolia — Circle USDC by default; set USE_MOCK_USDC=1 for mintable mUSDC.
 contract DeploySepolia is Script {
     address constant CIRCLE_USDC_SEPOLIA = 0x036CbD53842c5426634e7929541eC2318f3dCF7e;
     bytes32 internal constant NLHE_HU_STANDARD_V1 = keccak256("NLHE_HU_STANDARD_V1");
@@ -17,9 +18,29 @@ contract DeploySepolia is Script {
         uint256 pk = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(pk);
         address treasury = vm.envOr("FEE_TREASURY", deployer);
-        address usdc = vm.envOr("USDC_ADDRESS", CIRCLE_USDC_SEPOLIA);
+        bool useMock = vm.envOr("USE_MOCK_USDC", false);
 
         vm.startBroadcast(pk);
+
+        address usdc;
+        bool isTestAsset = false;
+        bool faucetEnabled = false;
+        string memory symbol = "USDC";
+
+        if (useMock) {
+            MockUSDC mock = new MockUSDC(deployer);
+            // Staging policy: 100k per request, 10 min cooldown, 1M wallet cap.
+            mock.setFaucetPolicy(100_000e6, 10 minutes, 1_000_000e6);
+            mock.mint(deployer, 10_000_000e6);
+            usdc = address(mock);
+            isTestAsset = true;
+            faucetEnabled = true;
+            symbol = "mUSDC";
+            console2.log("MockUSDC (Sepolia staging)", usdc);
+        } else {
+            usdc = vm.envOr("USDC_ADDRESS", CIRCLE_USDC_SEPOLIA);
+            console2.log("Circle USDC", usdc);
+        }
 
         ArenaVaultV1 vault = new ArenaVaultV1(usdc, treasury, deployer);
         PokerSettlementHubV1 hub = new PokerSettlementHubV1(address(vault), deployer);
@@ -52,7 +73,6 @@ contract DeploySepolia is Script {
             })
         );
 
-        console2.log("USDC", usdc);
         console2.log("ArenaVaultV1", address(vault));
         console2.log("PokerSettlementHubV1", address(hub));
         console2.log("TableRegistryV1", address(registry));
@@ -66,6 +86,10 @@ contract DeploySepolia is Script {
             "{\n",
             '  "chainId": 84532,\n',
             '  "usdc": "', vm.toString(usdc), '",\n',
+            '  "symbol": "', symbol, '",\n',
+            '  "decimals": 6,\n',
+            '  "isTestAsset": ', isTestAsset ? "true" : "false", ",\n",
+            '  "faucetEnabled": ', faucetEnabled ? "true" : "false", ",\n",
             '  "arenaVault": "', vm.toString(address(vault)), '",\n',
             '  "tableRegistry": "', vm.toString(address(registry)), '",\n',
             '  "settlementHub": "', vm.toString(address(hub)), '",\n',

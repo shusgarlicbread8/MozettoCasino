@@ -16,7 +16,10 @@ export type ChainConfig = {
   chainId: number;
   name: string;
   usdc: `0x${string}`;
+  symbol: string;
+  decimals: number;
   usdcIsMock: boolean;
+  faucetEnabled: boolean;
   rpcUrlEnv: string;
   wsUrlEnv: string;
   protocolVersion: string;
@@ -62,7 +65,10 @@ export function getChainConfig(env?: ChainEnv): ChainConfig {
     chainId: m.chainId,
     name: names[network],
     usdc: m.usdc,
-    usdcIsMock: network === "anvil",
+    symbol: m.symbol,
+    decimals: m.decimals,
+    usdcIsMock: m.isTestAsset,
+    faucetEnabled: m.faucetEnabled,
     rpcUrlEnv:
       network === "anvil"
         ? "ANVIL_RPC_URL"

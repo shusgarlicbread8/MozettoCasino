@@ -132,7 +132,7 @@ export async function claimTicketPair(opts: {
   try {
     await client.query("begin");
 
-    const selfRes = await client.query<SeatTicketRow>(
+    const selfRes = await client.query(
       `select id::text, profile_id::text, wallet_address, buy_in::text, controller_hash, agent_profile_hash,
               expires_at, nonce::text, matchmaking_pool, signature, game_template_id
        from seat_tickets
@@ -140,13 +140,13 @@ export async function claimTicketPair(opts: {
        for update`,
       [opts.selfTicketId, opts.profileId],
     );
-    const self = selfRes.rows[0];
+    const self = selfRes.rows[0] as SeatTicketRow | undefined;
     if (!self) {
       await client.query("rollback");
       return null;
     }
 
-    const oppRes = await client.query<SeatTicketRow>(
+    const oppRes = await client.query(
       `select id::text, profile_id::text, wallet_address, buy_in::text, controller_hash, agent_profile_hash,
               expires_at, nonce::text, matchmaking_pool, signature, game_template_id
        from seat_tickets
@@ -157,7 +157,7 @@ export async function claimTicketPair(opts: {
        for update skip locked`,
       [opts.chainId, opts.matchmakingPool, opts.buyInUsdc, opts.profileId],
     );
-    const opponent = oppRes.rows[0];
+    const opponent = oppRes.rows[0] as SeatTicketRow | undefined;
     if (!opponent) {
       await client.query("rollback");
       return null;

@@ -10,6 +10,10 @@ export type NetworkKey = "anvil" | "baseSepolia" | "base";
 export type ChainManifestEntry = {
   chainId: number;
   usdc: HexAddress;
+  symbol: string;
+  decimals: number;
+  isTestAsset: boolean;
+  faucetEnabled: boolean;
   arenaVault: HexAddress | null;
   tableRegistry: HexAddress | null;
   settlementHub: HexAddress | null;
@@ -26,14 +30,18 @@ export type ChainManifestEntry = {
 export const chainManifest = {
   anvil: {
     chainId: 31337,
-    usdc: "0x5FbDB2315678afecb367f032d93F642f64180aa3" as HexAddress,
-    arenaVault: "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0" as HexAddress,
-    tableRegistry: "0x0165878A594ca255338adfa4d48449f69242Eb8F" as HexAddress,
-    settlementHub: "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9" as HexAddress,
-    checkpointRegistry: "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853" as HexAddress,
-    randomnessCoordinator: "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6" as HexAddress,
+    usdc: "0x74Df809b1dfC099E8cdBc98f6a8D1F5c2C3f66f8" as HexAddress,
+    symbol: "mUSDC",
+    decimals: 6,
+    isTestAsset: true,
+    faucetEnabled: true,
+    arenaVault: "0x4DAf17c8142A483B2E2348f56ae0F2cFDAe22ceE" as HexAddress,
+    tableRegistry: "0x618fB9dbd2BD6eb968B4c1af36af6CB0b45310Ec" as HexAddress,
+    settlementHub: "0x1D13fF25b10C9a6741DFdce229073bed652197c7" as HexAddress,
+    checkpointRegistry: "0xa779C1D17bC5230c07afdC51376CAC1cb3Dd5314" as HexAddress,
+    randomnessCoordinator: "0x76cec9299B6Fa418dc71416FF353737AB7933A7D" as HexAddress,
     feeTreasury: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" as HexAddress,
-    deploymentBlock: 6n,
+    deploymentBlock: BigInt(9061),
     protocolVersion: "1.0.0-anvil",
     vrfCoordinator: null,
     vrfKeyHash: null,
@@ -41,13 +49,17 @@ export const chainManifest = {
   baseSepolia: {
     chainId: 84532,
     usdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as HexAddress,
+    symbol: "USDC",
+    decimals: 6,
+    isTestAsset: false,
+    faucetEnabled: false,
     arenaVault: null,
     tableRegistry: null,
     settlementHub: null,
     checkpointRegistry: null,
     randomnessCoordinator: null,
     feeTreasury: null,
-    deploymentBlock: 0n,
+    deploymentBlock: BigInt(0),
     protocolVersion: "1.0.0-sepolia",
     vrfCoordinator: "0x5C210eF41CD1a72a13DcB20c28948D40729fEFFb" as HexAddress,
     vrfKeyHash: "0x9e1344a1247c8a1785d0a4681a27152bffdb43666ae28ee20d8c6dff7f9c1a30" as `0x${string}`,
@@ -55,13 +67,17 @@ export const chainManifest = {
   base: {
     chainId: 8453,
     usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as HexAddress,
+    symbol: "USDC",
+    decimals: 6,
+    isTestAsset: false,
+    faucetEnabled: false,
     arenaVault: null,
     tableRegistry: null,
     settlementHub: null,
     checkpointRegistry: null,
     randomnessCoordinator: null,
     feeTreasury: null,
-    deploymentBlock: 0n,
+    deploymentBlock: BigInt(0),
     protocolVersion: "1.0.0",
     vrfCoordinator: "0xd5D517aBE5cF79B7e95eC98dB0f0277788aFF634" as HexAddress,
     vrfKeyHash: null,

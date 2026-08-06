@@ -7,36 +7,52 @@ import {
   useChainId,
   useReadContract,
   useWriteContract,
-  useWaitForTransactionReceipt,
   usePublicClient,
+  useSwitchChain,
 } from "wagmi";
 import { api } from "@/lib/api";
+import { useSession } from "@/lib/session";
 import {
   arenaVaultAbi,
-  arenaVaultAddress,
   erc20Abi,
-  usdcAddresses,
+  getChainAsset,
+  preferredChainId,
 } from "@/lib/wagmi";
 
 /** On-chain vault deposit / withdraw — mirror credits come from chain-indexer only. */
 export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
-  const { address } = useAccount();
+  const { address, isConnected } = useAccount();
   const chainId = useChainId();
+  const { me } = useSession();
   const publicClient = usePublicClient();
+  const { switchChainAsync } = useSwitchChain();
   const [amount, setAmount] = useState("100");
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const vault = arenaVaultAddress;
-  const usdc = usdcAddresses[chainId as keyof typeof usdcAddresses];
-  const { writeContractAsync, data: hash, isPending } = useWriteContract();
-  const { isLoading: confirming } = useWaitForTransactionReceipt({ hash });
+  const asset = getChainAsset(chainId);
+  const vault = asset?.vault ?? null;
+  const usdc = asset?.usdc;
+  const symbol = asset?.symbol ?? "USDC";
+  const { writeContractAsync, isPending } = useWriteContract();
 
-  const { data: walletBal } = useReadContract({
+  const sessionWallet = me?.walletAddress?.toLowerCase() ?? null;
+  const walletMatch =
+    Boolean(address && sessionWallet && address.toLowerCase() === sessionWallet);
+
+  const { data: walletBal, refetch: refetchWallet } = useReadContract({
     address: usdc,
     abi: erc20Abi,
     functionName: "balanceOf",
     args: address ? [address] : undefined,
     query: { enabled: Boolean(address && usdc) },
+  });
+
+  const { data: allowance, refetch: refetchAllowance } = useReadContract({
+    address: usdc,
+    abi: erc20Abi,
+    functionName: "allowance",
+    args: address && vault ? [address, vault] : undefined,
+    query: { enabled: Boolean(address && usdc && vault) },
   });
 
   const { data: vaultAvail, refetch: refetchVault } = useReadContract({
@@ -47,18 +63,51 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
     query: { enabled: Boolean(address && vault) },
   });
 
+  if (chainId === 8453 && asset?.isTestAsset) {
+    return (
+      <div style={{ marginTop: 16, color: "#FF8A8A", fontSize: 13 }}>
+        MockUSDC is forbidden on Base Mainnet.
+      </div>
+    );
+  }
+
   if (!vault) {
     return (
       <div style={{ marginTop: 16, fontSize: 13, color: "#8A8A8A", lineHeight: 1.5 }}>
-        Vault contract not configured. Set <code>NEXT_PUBLIC_ARENA_VAULT_ADDRESS</code> from the
-        chain manifest after deploy. Use the Sepolia test faucet for ledger-only chips while the
-        vault is unset.
+        ArenaVault is not deployed on this network yet. Switch to{" "}
+        <strong>Anvil (local)</strong> for CHAIN TEST with mUSDC, or wait for a Sepolia deploy.
       </div>
     );
   }
 
   if (!usdc) {
-    return <div style={{ marginTop: 16, color: "#FF8A8A", fontSize: 13 }}>Switch to Base or Base Sepolia.</div>;
+    return (
+      <div style={{ marginTop: 16, color: "#FF8A8A", fontSize: 13 }}>
+        Unknown chain — switch to Anvil, Base Sepolia, or Base.
+      </div>
+    );
+  }
+
+  async function ensureReady(): Promise<boolean> {
+    if (!isConnected || !address) {
+      setMsg("Connect the wallet you used at /onchain first.");
+      return false;
+    }
+    if (!walletMatch) {
+      setMsg(
+        `Wrong wallet connected. Switch MetaMask to ${sessionWallet?.slice(0, 6)}…${sessionWallet?.slice(-4)}.`,
+      );
+      return false;
+    }
+    if (me?.chainId && chainId !== me.chainId) {
+      try {
+        await switchChainAsync({ chainId: me.chainId as typeof preferredChainId });
+      } catch {
+        setMsg(`Switch MetaMask to chain ${me.chainId} to continue.`);
+        return false;
+      }
+    }
+    return true;
   }
 
   async function pollMirror(prevAvailable: number) {
@@ -78,20 +127,37 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
   }
 
   async function deposit() {
-    if (!address || !vault || !publicClient) return;
+    if (!address || !vault || !publicClient || !usdc) return;
     setMsg(null);
     setBusy(true);
     try {
+      if (!(await ensureReady())) return;
       const before = ((await api("/v1/wallet").catch(() => null)) as { available?: number } | null)
         ?.available ?? 0;
       const raw = parseUnits(amount || "0", 6);
-      const approveHash = await writeContractAsync({
-        address: usdc,
-        abi: erc20Abi,
-        functionName: "approve",
-        args: [vault as `0x${string}`, raw],
-      });
-      await publicClient.waitForTransactionReceipt({ hash: approveHash });
+      if (raw <= 0n) {
+        setMsg("Enter a deposit amount.");
+        return;
+      }
+      if (walletBal != null && (walletBal as bigint) < raw) {
+        setMsg(`Insufficient ${symbol} in MetaMask. Use Get Test mUSDC first.`);
+        return;
+      }
+
+      const currentAllowance = (allowance as bigint | undefined) ?? 0n;
+      if (currentAllowance < raw) {
+        setMsg(`Confirm MetaMask: approve ${symbol} spending…`);
+        const approveHash = await writeContractAsync({
+          address: usdc,
+          abi: erc20Abi,
+          functionName: "approve",
+          args: [vault as `0x${string}`, raw],
+        });
+        await publicClient.waitForTransactionReceipt({ hash: approveHash });
+        void refetchAllowance();
+      }
+
+      setMsg("Confirm MetaMask: deposit into ArenaVault…");
       const tx = await writeContractAsync({
         address: vault as `0x${string}`,
         abi: arenaVaultAbi,
@@ -100,10 +166,12 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
       });
       setMsg("Deposit confirmed on-chain. Waiting for indexer…");
       await publicClient.waitForTransactionReceipt({ hash: tx });
+      void refetchWallet();
+      void refetchVault();
       const mirrored = await pollMirror(before);
       setMsg(
         mirrored
-          ? "Deposit indexed — mirror balance updated."
+          ? "Deposit indexed — playable balance updated."
           : "Deposit on-chain. Indexer mirror still pending — refresh shortly.",
       );
       onUpdated?.();
@@ -119,7 +187,9 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
     setMsg(null);
     setBusy(true);
     try {
+      if (!(await ensureReady())) return;
       const raw = parseUnits(amount || "0", 6);
+      setMsg("Confirm MetaMask: withdraw from ArenaVault…");
       const tx = await writeContractAsync({
         address: vault as `0x${string}`,
         abi: arenaVaultAbi,
@@ -127,8 +197,9 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
         args: [raw, address],
       });
       await publicClient.waitForTransactionReceipt({ hash: tx });
-      setMsg("Withdraw confirmed on-chain.");
+      setMsg("Withdraw confirmed on-chain. Indexer will update playable balance.");
       void refetchVault();
+      void refetchWallet();
       onUpdated?.();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Withdraw failed");
@@ -150,14 +221,22 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
       <div style={{ font: "600 11px var(--font-geist-mono), monospace", color: "#00E676" }}>
         ARENA VAULT
       </div>
-      <div style={{ marginTop: 10, fontSize: 13, color: "#9A9A9A" }}>
-        Wallet USDC: {walletBal != null ? formatUnits(walletBal as bigint, 6) : "—"} · Vault available:{" "}
-        {vaultAvail != null ? formatUnits(vaultAvail as bigint, 6) : "—"}
+      <div style={{ marginTop: 10, fontSize: 13, color: "#9A9A9A", lineHeight: 1.55 }}>
+        Wallet {symbol}: {walletBal != null ? formatUnits(walletBal as bigint, 6) : "—"}
+        <br />
+        Vault available: {vaultAvail != null ? formatUnits(vaultAvail as bigint, 6) : "—"}
+        <br />
+        Allowance: {allowance != null ? formatUnits(allowance as bigint, 6) : "—"}
       </div>
       <p style={{ margin: "8px 0 0", fontSize: 11, color: "#636363" }}>
-        Available balance in the UI updates after the chain indexer confirms the Deposited event —
-        the client never credits itself.
+        Deposit requires two MetaMask steps when allowance is low: approve, then deposit. Playable
+        balance updates after the indexer confirms the Deposited event.
       </p>
+      {!walletMatch && isConnected && (
+        <p style={{ margin: "8px 0 0", fontSize: 12, color: "#FF8A8A" }}>
+          Connected wallet does not match your signed-in on-chain account.
+        </p>
+      )}
       <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
         <input
           value={amount}
@@ -171,12 +250,12 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
             color: "#EDEDED",
           }}
         />
-        <button type="button" disabled={isPending || confirming || busy} onClick={() => void deposit()} style={btn}>
+        <button type="button" disabled={isPending || busy} onClick={() => void deposit()} style={btn}>
           Deposit
         </button>
         <button
           type="button"
-          disabled={isPending || confirming || busy}
+          disabled={isPending || busy}
           onClick={() => void withdraw()}
           style={{ ...btn, background: "transparent", color: "#BABABA", border: "1px solid rgba(255,255,255,.14)" }}
         >

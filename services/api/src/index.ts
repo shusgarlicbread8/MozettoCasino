@@ -18,7 +18,6 @@ import {
   ARENA_LEAGUES,
   InsufficientFundsError,
   getUserArenaMode,
-  creditOnchainDeposit,
   ensureModeAccounts,
   getProfileKind,
 } from "@mozetto/database";
@@ -29,6 +28,15 @@ import { handleOnchainFindMatch, registerArenaOnchainRoutes } from "./arena-onch
 import { registerAdminRoutes, registerVerifyRoutes } from "./admin.js";
 
 const GAME_HTTP = process.env.NEXT_PUBLIC_GAME_HTTP_URL ?? "http://localhost:4001";
+
+function publicChainConfig(env?: Parameters<typeof getChainConfig>[0]) {
+  const chain = getChainConfig(env);
+  return {
+    ...chain,
+    // Manifests use bigint internally for viem, but HTTP JSON cannot serialize bigint.
+    deploymentBlock: Number(chain.deploymentBlock),
+  };
+}
 
 const app = Fastify({ logger: true });
 await app.register(cookie);
@@ -104,14 +112,14 @@ app.get("/v1/me", async (req, reply) => {
     walletAddress: session.walletAddress,
     available: await getAvailableBalance(userId, arenaMode),
     atTables: await getEscrowBalance(userId, arenaMode),
-    chain: getChainConfig(
+    chain: publicChainConfig(
       session.chainId === 8453 ? "base" : session.chainId === 84532 ? "base-sepolia" : undefined,
     ),
   };
 });
 
 app.get("/v1/chain", async () => {
-  return { chain: getChainConfig() };
+  return { chain: publicChainConfig() };
 });
 
 /** Commit a mock randomness seed-batch root (Anvil / ops). Production uses Chainlink VRF. */
@@ -403,7 +411,7 @@ app.get("/v1/wallet", async (req, reply) => {
     currency: "USDC",
     ledger,
     sessions: sessions.rows,
-    chain: getChainConfig(
+    chain: publicChainConfig(
       session.chainId === 8453 ? "base" : session.chainId === 84532 ? "base-sepolia" : undefined,
     ),
   };
@@ -418,43 +426,77 @@ app.post("/v1/wallet/deposit", async (req, reply) => {
   return { available: await getAvailableBalance(session.profileId, "demo"), profileKind: "demo" };
 });
 
-/** Testnet only: credit on-chain ledger mirror (requires wallet SIWE session). */
+/** Retired: ledger-only faucet. Use on-chain MockUSDC.faucet() from the wallet UI. */
 app.post("/v1/wallet/onchain/faucet", async (req, reply) => {
   const session = await requireUser(req, reply);
   if (!session) return;
-  if (session.profileKind !== "onchain") {
-    return reply.code(403).send({
-      error: "wrong_world",
-      message: "Faucet is only for on-chain wallet accounts. Sign out of Demo and sign in at /onchain.",
-    });
-  }
-  // Allow when chain is Sepolia or unset; block Base mainnet only.
-  if (session.chainId === 8453) {
+  if (session.chainId === 8453 || process.env.MOZETTO_CHAIN_ENV === "base") {
     return reply.code(403).send({
       error: "faucet_disabled",
-      message: "Switch to Base Sepolia in the On-chain portal to use the test faucet.",
+      message: "MockUSDC faucet is forbidden on Base Mainnet.",
     });
   }
-  if (process.env.MOZETTO_CHAIN_ENV === "base") {
-    return reply.code(403).send({ error: "faucet_disabled", message: "On-chain faucet is disabled on mainnet." });
+  return reply.code(410).send({
+    error: "gone",
+    message:
+      "Ledger faucet removed. Use Get Test mUSDC on /wallet — tokens mint into MetaMask, then approve and deposit into ArenaVault.",
+  });
+});
+
+/** Anvil-only: drip native ETH so MetaMask can pay gas for faucet/approve/deposit. */
+app.post("/v1/wallet/onchain/drip-gas", async (req, reply) => {
+  const session = await requireUser(req, reply);
+  if (!session) return;
+  if (session.profileKind !== "onchain") {
+    return reply.code(403).send({ error: "wrong_world" });
   }
-  const amount = Number((req.body as { amount?: number }).amount ?? 1000);
-  if (amount <= 0 || amount > 50_000) return reply.code(400).send({ error: "invalid_amount" });
+  if (session.chainId !== 31337 || process.env.MOZETTO_CHAIN_ENV !== "anvil") {
+    return reply.code(403).send({
+      error: "anvil_only",
+      message: "Gas drip is only available on local Anvil.",
+    });
+  }
+  const wallet = session.walletAddress;
+  if (!wallet || !/^0x[a-f0-9]{40}$/i.test(wallet)) {
+    return reply.code(400).send({ error: "missing_wallet" });
+  }
+
+  const pk =
+    process.env.SESSION_RELAYER_PRIVATE_KEY ||
+    process.env.PRIVATE_KEY ||
+    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+  const rpc = process.env.ANVIL_RPC_URL || "http://127.0.0.1:8545";
+
   try {
-    await ensureModeAccounts(session.profileId, "onchain");
-    const key = `onchain-faucet-${session.profileId}-${Date.now()}`;
-    await creditOnchainDeposit(session.profileId, amount, key);
-    const available = await getAvailableBalance(session.profileId, "onchain");
-    return {
-      available,
-      profileKind: "onchain",
-      credited: amount,
-      note: "Testnet chips credited. These are ledger mirrors for Sepolia play, not Circle USDC.",
-    };
+    const { createWalletClient, createPublicClient, http: httpTransport, parseEther, formatEther } =
+      await import("viem");
+    const { privateKeyToAccount } = await import("viem/accounts");
+    const { anvil: anvilChain } = await import("viem/chains");
+    const account = privateKeyToAccount(pk as `0x${string}`);
+    const client = createWalletClient({
+      account,
+      chain: anvilChain,
+      transport: httpTransport(rpc),
+    });
+    const publicClient = createPublicClient({
+      chain: anvilChain,
+      transport: httpTransport(rpc),
+    });
+    const bal = await publicClient.getBalance({ address: wallet as `0x${string}` });
+    if (bal >= parseEther("0.5")) {
+      return { ok: true, skipped: true, balanceEth: formatEther(bal) };
+    }
+    const hash = await client.sendTransaction({
+      to: wallet as `0x${string}`,
+      value: parseEther("1"),
+      chain: anvilChain,
+      account,
+    } as any);
+    return { ok: true, txHash: hash, balanceEth: formatEther(bal + parseEther("1")) };
   } catch (e) {
-    const message = e instanceof Error ? e.message : "faucet_failed";
-    req.log.error({ err: e }, "onchain faucet failed");
-    return reply.code(500).send({ error: "faucet_failed", message });
+    const message = e instanceof Error ? e.message : "drip_failed";
+    req.log.error({ err: e }, "anvil gas drip failed");
+    return reply.code(500).send({ error: "drip_failed", message });
   }
 });
 

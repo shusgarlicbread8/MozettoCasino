@@ -3,9 +3,9 @@ export {
   type ChainManifestEntry,
   type HexAddress,
   type NetworkKey,
-} from "./generated.js";
+} from "./generated";
 
-import { chainManifest, type NetworkKey } from "./generated.js";
+import { chainManifest, type NetworkKey } from "./generated";
 
 export function resolveNetworkKey(raw?: string | null): NetworkKey {
   const v = (raw || process.env.MOZETTO_CHAIN_ENV || "base-sepolia").toLowerCase();
@@ -23,6 +23,11 @@ export function getManifest(network?: NetworkKey) {
     return v && /^0x[a-fA-F0-9]{40}$/.test(v) ? (v as `0x${string}`) : null;
   };
   const block = process.env.DEPLOYMENT_BLOCK ? BigInt(process.env.DEPLOYMENT_BLOCK) : base.deploymentBlock;
+
+  if (key === "base" && (base.isTestAsset || base.faucetEnabled || String(base.symbol) === "mUSDC")) {
+    throw new Error("MockUSDC is forbidden on Base Mainnet");
+  }
+
   return {
     ...base,
     network: key,

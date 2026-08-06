@@ -11,8 +11,8 @@ import {
   type Log,
 } from "viem";
 import { base, baseSepolia } from "viem/chains";
-import { getChainConfig, arenaVaultAbi } from "@mozetto/blockchain";
-import { query, creditOnchainDeposit } from "@mozetto/database";
+import { getChainConfig } from "@mozetto/blockchain";
+import { query, creditOnchainDeposit, debitOnchainWithdrawal } from "@mozetto/database";
 
 const CONFIRMATIONS = Number(process.env.INDEXER_CONFIRMATIONS ?? 3);
 const POLL_MS = Number(process.env.INDEXER_POLL_MS ?? 8_000);
@@ -44,32 +44,92 @@ function viemChain(chainId: number) {
 
 async function resolveProfileId(wallet: string): Promise<string | null> {
   const res = await query<{ user_id: string }>(
-    `select user_id from wallet_identities where lower(address) = lower($1) limit 1`,
+    `select coalesce(profile_id, user_id) as user_id
+     from wallet_identities
+     where lower(address) = lower($1)
+     limit 1`,
     [wallet],
   );
   return res.rows[0]?.user_id ?? null;
 }
 
-async function getCursor(chainId: number, deploymentBlock: bigint): Promise<bigint> {
-  const res = await query<{ last_block: string }>(
-    `insert into chain_cursors (chain_id, last_block)
-     values ($1, $2)
-     on conflict (chain_id) do update set chain_id = excluded.chain_id
-     returning last_block::text`,
-    [chainId, deploymentBlock.toString()],
+async function ensureCursor(
+  chainId: number,
+  vault: Hex,
+  deploymentBlock: bigint,
+  chainHead: bigint,
+): Promise<bigint> {
+  const existing = await query<{
+    last_block: string;
+    vault_address: string | null;
+    deployment_block: string;
+  }>(
+    `select last_block::text, vault_address, coalesce(deployment_block, 0)::text as deployment_block
+     from chain_cursors where chain_id = $1`,
+    [chainId],
   );
-  const n = BigInt(res.rows[0]?.last_block ?? "0");
-  return n > 0n ? n : deploymentBlock;
+
+  const row = existing.rows[0];
+  const last = BigInt(row?.last_block ?? "0");
+  const staleVault = row?.vault_address && row.vault_address.toLowerCase() !== vault.toLowerCase();
+  const staleDeploy =
+    row?.deployment_block && BigInt(row.deployment_block) !== deploymentBlock;
+  const cursorPastHead = last > chainHead;
+
+  if (!row || staleVault || staleDeploy || cursorPastHead) {
+    if (row && (staleVault || staleDeploy || cursorPastHead)) {
+      await query(
+        `insert into chain_reorgs (chain_id, from_block, detail)
+         values ($1, $2, $3::jsonb)`,
+        [
+          chainId,
+          last.toString(),
+          JSON.stringify({
+            reason: staleVault
+              ? "vault_redeployed"
+              : staleDeploy
+                ? "deployment_block_changed"
+                : "cursor_past_head",
+            previousVault: row.vault_address,
+            nextVault: vault,
+            previousCursor: last.toString(),
+            chainHead: chainHead.toString(),
+            deploymentBlock: deploymentBlock.toString(),
+          }),
+        ],
+      );
+      console.warn(
+        `[indexer] resetting cursor chain=${chainId} from ${last} → ${deploymentBlock} (${staleVault ? "vault change" : cursorPastHead ? "past head" : "deploy change"})`,
+      );
+    }
+    await query(
+      `insert into chain_cursors (chain_id, last_block, last_log_index, vault_address, deployment_block, updated_at)
+       values ($1, $2, 0, $3, $4, now())
+       on conflict (chain_id) do update
+         set last_block = excluded.last_block,
+             last_log_index = 0,
+             vault_address = excluded.vault_address,
+             deployment_block = excluded.deployment_block,
+             updated_at = now()`,
+      [chainId, deploymentBlock.toString(), vault.toLowerCase(), deploymentBlock.toString()],
+    );
+    return deploymentBlock;
+  }
+
+  await query(
+    `update chain_cursors
+     set vault_address = $2, deployment_block = $3, updated_at = now()
+     where chain_id = $1`,
+    [chainId, vault.toLowerCase(), deploymentBlock.toString()],
+  );
+  return last > 0n ? last : deploymentBlock;
 }
 
 async function setCursor(chainId: number, block: bigint, logIndex: number) {
   await query(
-    `insert into chain_cursors (chain_id, last_block, last_log_index, updated_at)
-     values ($1, $2, $3, now())
-     on conflict (chain_id) do update
-       set last_block = excluded.last_block,
-           last_log_index = excluded.last_log_index,
-           updated_at = now()`,
+    `update chain_cursors
+     set last_block = $2, last_log_index = $3, updated_at = now()
+     where chain_id = $1`,
     [chainId, block.toString(), logIndex],
   );
 }
@@ -85,7 +145,7 @@ async function persistEvent(
        (chain_id, tx_hash, log_index, block_number, block_hash, address, event_name, args, removed)
      values ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)
      on conflict (chain_id, tx_hash, log_index) do update
-       set removed = excluded.removed, args = excluded.args`,
+       set removed = excluded.removed, args = excluded.args, block_hash = excluded.block_hash`,
     [
       chainId,
       log.transactionHash,
@@ -100,6 +160,28 @@ async function persistEvent(
   );
 }
 
+async function rewindRemovedDeposit(chainId: number, txHash: string, logIndex: number) {
+  const row = await query<{
+    mirrored: boolean;
+    profile_id: string | null;
+    amount_usdc: string;
+  }>(
+    `select mirrored, profile_id, amount_usdc::text
+     from vault_deposits
+     where chain_id = $1 and tx_hash = $2 and log_index = $3`,
+    [chainId, txHash, logIndex],
+  );
+  const d = row.rows[0];
+  if (!d?.mirrored || !d.profile_id) return;
+  await debitOnchainWithdrawal(d.profile_id, Number(d.amount_usdc), txHash, { reason: "reorg" });
+  await query(
+    `update vault_deposits set mirrored = false
+     where chain_id = $1 and tx_hash = $2 and log_index = $3`,
+    [chainId, txHash, logIndex],
+  );
+  console.warn(`[indexer] rewound deposit mirror ${txHash}#${logIndex}`);
+}
+
 async function handleDeposited(
   chainId: number,
   log: Log & { args: { user?: Hex; amount?: bigint } },
@@ -107,7 +189,11 @@ async function handleDeposited(
   const user = log.args.user;
   const amount = log.args.amount;
   if (!user || amount === undefined || !log.transactionHash) return;
-  if (log.removed) return;
+
+  if (log.removed) {
+    await rewindRemovedDeposit(chainId, log.transactionHash, log.logIndex ?? 0);
+    return;
+  }
 
   const amountUsdc = Number(formatUnits(amount, 6));
   const profileId = await resolveProfileId(user);
@@ -156,7 +242,9 @@ async function handleWithdrawn(
 ) {
   const user = log.args.user;
   const amount = log.args.amount;
-  if (!user || amount === undefined || !log.transactionHash || log.removed) return;
+  if (!user || amount === undefined || !log.transactionHash) return;
+  if (log.removed) return;
+
   const amountUsdc = Number(formatUnits(amount, 6));
   const profileId = await resolveProfileId(user);
 
@@ -178,13 +266,73 @@ async function handleWithdrawn(
     ],
   );
 
-  // Mirror debit: insert negative via ledger transfer pattern — creditOnchainDeposit is credit-only;
-  // record row; wallet UI prefers vault.available for on-chain truth.
+  const already = await query<{ mirrored: boolean }>(
+    `select mirrored from vault_withdrawals
+     where chain_id = $1 and tx_hash = $2 and log_index = $3`,
+    [chainId, log.transactionHash, log.logIndex ?? 0],
+  );
+  if (already.rows[0]?.mirrored) return;
+
   if (profileId) {
+    await debitOnchainWithdrawal(profileId, amountUsdc, log.transactionHash);
     await query(
-      `update vault_withdrawals set mirrored = true where chain_id = $1 and tx_hash = $2 and log_index = $3`,
-      [chainId, log.transactionHash, log.logIndex ?? 0],
+      `update vault_withdrawals set mirrored = true, profile_id = $4
+       where chain_id = $1 and tx_hash = $2 and log_index = $3`,
+      [chainId, log.transactionHash, log.logIndex ?? 0, profileId],
     );
+    console.log(`[indexer] mirrored withdraw ${amountUsdc} USDC ← ${profileId}`);
+  }
+}
+
+async function backfillUnmirrored() {
+  const deposits = await query<{
+    chain_id: number;
+    tx_hash: string;
+    log_index: number;
+    wallet_address: string;
+    amount_usdc: string;
+  }>(
+    `select chain_id, tx_hash, log_index, wallet_address, amount_usdc::text
+     from vault_deposits
+     where mirrored = false
+     order by created_at asc
+     limit 50`,
+  );
+  for (const d of deposits.rows) {
+    const profileId = await resolveProfileId(d.wallet_address);
+    if (!profileId) continue;
+    await creditOnchainDeposit(profileId, Number(d.amount_usdc), d.tx_hash);
+    await query(
+      `update vault_deposits set mirrored = true, profile_id = $4
+       where chain_id = $1 and tx_hash = $2 and log_index = $3`,
+      [d.chain_id, d.tx_hash, d.log_index, profileId],
+    );
+    console.log(`[indexer] backfilled deposit ${d.amount_usdc} → ${profileId}`);
+  }
+
+  const withdrawals = await query<{
+    chain_id: number;
+    tx_hash: string;
+    log_index: number;
+    wallet_address: string;
+    amount_usdc: string;
+  }>(
+    `select chain_id, tx_hash, log_index, wallet_address, amount_usdc::text
+     from vault_withdrawals
+     where mirrored = false
+     order by created_at asc
+     limit 50`,
+  );
+  for (const w of withdrawals.rows) {
+    const profileId = await resolveProfileId(w.wallet_address);
+    if (!profileId) continue;
+    await debitOnchainWithdrawal(profileId, Number(w.amount_usdc), w.tx_hash);
+    await query(
+      `update vault_withdrawals set mirrored = true, profile_id = $4
+       where chain_id = $1 and tx_hash = $2 and log_index = $3`,
+      [w.chain_id, w.tx_hash, w.log_index, profileId],
+    );
+    console.log(`[indexer] backfilled withdraw ${w.amount_usdc} ← ${profileId}`);
   }
 }
 
@@ -248,6 +396,7 @@ async function reconcile(chainId: number, vault: Hex, client: ReturnType<typeof 
     [chainId],
   );
   const runId = run.rows[0]?.id;
+  const env = getChainConfig().env;
   try {
     const tokenBal = await client.readContract({
       address: vault,
@@ -271,29 +420,35 @@ async function reconcile(chainId: number, vault: Hex, client: ReturnType<typeof 
     const mirrorSum = Number(mirror.rows[0]?.s ?? 0);
     const tokenUsdc = Number(formatUnits(tokenBal as bigint, 6));
     const diff = tokenUsdc - mirrorSum;
-    const ok = Math.abs(diff) < 1; // $1 tolerance (fees accrued on-chain may lag mirror)
+    const ok = Math.abs(diff) < 1;
     await query(
       `insert into vault_balance_snapshots
          (chain_id, token_balance_raw, mirror_available_sum, difference_usdc, ok)
        values ($1,$2,$3,$4,$5)`,
       [chainId, (tokenBal as bigint).toString(), mirrorSum, diff, ok],
     );
-    if (!ok) {
+    if (!ok && env === "base") {
       await query(
         `update feature_flags set enabled = false, updated_at = now(), meta = meta || '{"reason":"reconciliation_failed"}'::jsonb
          where key = 'onchain_matchmaking'`,
       );
       console.error(`[indexer] RECONCILIATION FAILED chain=${chainId} token=${tokenUsdc} mirror=${mirrorSum}`);
+    } else if (!ok) {
+      console.warn(`[indexer] reconcile skew (non-fatal) chain=${chainId} token=${tokenUsdc} mirror=${mirrorSum}`);
     }
     await query(
       `update reconciliation_runs set finished_at = now(), ok = $2, detail = $3::jsonb where id = $1`,
       [runId, ok, JSON.stringify({ tokenUsdc, mirrorSum, diff })],
     );
   } catch (err) {
-    await query(
-      `update reconciliation_runs set finished_at = now(), ok = false, detail = $2::jsonb where id = $1`,
-      [runId, JSON.stringify({ error: String(err) })],
-    );
+    try {
+      await query(
+        `update reconciliation_runs set finished_at = now(), ok = false, detail = $2::jsonb where id = $1`,
+        [runId, JSON.stringify({ error: String(err) })],
+      );
+    } catch {
+      /* ignore */
+    }
     console.error("[indexer] reconcile error", err);
   }
 }
@@ -318,7 +473,7 @@ async function tick(pollCount: { n: number }) {
 
   const latest = await client.getBlockNumber();
   const safeHead = latest > BigInt(CONFIRMATIONS) ? latest - BigInt(CONFIRMATIONS) : 0n;
-  let from = await getCursor(cfg.chainId, cfg.deploymentBlock);
+  let from = await ensureCursor(cfg.chainId, vault, cfg.deploymentBlock, latest);
   if (from > safeHead) return;
   const to = from + 2_000n > safeHead ? safeHead : from + 2_000n;
 
@@ -340,6 +495,7 @@ async function tick(pollCount: { n: number }) {
   }
 
   await setCursor(cfg.chainId, to, 0);
+  await backfillUnmirrored();
   pollCount.n += 1;
   if (pollCount.n % RECONCILE_EVERY === 0) {
     await reconcile(cfg.chainId, vault, client);
@@ -349,7 +505,11 @@ async function tick(pollCount: { n: number }) {
   }
 }
 
-console.log("[indexer] starting", getChainConfig().env);
+console.log("[indexer] starting", getChainConfig().env, {
+  vault: getChainConfig().contracts.arenaVault,
+  usdc: getChainConfig().usdc,
+  symbol: getChainConfig().symbol,
+});
 const counter = { n: 0 };
 setInterval(() => {
   void tick(counter).catch((err) => console.error("[indexer] tick failed", err));

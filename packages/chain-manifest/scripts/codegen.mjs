@@ -10,6 +10,10 @@ const defaults = {
   anvil: {
     chainId: 31337,
     usdc: "0x0000000000000000000000000000000000000000",
+    symbol: "mUSDC",
+    decimals: 6,
+    isTestAsset: true,
+    faucetEnabled: true,
     protocolVersion: "1.0.0-anvil",
     vrfCoordinator: null,
     vrfKeyHash: null,
@@ -17,6 +21,10 @@ const defaults = {
   baseSepolia: {
     chainId: 84532,
     usdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    symbol: "USDC",
+    decimals: 6,
+    isTestAsset: false,
+    faucetEnabled: false,
     protocolVersion: "1.0.0-sepolia",
     vrfCoordinator: "0x5C210eF41CD1a72a13DcB20c28948D40729fEFFb",
     vrfKeyHash: "0x9e1344a1247c8a1785d0a4681a27152bffdb43666ae28ee20d8c6dff7f9c1a30",
@@ -24,6 +32,10 @@ const defaults = {
   base: {
     chainId: 8453,
     usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    symbol: "USDC",
+    decimals: 6,
+    isTestAsset: false,
+    faucetEnabled: false,
     protocolVersion: "1.0.0",
     vrfCoordinator: "0xd5D517aBE5cF79B7e95eC98dB0f0277788aFF634",
     vrfKeyHash: null,
@@ -36,9 +48,22 @@ function load(network) {
   let file = {};
   if (existsSync(path)) file = JSON.parse(readFileSync(path, "utf8"));
   const hex = (v) => (typeof v === "string" && /^0x[a-fA-F0-9]+$/.test(v) ? v : null);
+
+  const isTestAsset = network === "base" ? false : Boolean(file.isTestAsset ?? d.isTestAsset);
+  const faucetEnabled = network === "base" ? false : Boolean(file.faucetEnabled ?? d.faucetEnabled);
+  const symbol = network === "base" ? "USDC" : (file.symbol ?? d.symbol);
+
+  if (network === "base" && (file.isTestAsset || file.symbol === "mUSDC")) {
+    throw new Error("MockUSDC / test assets are forbidden on Base mainnet");
+  }
+
   return {
     chainId: file.chainId ?? d.chainId,
     usdc: file.usdc ?? d.usdc,
+    symbol,
+    decimals: Number(file.decimals ?? d.decimals),
+    isTestAsset,
+    faucetEnabled,
     arenaVault: hex(file.arenaVault),
     tableRegistry: hex(file.tableRegistry),
     settlementHub: hex(file.settlementHub),
@@ -62,13 +87,17 @@ const blocks = networks
     return `  ${n}: {
     chainId: ${e.chainId},
     usdc: "${e.usdc}" as HexAddress,
+    symbol: "${e.symbol}",
+    decimals: ${e.decimals},
+    isTestAsset: ${e.isTestAsset},
+    faucetEnabled: ${e.faucetEnabled},
     arenaVault: ${addr(e.arenaVault)},
     tableRegistry: ${addr(e.tableRegistry)},
     settlementHub: ${addr(e.settlementHub)},
     checkpointRegistry: ${addr(e.checkpointRegistry)},
     randomnessCoordinator: ${addr(e.randomnessCoordinator)},
     feeTreasury: ${addr(e.feeTreasury)},
-    deploymentBlock: ${e.deploymentBlock}n,
+    deploymentBlock: BigInt(${e.deploymentBlock}),
     protocolVersion: "${e.protocolVersion}",
     vrfCoordinator: ${addr(e.vrfCoordinator)},
     vrfKeyHash: ${hash(e.vrfKeyHash)},
@@ -88,6 +117,10 @@ export type NetworkKey = "anvil" | "baseSepolia" | "base";
 export type ChainManifestEntry = {
   chainId: number;
   usdc: HexAddress;
+  symbol: string;
+  decimals: number;
+  isTestAsset: boolean;
+  faucetEnabled: boolean;
   arenaVault: HexAddress | null;
   tableRegistry: HexAddress | null;
   settlementHub: HexAddress | null;

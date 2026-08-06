@@ -8,9 +8,11 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { TestMusdcPanel } from "@/components/TestMusdcPanel";
 import { VaultPanel } from "@/components/VaultPanel";
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
 import { money, useSession } from "@/lib/session";
+import { getChainAsset, preferredChainId } from "@/lib/wagmi";
 
 const FONT_MONO = "var(--font-geist-mono), monospace";
 
@@ -67,8 +69,6 @@ export default function WalletPage() {
   const [hoverAdv, setHoverAdv] = useState(false);
   const [sessions, setSessions] = useState<any[]>([]);
   const [ledgerRows, setLedgerRows] = useState<any[]>([]);
-  const [faucetBusy, setFaucetBusy] = useState(false);
-  const [faucetMsg, setFaucetMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const load = () =>
@@ -92,6 +92,8 @@ export default function WalletPage() {
   const available = me?.available ?? 0;
   const atTables = me?.atTables ?? 0;
   const isOnchain = (me?.profileKind ?? me?.arenaMode) === "onchain";
+  const asset = getChainAsset(me?.chainId ?? preferredChainId);
+  const isChainTest = isOnchain && Boolean(asset?.isTestAsset);
   const league = (me?.profile?.league || "bronze").toUpperCase();
   const leagueStatus = [
     { k: "CURRENT LEAGUE", v: league, color: "#C9A227" },
@@ -112,39 +114,29 @@ export default function WalletPage() {
       k: "AVAILABLE",
       v: money(available),
       color: "#EDEDED",
-      sub: isOnchain ? "on-chain vault mirror" : "demo paper USDC",
+      sub: isOnchain ? "indexed vault mirror" : "demo paper USDC",
     },
     { k: "AT TABLES", v: money(atTables), color: "#FFB020", sub: "escrowed buy-ins" },
     { k: "OPEN SESSIONS", v: String(tables.length), color: "#EDEDED", sub: "this mode only" },
     {
       k: "MODE",
-      v: isOnchain ? "ON-CHAIN" : "DEMO",
+      v: isOnchain ? (isChainTest ? "CHAIN TEST" : "ON-CHAIN") : "DEMO",
       color: isOnchain ? "#00E676" : "#8A8A8A",
-      sub: isOnchain ? "Base USDC path" : "isolated paper ledger",
+      sub: isChainTest
+        ? `${asset?.symbol ?? "mUSDC"} test path`
+        : isOnchain
+          ? "Base USDC path"
+          : "isolated paper ledger",
     },
   ];
 
-  async function runOnchainFaucet() {
-    if (faucetBusy) return;
-    setFaucetBusy(true);
-    setFaucetMsg(null);
-    try {
-      const res = await api<{ available: number; credited?: number }>("/v1/wallet/onchain/faucet", {
-        method: "POST",
-        body: JSON.stringify({ amount: 1000 }),
-      });
-      setFaucetMsg(`+$${res.credited ?? 1000} test chips · balance ${money(res.available)}`);
-      await refresh();
-      const r = await api<{ sessions: any[]; ledger: any[] }>("/v1/wallet");
+  const refreshWallet = () => {
+    void refresh();
+    void api<{ sessions: any[]; ledger: any[] }>("/v1/wallet").then((r) => {
       setSessions(r.sessions || []);
       setLedgerRows(r.ledger || []);
-    } catch (e) {
-      const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Faucet failed";
-      setFaucetMsg(msg);
-    } finally {
-      setFaucetBusy(false);
-    }
-  }
+    });
+  };
   const ledger = ledgerRows
     .filter((row) => {
       if (f === 0) return true; // ALL
@@ -179,58 +171,32 @@ export default function WalletPage() {
       <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 14 }}>
         <div style={{ borderRadius: 16, border: "1px solid rgba(255,255,255,.07)", background: "linear-gradient(165deg,#101010,#0A0A0A)", padding: 26 }}>
           <div style={{ font: `400 10px ${FONT_MONO}`, letterSpacing: ".13em", color: "#5A5A5A" }}>
-            {isOnchain ? "ON-CHAIN BALANCE" : "DEMO WALLET BALANCE"}
+            {isOnchain
+              ? isChainTest
+                ? "CHAIN TEST BALANCE"
+                : "ON-CHAIN BALANCE"
+              : "DEMO WALLET BALANCE"}
           </div>
           <div style={{ font: `500 48px ${FONT_MONO}`, letterSpacing: "-.035em", marginTop: 10 }}>{money(available)}</div>
           <div style={{ fontSize: 12.5, color: "#6A6A6A", marginTop: 8 }}>
             {isOnchain
-              ? "On-chain wallet account (separate from Demo email). Fund via ArenaVault or Sepolia faucet."
+              ? isChainTest
+                ? "Playable balance mirrors ArenaVault after indexer confirmation. Mint mUSDC into MetaMask, then deposit."
+                : "On-chain wallet account (separate from Demo email). Fund via ArenaVault with Circle USDC."
               : "Demo paper USDC. For real Base USDC, sign out and use /onchain with a wallet."}
           </div>
           {isOnchain && (
-            <VaultPanel
-              onUpdated={() => {
-                void refresh();
-                void api<{ sessions: any[]; ledger: any[] }>("/v1/wallet").then((r) => {
-                  setSessions(r.sessions || []);
-                  setLedgerRows(r.ledger || []);
-                });
-              }}
-            />
+            <>
+              <TestMusdcPanel onUpdated={refreshWallet} />
+              <VaultPanel onUpdated={refreshWallet} />
+            </>
           )}
           <div style={{ display: "flex", gap: 10, marginTop: 22, flexWrap: "wrap" }}>
             {isOnchain ? (
-              <>
-                <button
-                  type="button"
-                  disabled={faucetBusy}
-                  onClick={() => void runOnchainFaucet()}
-                  style={{
-                    padding: "11px 22px",
-                    borderRadius: 10,
-                    background: "#00E676",
-                    color: "#050505",
-                    fontSize: 13.5,
-                    fontWeight: 600,
-                    cursor: faucetBusy ? "wait" : "pointer",
-                    border: "none",
-                  }}
-                >
-                  {faucetBusy ? "Funding…" : "Testnet faucet +$1,000"}
-                </button>
-                {faucetMsg && (
-                  <div
-                    style={{
-                      width: "100%",
-                      marginTop: 4,
-                      fontSize: 12.5,
-                      color: faucetMsg.startsWith("+") ? "#00E676" : "#FF8A8A",
-                    }}
-                  >
-                    {faucetMsg}
-                  </div>
-                )}
-              </>
+              <div style={{ fontSize: 12.5, color: "#6A6A6A", lineHeight: 1.45 }}>
+                Wallet tokens stay in MetaMask until you deposit. Indexed available balance above is
+                what matchmaking uses.
+              </div>
             ) : (
               <>
                 <Link
