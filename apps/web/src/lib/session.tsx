@@ -4,6 +4,9 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import { api } from "@/lib/api";
 import { signOut as authSignOut } from "@/lib/auth";
 
+export type ProfileKind = "demo" | "onchain";
+export type ArenaMode = ProfileKind;
+
 export type SessionMe = {
   authenticated: boolean;
   session: {
@@ -12,6 +15,9 @@ export type SessionMe = {
     handle: string;
     displayName: string;
     agentHandle?: string | null;
+    profileKind?: ProfileKind;
+    chainId?: number | null;
+    walletAddress?: string | null;
   } | null;
   profile: {
     id: string;
@@ -34,16 +40,13 @@ export type SessionMe = {
     risk: string;
     instruction: string | null;
   } | null;
-  arenaMode?: ArenaMode;
+  profileKind?: ProfileKind;
+  arenaMode?: ProfileKind;
+  chainId?: number | null;
+  walletAddress?: string | null;
   available: number;
   atTables: number;
-  balances?: {
-    demo: { available: number; atTables: number };
-    onchain: { available: number; atTables: number };
-  };
 };
-
-export type ArenaMode = "demo" | "onchain";
 
 export type PlatformStats = {
   activeTables: number;

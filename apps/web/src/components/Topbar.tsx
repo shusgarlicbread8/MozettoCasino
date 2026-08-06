@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { ArenaModeSwitch } from "@/components/ArenaModeSwitch";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { money, useSession } from "@/lib/session";
 
@@ -100,11 +99,36 @@ export function Topbar() {
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 14, flex: "none" }}>
-        <ArenaModeSwitch />
+        <div
+          title={
+            me?.profileKind === "onchain"
+              ? `On-chain · chain ${me.chainId ?? "—"}`
+              : "Demo paper account"
+          }
+          style={{
+            padding: "5px 10px",
+            borderRadius: 8,
+            border:
+              me?.profileKind === "onchain"
+                ? "1px solid rgba(0,230,118,.35)"
+                : "1px solid rgba(255,255,255,.1)",
+            background:
+              me?.profileKind === "onchain" ? "rgba(0,230,118,.1)" : "rgba(255,255,255,.04)",
+            font: "600 10px var(--font-geist-mono), monospace",
+            letterSpacing: ".06em",
+            color: me?.profileKind === "onchain" ? "#00E676" : "#9A9A9A",
+          }}
+        >
+          {me?.profileKind === "onchain"
+            ? me.chainId === 8453
+              ? "ON-CHAIN · BASE"
+              : "ON-CHAIN · SEPOLIA"
+            : "DEMO"}
+        </div>
         <Link href="/wallet" style={{ display: "flex", alignItems: "center", gap: 14, textDecoration: "none", color: "#EDEDED" }}>
           <div style={{ textAlign: "right" }}>
             <div style={{ font: "400 9px var(--font-geist-mono), monospace", letterSpacing: ".1em", color: "#4A4A4A" }}>
-              {me?.arenaMode === "onchain" ? "ON-CHAIN" : "DEMO"} WALLET
+              WALLET
             </div>
             <div style={{ font: "500 13px var(--font-geist-mono), monospace" }}>{money(me?.available ?? 0)}</div>
           </div>

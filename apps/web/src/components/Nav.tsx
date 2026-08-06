@@ -37,10 +37,27 @@ export function Nav() {
   const pathname = usePathname();
   const active = activeId(pathname);
   const { me, stats } = useSession();
-  const agentLabel = me?.profile?.display_name || me?.agent?.display_name || me?.agent?.handle || me?.session?.handle || "—";
+  const rawLabel =
+    me?.session?.displayName ||
+    me?.profile?.display_name ||
+    me?.agent?.display_name ||
+    me?.agent?.handle ||
+    me?.session?.handle ||
+    "—";
+  // Never surface a raw 0x address as the primary name.
+  const agentLabel =
+    typeof rawLabel === "string" && /^0x[a-fA-F0-9]{40}$/i.test(rawLabel)
+      ? `${rawLabel.slice(0, 6)}…${rawLabel.slice(-4)}`
+      : rawLabel.startsWith("Wallet 0x")
+        ? rawLabel.replace(/^Wallet\s+/i, "")
+        : rawLabel;
   const agentHandle = me?.agent?.handle ?? "—";
   const league = (me?.profile?.league ?? "bronze").toUpperCase();
   const walletTag = me ? money(me.available).replace(/\.00$/, "") : "—";
+  const shortWallet =
+    me?.walletAddress && /^0x[a-fA-F0-9]{40}$/i.test(me.walletAddress)
+      ? `${me.walletAddress.slice(0, 6)}…${me.walletAddress.slice(-4)}`
+      : null;
 
   const mk = (id: string, label: string, icon: string, tag = "", tagColor = "#4A4A4A") => ({
     id,
@@ -229,8 +246,22 @@ export function Nav() {
             {me?.agent?.glyph ?? "◆"}
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 550, letterSpacing: "-.01em" }}>{agentLabel}</div>
-            <div style={{ font: "400 10px var(--font-geist-mono), monospace", color: "#C9A227" }}>{league} LEAGUE</div>
+            <div
+              style={{
+                fontSize: 12,
+                fontWeight: 550,
+                letterSpacing: "-.01em",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {agentLabel}
+            </div>
+            <div style={{ font: "400 10px var(--font-geist-mono), monospace", color: "#C9A227" }}>
+              {league} LEAGUE
+              {shortWallet ? ` · ${shortWallet}` : ""}
+            </div>
           </div>
           <div
             style={{

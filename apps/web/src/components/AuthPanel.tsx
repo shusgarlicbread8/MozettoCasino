@@ -12,10 +12,10 @@ const T =
   "NULLSET is in the tank. Eleven percent of the roll to continue with a hand that beats only bluffs. His check-raise frequency on ace-high boards is six percent. Discipline over curiosity.";
 
 const providers = [
-  { label: "Continue with Apple", icon: "", hint: "SOON", color: "#EDEDED", bg: "#0D0D0D", border: "rgba(255,255,255,.1)" },
-  { label: "Continue with Google", icon: "◉", hint: "SOON", color: "#EDEDED", bg: "#0D0D0D", border: "rgba(255,255,255,.1)" },
-  { label: "Connect wallet", icon: "◈", hint: "USDC · ETH · SOL", color: "#6EA8FF", bg: "rgba(110,168,255,.05)", border: "rgba(110,168,255,.22)" },
-  { label: "Continue with passkey", icon: "⬡", hint: "FASTEST", color: "#00E676", bg: "rgba(0,230,118,.05)", border: "rgba(0,230,118,.22)" },
+  { label: "Continue with Apple", icon: "", hint: "SOON", color: "#EDEDED", bg: "#0D0D0D", border: "rgba(255,255,255,.1)", href: null as string | null },
+  { label: "Continue with Google", icon: "◉", hint: "SOON", color: "#EDEDED", bg: "#0D0D0D", border: "rgba(255,255,255,.1)", href: null },
+  { label: "On-chain wallet", icon: "◈", hint: "Base SIWE", color: "#6EA8FF", bg: "rgba(110,168,255,.05)", border: "rgba(110,168,255,.22)", href: "/onchain" },
+  { label: "Continue with passkey", icon: "⬡", hint: "SOON", color: "#00E676", bg: "rgba(0,230,118,.05)", border: "rgba(0,230,118,.22)", href: null },
 ];
 
 function passwordStrength(pw: string) {
@@ -243,38 +243,63 @@ export function AuthPanel({ mode }: { mode: "signin" | "signup" }) {
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 9, marginTop: 22 }}>
-            {providers.map((p, pi) => (
-              <button
-                key={p.label}
-                type="button"
-                disabled
-                title="Coming soon — use email below"
-                onMouseEnter={() => setHoverProvider(pi)}
-                onMouseLeave={() => setHoverProvider(null)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  height: 46,
-                  padding: "0 15px",
-                  borderRadius: 11,
-                  border: `1px solid ${hoverProvider === pi ? "rgba(255,255,255,.28)" : p.border}`,
-                  background: hoverProvider === pi ? "#121212" : p.bg,
-                  color: "#EDEDED",
-                  opacity: 0.55,
-                  cursor: "not-allowed",
-                }}
-              >
-                <div style={{ width: 18, textAlign: "center", fontSize: 14, color: p.color }}>{p.icon}</div>
-                <div style={{ flex: 1, fontSize: 13.5, fontWeight: 450, textAlign: "left" }}>{p.label}</div>
-                <div style={{ font: `400 10px ${FONT_MONO}`, color: "#4A4A4A" }}>{p.hint}</div>
-              </button>
-            ))}
+            {providers.map((p, pi) =>
+              p.href ? (
+                <Link
+                  key={p.label}
+                  href={p.href}
+                  onMouseEnter={() => setHoverProvider(pi)}
+                  onMouseLeave={() => setHoverProvider(null)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    height: 46,
+                    padding: "0 15px",
+                    borderRadius: 11,
+                    border: `1px solid ${hoverProvider === pi ? "rgba(255,255,255,.28)" : p.border}`,
+                    background: hoverProvider === pi ? "#121212" : p.bg,
+                    color: "#EDEDED",
+                    textDecoration: "none",
+                  }}
+                >
+                  <div style={{ width: 18, textAlign: "center", fontSize: 14, color: p.color }}>{p.icon}</div>
+                  <div style={{ flex: 1, fontSize: 13.5, fontWeight: 450, textAlign: "left" }}>{p.label}</div>
+                  <div style={{ font: `400 10px ${FONT_MONO}`, color: "#4A4A4A" }}>{p.hint}</div>
+                </Link>
+              ) : (
+                <button
+                  key={p.label}
+                  type="button"
+                  disabled
+                  title="Coming soon — use email below for Demo"
+                  onMouseEnter={() => setHoverProvider(pi)}
+                  onMouseLeave={() => setHoverProvider(null)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    height: 46,
+                    padding: "0 15px",
+                    borderRadius: 11,
+                    border: `1px solid ${hoverProvider === pi ? "rgba(255,255,255,.28)" : p.border}`,
+                    background: hoverProvider === pi ? "#121212" : p.bg,
+                    color: "#EDEDED",
+                    opacity: 0.55,
+                    cursor: "not-allowed",
+                  }}
+                >
+                  <div style={{ width: 18, textAlign: "center", fontSize: 14, color: p.color }}>{p.icon}</div>
+                  <div style={{ flex: 1, fontSize: 13.5, fontWeight: 450, textAlign: "left" }}>{p.label}</div>
+                  <div style={{ font: `400 10px ${FONT_MONO}`, color: "#4A4A4A" }}>{p.hint}</div>
+                </button>
+              ),
+            )}
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "22px 0" }}>
             <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,.07)" }} />
-            <div style={{ font: `400 10px ${FONT_MONO}`, color: "#4A4A4A" }}>OR EMAIL</div>
+            <div style={{ font: `400 10px ${FONT_MONO}`, color: "#4A4A4A" }}>OR DEMO EMAIL</div>
             <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,.07)" }} />
           </div>
 

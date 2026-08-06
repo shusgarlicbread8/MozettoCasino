@@ -49,16 +49,25 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   if (wantsJson && (body == null || body === "")) {
     body = "{}";
   }
-  const res = await fetch(`${API}${path}`, {
-    ...init,
-    body,
-    credentials: "include",
-    headers: {
-      ...(await authHeaders(body != null)),
-      ...(init?.headers ?? {}),
-    },
-    cache: "no-store",
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API}${path}`, {
+      ...init,
+      body,
+      credentials: "include",
+      headers: {
+        ...(await authHeaders(body != null)),
+        ...(init?.headers ?? {}),
+      },
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError(
+      `API offline — cannot reach ${API}. Start it with: pnpm --filter @mozetto/api dev`,
+      0,
+      { error: "api_offline", api: API },
+    );
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const message =

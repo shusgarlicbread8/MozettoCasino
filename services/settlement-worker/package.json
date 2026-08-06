@@ -8,7 +8,8 @@
     "start": "tsx --env-file=../../.env.local src/index.ts"
   },
   "dependencies": {
-    "@mozetto/database": "workspace:*"
+    "@mozetto/database": "workspace:*",
+    "viem": "^2.55.11"
   },
   "devDependencies": {
     "tsx": "^4.19.3",

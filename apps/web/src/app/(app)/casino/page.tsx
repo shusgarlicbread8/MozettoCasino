@@ -16,9 +16,6 @@ const TABLES: Table[] = [
   { name: "Vault 12", league: "Gold", game: "Blackjack", g: "bj", betRange: "$50 – $2,500", min: 1000, max: 10000, edge: "0.44%", rules: "8 deck · S17 · DAS", speed: "Standard" },
   { name: "Vault Prime", league: "Platinum", game: "Blackjack", g: "bj", betRange: "$500 – $25,000", min: 10000, max: 100000, edge: "0.40%", rules: "8 deck · S17 · DAS · RSA", speed: "Deep" },
   { name: "Vault Reserve", league: "Diamond", game: "Blackjack", g: "bj", betRange: "$5,000 – $250,000", min: 100000, max: 1000000, edge: "0.38%", rules: "Single deck · S17", speed: "Deep" },
-  { name: "Trident 2", league: "Bronze", game: "Three Card Poker", g: "tcp", betRange: "$1 – $25", min: 10, max: 100, edge: "3.37%", rules: "Ante · Pair Plus", speed: "Fast" },
-  { name: "Trident 8", league: "Silver", game: "Three Card Poker", g: "tcp", betRange: "$5 – $250", min: 100, max: 1000, edge: "3.37%", rules: "Ante · Pair Plus", speed: "Fast" },
-  { name: "Trident 15", league: "Gold", game: "Three Card Poker", g: "tcp", betRange: "$50 – $2,500", min: 1000, max: 10000, edge: "3.29%", rules: "Ante · Pair Plus · 6-card bonus", speed: "Standard" },
 ];
 
 const LEAGUES = [
@@ -37,7 +34,7 @@ function money(n: number) {
 export default function CasinoPage() {
   const { me } = useSession();
   const WALLET = me?.available ?? 0;
-  const [game, setGame] = useState<"bj" | "tcp">("bj");
+  const [game, setGame] = useState<"bj">("bj");
   const [league, setLeague] = useState("ALL");
   const [sheet, setSheet] = useState<Table | null>(null);
   const [bank, setBank] = useState(10);
@@ -61,7 +58,6 @@ export default function CasinoPage() {
 
   const gameTabs = [
     { k: "Blackjack", id: "bj" as const, glyph: "◈", color: "#6EA8FF", edge: "0.38–0.51% edge" },
-    { k: "Three Card Poker", id: "tcp" as const, glyph: "♥", color: "#C89BFF", edge: "3.29–3.37% edge" },
   ];
 
   const quick = [
@@ -154,7 +150,7 @@ export default function CasinoPage() {
 
         <div style={{ borderRadius: 16, border: "1px solid rgba(255,255,255,.07)", background: "#0A0A0A", marginTop: 14, overflow: "hidden" }}>
           <div style={{ padding: "14px 20px", borderBottom: "1px solid rgba(255,255,255,.06)", fontSize: 14.5, fontWeight: 600, letterSpacing: "-.02em" }}>
-            {(game === "bj" ? "Blackjack" : "Three Card Poker") + " · " + pool.length + " tables"}
+            {"Blackjack · " + pool.length + " tables"}
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1.4fr 120px 130px 110px 110px 96px 150px", gap: 12, padding: "11px 20px", borderBottom: "1px solid rgba(255,255,255,.05)", font: `500 9px ${MONO}`, letterSpacing: ".12em", color: "#4A4A4A" }}>
             <span>TABLE</span>
@@ -454,7 +450,7 @@ export default function CasinoPage() {
                 Cancel
               </HoverDiv>
               <HoverLink
-                href={sheet.g === "bj" ? "/casino/blackjack" : "/casino/three-card-poker"}
+                href="/casino/blackjack"
                 style={{ flex: 1, padding: "13px 0", borderRadius: 11, background: "#00E676", color: "#050505", fontSize: 14, fontWeight: 600, textAlign: "center" }}
                 hoverStyle={{ boxShadow: "0 0 34px rgba(0,230,118,.45)", color: "#050505" }}
               >

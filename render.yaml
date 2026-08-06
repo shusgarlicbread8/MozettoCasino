@@ -1,0 +1,60 @@
+# Backend services for Mozetto (WebSockets are not supported on Vercel).
+# Connect this repo in Render → New → Blueprint.
+services:
+  - type: web
+    name: mozetto-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile.api
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: COOKIE_SAMESITE
+        value: none
+      - key: COOKIE_SECURE
+        value: "1"
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: WEB_ORIGIN
+        sync: false
+      - key: WEB_ORIGINS
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: SIWE_DOMAIN
+        sync: false
+      - key: SIWE_URI
+        sync: false
+      - key: NEXT_PUBLIC_GAME_HTTP_URL
+        sync: false
+
+  - type: web
+    name: mozetto-game
+    runtime: docker
+    dockerfilePath: ./Dockerfile.game
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: COOKIE_SAMESITE
+        value: none
+      - key: COOKIE_SECURE
+        value: "1"
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: WEB_ORIGIN
+        sync: false
+      - key: WEB_ORIGINS
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false

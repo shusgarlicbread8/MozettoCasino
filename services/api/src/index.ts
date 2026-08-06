@@ -18,21 +18,20 @@ import {
   ARENA_LEAGUES,
   InsufficientFundsError,
   getUserArenaMode,
-  setUserArenaMode,
-  parseArenaMode,
   creditOnchainDeposit,
   ensureModeAccounts,
+  getProfileKind,
 } from "@mozetto/database";
 import { getChainConfig } from "@mozetto/blockchain";
-import { readSession, registerAuthRoutes, requireUser } from "./auth.js";
+import { corsOriginCheck } from "@mozetto/server-env";
+import { readSession, registerAuthRoutes, requireUser, requireDemoUser } from "./auth.js";
 
-const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:3000";
 const GAME_HTTP = process.env.NEXT_PUBLIC_GAME_HTTP_URL ?? "http://localhost:4001";
 
 const app = Fastify({ logger: true });
 await app.register(cookie);
 await app.register(cors, {
-  origin: [WEB_ORIGIN, "http://localhost:3000", "http://127.0.0.1:3000"],
+  origin: corsOriginCheck,
   credentials: true,
 });
 
@@ -76,7 +75,8 @@ app.get("/v1/me", async (req, reply) => {
     [agent.rows[0]?.id],
   );
   await ensureAccountRatings(userId).catch(() => null);
-  const arenaMode = await getUserArenaMode(userId);
+  const profileKind = session.profileKind ?? (await getProfileKind(userId));
+  const arenaMode = profileKind === "onchain" ? "onchain" : "demo";
   await ensureModeAccounts(userId, arenaMode);
   return {
     authenticated: true,
@@ -86,47 +86,49 @@ app.get("/v1/me", async (req, reply) => {
       handle: session.handle,
       displayName: session.displayName,
       agentHandle: session.agentHandle,
+      profileKind,
+      chainId: session.chainId,
+      walletAddress: session.walletAddress,
     },
     profile: profile.rows[0],
     agent: agent.rows[0],
     config: config.rows[0],
+    profileKind,
     arenaMode,
+    chainId: session.chainId,
+    walletAddress: session.walletAddress,
     available: await getAvailableBalance(userId, arenaMode),
     atTables: await getEscrowBalance(userId, arenaMode),
-    balances: {
-      demo: {
-        available: await getAvailableBalance(userId, "demo"),
-        atTables: await getEscrowBalance(userId, "demo"),
-      },
-      onchain: {
-        available: await getAvailableBalance(userId, "onchain"),
-        atTables: await getEscrowBalance(userId, "onchain"),
-      },
-    },
-    chain: getChainConfig(),
-  };
-});
-
-app.patch("/v1/me/arena-mode", async (req, reply) => {
-  const session = await requireUser(req, reply);
-  if (!session) return;
-  const mode = parseArenaMode((req.body as { mode?: string }).mode);
-  if (mode !== "demo" && mode !== "onchain") {
-    return reply.code(400).send({ error: "invalid_mode", message: "mode must be demo or onchain" });
-  }
-  // Block switch while seated in the *other* mode's active session? Allow view switch;
-  // matchmaking always uses the selected mode.
-  const next = await setUserArenaMode(session.profileId, mode);
-  return {
-    arenaMode: next,
-    available: await getAvailableBalance(session.profileId, next),
-    atTables: await getEscrowBalance(session.profileId, next),
-    chain: getChainConfig(),
+    chain: getChainConfig(
+      session.chainId === 8453 ? "base" : session.chainId === 84532 ? "base-sepolia" : undefined,
+    ),
   };
 });
 
 app.get("/v1/chain", async () => {
   return { chain: getChainConfig() };
+});
+
+/** Commit a mock randomness seed-batch root (Anvil / ops). Production uses Chainlink VRF. */
+app.post("/v1/chain/randomness/commit", async (req, reply) => {
+  const session = await requireUser(req, reply);
+  if (!session) return;
+  if (session.profileKind !== "onchain") {
+    return reply.code(403).send({ error: "wrong_world" });
+  }
+  const body = req.body as { epochId?: string; secretSeedRoot?: string };
+  return {
+    ok: true,
+    stub: true,
+    message:
+      "Seed-batch recorded off-chain. Set RANDOMNESS_COORDINATOR_ADDRESS + ENABLE_MOCK_VRF=1 on settlement-worker to fulfill on Anvil.",
+    epochId: body.epochId ?? null,
+    secretSeedRoot: body.secretSeedRoot ?? null,
+    chainlink: {
+      base: "0xd5D517aBE5cF79B7e95eC98dB0f0277788aFF634",
+      baseSepolia: "0x5C210eF41CD1a72de73bF76eC39637bB0d3d7BEE",
+    },
+  };
 });
 
 app.patch("/v1/me/profile", async (req, reply) => {
@@ -375,7 +377,8 @@ app.get("/v1/wallet", async (req, reply) => {
   const session = await requireUser(req, reply);
   if (!session) return;
   const userId = session.profileId;
-  const arenaMode = await getUserArenaMode(userId);
+  const profileKind = session.profileKind;
+  const arenaMode = profileKind === "onchain" ? "onchain" : "demo";
   const available = await getAvailableBalance(userId, arenaMode);
   const atTables = await getEscrowBalance(userId, arenaMode);
   const ledger = await listLedger(userId, 40, arenaMode);
@@ -389,71 +392,87 @@ app.get("/v1/wallet", async (req, reply) => {
     available,
     atTables,
     arenaMode,
+    profileKind,
+    chainId: session.chainId,
+    walletAddress: session.walletAddress,
     currency: "USDC",
     ledger,
     sessions: sessions.rows,
-    chain: getChainConfig(),
-    balances: {
-      demo: {
-        available: await getAvailableBalance(userId, "demo"),
-        atTables: await getEscrowBalance(userId, "demo"),
-      },
-      onchain: {
-        available: await getAvailableBalance(userId, "onchain"),
-        atTables: await getEscrowBalance(userId, "onchain"),
-      },
-    },
+    chain: getChainConfig(
+      session.chainId === 8453 ? "base" : session.chainId === 84532 ? "base-sepolia" : undefined,
+    ),
   };
 });
 
 app.post("/v1/wallet/deposit", async (req, reply) => {
-  const session = await requireUser(req, reply);
+  const session = await requireDemoUser(req, reply);
   if (!session) return;
-  const arenaMode = await getUserArenaMode(session.profileId);
-  if (arenaMode === "onchain") {
-    return reply.code(400).send({
-      error: "onchain_deposit_required",
-      message:
-        "On-chain mode uses Base USDC via ArenaVault. Connect a wallet and deposit on-chain (or use the testnet faucet).",
-      chain: getChainConfig(),
-    });
-  }
   const amount = Number((req.body as { amount?: number }).amount ?? 0);
   if (amount <= 0 || amount > 100000) return reply.code(400).send({ error: "invalid_amount" });
   await fakeDeposit(session.profileId, amount, `deposit-${session.profileId}-${Date.now()}`, "demo");
-  return { available: await getAvailableBalance(session.profileId, "demo"), arenaMode: "demo" };
+  return { available: await getAvailableBalance(session.profileId, "demo"), profileKind: "demo" };
 });
 
-/** Testnet / local only: credit on-chain ledger so vault wiring can be tested end-to-end. */
+/** Testnet only: credit on-chain ledger mirror (requires wallet SIWE session). */
 app.post("/v1/wallet/onchain/faucet", async (req, reply) => {
   const session = await requireUser(req, reply);
   if (!session) return;
-  if (process.env.MOZETTO_CHAIN_ENV === "base" || process.env.NODE_ENV === "production") {
-    return reply.code(403).send({ error: "faucet_disabled", message: "On-chain faucet is disabled in production." });
+  if (session.profileKind !== "onchain") {
+    return reply.code(403).send({
+      error: "wrong_world",
+      message: "Faucet is only for on-chain wallet accounts. Sign out of Demo and sign in at /onchain.",
+    });
+  }
+  // Allow when chain is Sepolia or unset; block Base mainnet only.
+  if (session.chainId === 8453) {
+    return reply.code(403).send({
+      error: "faucet_disabled",
+      message: "Switch to Base Sepolia in the On-chain portal to use the test faucet.",
+    });
+  }
+  if (process.env.MOZETTO_CHAIN_ENV === "base") {
+    return reply.code(403).send({ error: "faucet_disabled", message: "On-chain faucet is disabled on mainnet." });
   }
   const amount = Number((req.body as { amount?: number }).amount ?? 1000);
   if (amount <= 0 || amount > 50_000) return reply.code(400).send({ error: "invalid_amount" });
-  const key = `onchain-faucet-${session.profileId}-${Date.now()}`;
-  await creditOnchainDeposit(session.profileId, amount, key);
-  await setUserArenaMode(session.profileId, "onchain");
-  return {
-    available: await getAvailableBalance(session.profileId, "onchain"),
-    arenaMode: "onchain",
-    note: "Test faucet credited the on-chain ledger mirror. Replace with vault indexer before mainnet.",
-  };
+  try {
+    await ensureModeAccounts(session.profileId, "onchain");
+    const key = `onchain-faucet-${session.profileId}-${Date.now()}`;
+    await creditOnchainDeposit(session.profileId, amount, key);
+    const available = await getAvailableBalance(session.profileId, "onchain");
+    return {
+      available,
+      profileKind: "onchain",
+      credited: amount,
+      note: "Testnet chips credited. These are ledger mirrors for Sepolia play, not Circle USDC.",
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "faucet_failed";
+    req.log.error({ err: e }, "onchain faucet failed");
+    return reply.code(500).send({ error: "faucet_failed", message });
+  }
+});
+
+/** Record a confirmed vault deposit tx (called by indexer or client after receipt). */
+app.post("/v1/wallet/onchain/credit-deposit", async (req, reply) => {
+  const session = await requireUser(req, reply);
+  if (!session) return;
+  if (session.profileKind !== "onchain") {
+    return reply.code(403).send({ error: "wrong_world" });
+  }
+  const body = req.body as { amount?: number; txHash?: string };
+  const amount = Number(body.amount ?? 0);
+  const txHash = String(body.txHash ?? "").trim();
+  if (!(amount > 0) || !/^0x[a-fA-F0-9]{64}$/.test(txHash)) {
+    return reply.code(400).send({ error: "invalid_request" });
+  }
+  await creditOnchainDeposit(session.profileId, amount, txHash);
+  return { available: await getAvailableBalance(session.profileId, "onchain") };
 });
 
 app.post("/v1/wallet/withdraw", async (req, reply) => {
-  const session = await requireUser(req, reply);
+  const session = await requireDemoUser(req, reply);
   if (!session) return;
-  const arenaMode = await getUserArenaMode(session.profileId);
-  if (arenaMode === "onchain") {
-    return reply.code(400).send({
-      error: "onchain_withdraw_required",
-      message: "On-chain withdrawals go through ArenaVault.withdraw on Base.",
-      chain: getChainConfig(),
-    });
-  }
   const amount = Number((req.body as { amount?: number }).amount ?? 0);
   const available = await getAvailableBalance(session.profileId, "demo");
   if (amount <= 0 || amount > available) return reply.code(400).send({ error: "invalid_amount" });
@@ -595,11 +614,14 @@ app.get("/v1/leagues", async () => {
 /** Ranked Arena lobby — leagues, buy-in ladders, live occupancy. No public table list. */
 app.get("/v1/arena", async (req) => {
   const session = await readSession(req);
-  const mode = session ? await getUserArenaMode(session.profileId) : "demo";
-  const stats = await arenaLobbyStats(mode);
+  const mode = session?.profileKind === "onchain" ? "onchain" : "demo";
+  const chainId = session?.chainId ?? null;
+  const stats = await arenaLobbyStats(mode, chainId);
   const byLeague = Object.fromEntries(stats.map((s) => [s.league_id, s]));
   return {
     arenaMode: mode,
+    profileKind: session?.profileKind ?? null,
+    chainId,
     leagues: ARENA_LEAGUES.map((l) => ({
       ...l,
       tables: byLeague[l.id]?.tables ?? 0,
@@ -644,9 +666,15 @@ app.post("/v1/arena/find-match", async (req, reply) => {
     }
   }
 
+  const arenaMode = session.profileKind === "onchain" ? "onchain" : "demo";
   let match: Awaited<ReturnType<typeof findArenaMatch>>;
   try {
-    match = await findArenaMatch({ userId: session.profileId, leagueId });
+    match = await findArenaMatch({
+      userId: session.profileId,
+      leagueId,
+      arenaMode,
+      chainId: session.chainId,
+    });
   } catch (e) {
     if (e instanceof InsufficientFundsError) {
       return reply.code(402).send({
@@ -732,5 +760,5 @@ setInterval(() => {
     .catch((err) => app.log.error({ err }, "idle table cleanup failed"));
 }, 60_000);
 
-const port = Number(process.env.API_PORT ?? 4000);
+const port = Number(process.env.PORT ?? process.env.API_PORT ?? 4000);
 await app.listen({ port, host: "0.0.0.0" });

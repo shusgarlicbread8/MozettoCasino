@@ -23,8 +23,22 @@
 
 ```bash
 cd contracts
-forge install OpenZeppelin/openzeppelin-contracts foundry-rs/forge-std --no-commit
 forge build
 forge test -vv
+# Local Anvil
+anvil &
 forge script script/DeployLocal.s.sol --rpc-url http://127.0.0.1:8545 --broadcast
+# Base Sepolia (set PRIVATE_KEY + RPC)
+forge script script/DeploySepolia.s.sol --rpc-url $BASE_SEPOLIA_RPC_URL --broadcast --verify
 ```
+
+Copy printed addresses into `.env.local` as `NEXT_PUBLIC_ARENA_VAULT_ADDRESS`, `CHECKPOINT_REGISTRY_ADDRESS`, etc.
+
+## Mainnet gates (before real money)
+
+- [ ] Smart-contract audit
+- [ ] Fee treasury = Safe multisig
+- [ ] Pause + withdrawal monitoring
+- [ ] Independent settlement attestors
+- [ ] Disable faucet (`NODE_ENV=production`)
+- [ ] Legal / licensing approval

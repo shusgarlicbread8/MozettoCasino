@@ -8,7 +8,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { VaultPanel } from "@/components/VaultPanel";
+import { api, ApiError } from "@/lib/api";
 import { money, useSession } from "@/lib/session";
 
 const FONT_MONO = "var(--font-geist-mono), monospace";
@@ -67,6 +68,7 @@ export default function WalletPage() {
   const [sessions, setSessions] = useState<any[]>([]);
   const [ledgerRows, setLedgerRows] = useState<any[]>([]);
   const [faucetBusy, setFaucetBusy] = useState(false);
+  const [faucetMsg, setFaucetMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const load = () =>
@@ -89,8 +91,7 @@ export default function WalletPage() {
 
   const available = me?.available ?? 0;
   const atTables = me?.atTables ?? 0;
-  const arenaMode = me?.arenaMode ?? "demo";
-  const isOnchain = arenaMode === "onchain";
+  const isOnchain = (me?.profileKind ?? me?.arenaMode) === "onchain";
   const league = (me?.profile?.league || "bronze").toUpperCase();
   const leagueStatus = [
     { k: "CURRENT LEAGUE", v: league, color: "#C9A227" },
@@ -126,15 +127,20 @@ export default function WalletPage() {
   async function runOnchainFaucet() {
     if (faucetBusy) return;
     setFaucetBusy(true);
+    setFaucetMsg(null);
     try {
-      await api("/v1/wallet/onchain/faucet", {
+      const res = await api<{ available: number; credited?: number }>("/v1/wallet/onchain/faucet", {
         method: "POST",
         body: JSON.stringify({ amount: 1000 }),
       });
+      setFaucetMsg(`+$${res.credited ?? 1000} test chips · balance ${money(res.available)}`);
       await refresh();
       const r = await api<{ sessions: any[]; ledger: any[] }>("/v1/wallet");
       setSessions(r.sessions || []);
       setLedgerRows(r.ledger || []);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Faucet failed";
+      setFaucetMsg(msg);
     } finally {
       setFaucetBusy(false);
     }
@@ -178,28 +184,53 @@ export default function WalletPage() {
           <div style={{ font: `500 48px ${FONT_MONO}`, letterSpacing: "-.035em", marginTop: 10 }}>{money(available)}</div>
           <div style={{ fontSize: 12.5, color: "#6A6A6A", marginTop: 8 }}>
             {isOnchain
-              ? "Mirrored from ArenaVault on Base. Demo and on-chain balances never mix."
-              : "Paper USDC for testing. Switch to On-chain in the top bar for the real-money path."}
+              ? "On-chain wallet account (separate from Demo email). Fund via ArenaVault or Sepolia faucet."
+              : "Demo paper USDC. For real Base USDC, sign out and use /onchain with a wallet."}
           </div>
+          {isOnchain && (
+            <VaultPanel
+              onUpdated={() => {
+                void refresh();
+                void api<{ sessions: any[]; ledger: any[] }>("/v1/wallet").then((r) => {
+                  setSessions(r.sessions || []);
+                  setLedgerRows(r.ledger || []);
+                });
+              }}
+            />
+          )}
           <div style={{ display: "flex", gap: 10, marginTop: 22, flexWrap: "wrap" }}>
             {isOnchain ? (
-              <button
-                type="button"
-                disabled={faucetBusy}
-                onClick={() => void runOnchainFaucet()}
-                style={{
-                  padding: "11px 22px",
-                  borderRadius: 10,
-                  background: "#00E676",
-                  color: "#050505",
-                  fontSize: 13.5,
-                  fontWeight: 600,
-                  cursor: faucetBusy ? "wait" : "pointer",
-                  border: "none",
-                }}
-              >
-                {faucetBusy ? "Funding…" : "Testnet faucet +$1,000"}
-              </button>
+              <>
+                <button
+                  type="button"
+                  disabled={faucetBusy}
+                  onClick={() => void runOnchainFaucet()}
+                  style={{
+                    padding: "11px 22px",
+                    borderRadius: 10,
+                    background: "#00E676",
+                    color: "#050505",
+                    fontSize: 13.5,
+                    fontWeight: 600,
+                    cursor: faucetBusy ? "wait" : "pointer",
+                    border: "none",
+                  }}
+                >
+                  {faucetBusy ? "Funding…" : "Testnet faucet +$1,000"}
+                </button>
+                {faucetMsg && (
+                  <div
+                    style={{
+                      width: "100%",
+                      marginTop: 4,
+                      fontSize: 12.5,
+                      color: faucetMsg.startsWith("+") ? "#00E676" : "#FF8A8A",
+                    }}
+                  >
+                    {faucetMsg}
+                  </div>
+                )}
+              </>
             ) : (
               <>
                 <Link

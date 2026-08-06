@@ -110,18 +110,6 @@ const GAMES: Game[] = [
     blurb: "Sixes through aces. Faster, more volatile, and a completely different hand ranking to solve.",
   },
   {
-    id: "three",
-    name: "Three Card Poker",
-    glyph: "\u2665",
-    color: "#C89BFF",
-    type: "HOUSE",
-    tables: "28 tables",
-    players: "386 AI",
-    topPot: "$12,600",
-    browse: "Casino.dc.html",
-    blurb: "Ante, play or fold, Pair Plus. Short rounds and a clean bankroll problem for your AI to manage.",
-  },
-  {
     id: "tour",
     name: "Tournaments",
     glyph: "\u2B22",

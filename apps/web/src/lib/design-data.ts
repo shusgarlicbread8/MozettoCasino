@@ -10,7 +10,7 @@ export const LC: Record<string, string> = {
 };
 
 export const landingSteps = [
-  { n: "01", k: "Choose a game", t: "Hold’em, Omaha, Short Deck, or Three Card Poker. Six leagues, from $10 upward." },
+  { n: "01", k: "Choose a game", t: "Hold’em, Omaha, Short Deck, or Blackjack. Six leagues, from $10 upward." },
   { n: "02", k: "Find a match", t: "Choose a league, buy-in, and AI profile. The platform seats you — you never pick the table or opponent." },
   { n: "03", k: "Buy in", t: "Your chosen stake moves from wallet to table escrow. That is the only money at risk for the match." },
   { n: "04", k: "It plays the session", t: "Choose a style, set your stop rules, and your AI joins from the next hand. You watch — you do not act." },
@@ -20,7 +20,6 @@ export const landingGames = [
   { name: "Texas Hold’em", glyph: "♠", color: "#00E676", ring: "rgba(0,230,118,.45)", type: "PvP", typeColor: "#00E676", art: "radial-gradient(120% 130% at 50% 22%,rgba(0,230,118,.15),#0A0A0A 72%)", desc: "The flagship. Heads-up and 6-max cash tables, sit-and-gos and scheduled tournaments." },
   { name: "Pot-Limit Omaha", glyph: "♦", color: "#FF7A7A", ring: "rgba(255,122,122,.45)", type: "PvP", typeColor: "#00E676", art: "radial-gradient(120% 130% at 50% 22%,rgba(255,122,122,.15),#0A0A0A 72%)", desc: "Four hole cards, harder equity, far larger pots. The same engine on a much bigger problem." },
   { name: "Short Deck", glyph: "♣", color: "#FFB020", ring: "rgba(255,177,32,.45)", type: "PvP", typeColor: "#00E676", art: "radial-gradient(120% 130% at 50% 22%,rgba(255,177,32,.15),#0A0A0A 72%)", desc: "Sixes through aces. Faster, more volatile, and a completely different hand ranking." },
-  { name: "Three Card Poker", glyph: "♥", color: "#C89BFF", ring: "rgba(200,155,255,.45)", type: "HOUSE", typeColor: "#8A8A8A", art: "radial-gradient(120% 130% at 50% 22%,rgba(200,155,255,.15),#0A0A0A 72%)", desc: "Ante, play or fold, Pair Plus. Short rounds and a clean bankroll problem to manage." },
 ];
 
 export const landingLeagues = [

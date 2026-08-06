@@ -127,6 +127,7 @@ async function createArenaTable(opts: {
   buyIn: number;
   createdBy: string;
   arenaMode: ArenaMode;
+  chainId?: number | null;
 }) {
   const { smallBlind, bigBlind, minBuyIn, maxBuyIn } = stakesForBuyIn(opts.buyIn);
   const short = randomUUID().replace(/-/g, "").slice(0, 6).toUpperCase();
@@ -134,12 +135,13 @@ async function createArenaTable(opts: {
   const id = `arena_${randomUUID().slice(0, 8)}`;
   const modeTag = opts.arenaMode === "onchain" ? "On-chain" : "Demo";
   const name = `${modeTag} ${league?.name ?? "Arena"} #${short}`;
+  const chainId = opts.arenaMode === "onchain" ? (opts.chainId ?? 84532) : null;
 
   await query(
     `insert into tables
        (id, name, variant_id, league_id, small_blind, big_blind, min_buy_in, max_buy_in,
-        max_seats, rake_pct, rake_cap, privacy, pace, is_active, created_by, arena_mode)
-     values ($1,$2,'nlhe_6max',$3,$4,$5,$6,$7,$8,0.025,null,'public','normal',true,$9,$10::arena_mode)`,
+        max_seats, rake_pct, rake_cap, privacy, pace, is_active, created_by, arena_mode, chain_id)
+     values ($1,$2,'nlhe_6max',$3,$4,$5,$6,$7,$8,0.025,null,'public','normal',true,$9,$10::arena_mode,$11)`,
     [
       id,
       name,
@@ -151,6 +153,7 @@ async function createArenaTable(opts: {
       HU_SEATS,
       opts.createdBy,
       opts.arenaMode,
+      chainId,
     ],
   );
   for (let i = 0; i < HU_SEATS; i++) {
@@ -173,10 +176,12 @@ export async function findArenaMatch(opts: {
   userId: string;
   leagueId: string;
   arenaMode?: ArenaMode;
+  chainId?: number | null;
 }) {
   await closeIdleArenaTables();
 
   const arenaMode = opts.arenaMode ?? (await getUserArenaMode(opts.userId));
+  const chainId = arenaMode === "onchain" ? (opts.chainId ?? 84532) : null;
 
   const league = ARENA_LEAGUES.find((l) => l.id === opts.leagueId);
   if (!league || !league.open) throw new Error("League not available");
@@ -193,8 +198,9 @@ export async function findArenaMatch(opts: {
      join tables t on t.id = s.table_id
      where s.owner_id = $1 and s.status = 'active' and t.is_active = true
        and t.arena_mode = $2::arena_mode
+       and ($3::int is null or t.chain_id is null or t.chain_id = $3)
      order by s.started_at desc limit 1`,
-    [opts.userId, arenaMode],
+    [opts.userId, arenaMode, chainId],
   );
   if (seated.rows[0]) {
     return {
@@ -205,10 +211,11 @@ export async function findArenaMatch(opts: {
       buyIn,
       leagueId: opts.leagueId,
       arenaMode,
+      chainId,
     };
   }
 
-  // Candidates: same mode + league + exact buy-in, open seat, HU ranked.
+  // Candidates: same mode (+ chain for on-chain) + league + exact buy-in, open seat, HU ranked.
   const candidates = await query<{ id: string; name: string; seated: number }>(
     `select t.id, t.name,
             (select count(*)::int from table_seats s where s.table_id = t.id and s.status = 'occupied') as seated
@@ -219,12 +226,13 @@ export async function findArenaMatch(opts: {
        and t.min_buy_in = $2
        and t.max_seats = $3
        and t.arena_mode = $4::arena_mode
+       and ($5::int is null or t.chain_id = $5)
        and exists (
          select 1 from table_seats s
          where s.table_id = t.id and s.status = 'empty'
        )
      order by seated desc, t.created_at asc`,
-    [opts.leagueId, buyIn, HU_SEATS, arenaMode],
+    [opts.leagueId, buyIn, HU_SEATS, arenaMode, chainId],
   );
 
   for (const c of candidates.rows) {
@@ -246,6 +254,7 @@ export async function findArenaMatch(opts: {
       buyIn,
       leagueId: opts.leagueId,
       arenaMode,
+      chainId,
     };
   }
 
@@ -254,6 +263,7 @@ export async function findArenaMatch(opts: {
     buyIn,
     createdBy: opts.userId,
     arenaMode,
+    chainId,
   });
   return {
     tableId: created.id,
@@ -263,10 +273,11 @@ export async function findArenaMatch(opts: {
     buyIn,
     leagueId: opts.leagueId,
     arenaMode,
+    chainId,
   };
 }
 
-export async function arenaLobbyStats(arenaMode?: ArenaMode) {
+export async function arenaLobbyStats(arenaMode?: ArenaMode, chainId?: number | null) {
   await closeIdleArenaTables();
   const mode = arenaMode ?? "demo";
   const rows = await query(
@@ -276,8 +287,9 @@ export async function arenaLobbyStats(arenaMode?: ArenaMode) {
      from tables t
      where t.is_active = true and t.privacy = 'public' and t.max_seats = $1
        and t.arena_mode = $2::arena_mode
+       and ($3::int is null or t.chain_id = $3 or (t.chain_id is null and $2 = 'demo'))
      group by t.league_id`,
-    [HU_SEATS, mode],
+    [HU_SEATS, mode, mode === "onchain" ? (chainId ?? 84532) : null],
   );
   return rows.rows as { league_id: string; tables: number; seated: number }[];
 }

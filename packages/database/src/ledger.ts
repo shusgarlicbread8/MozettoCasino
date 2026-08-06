@@ -2,24 +2,42 @@ import { randomUUID } from "node:crypto";
 import { query } from "./client.js";
 import { type ArenaMode, parseArenaMode } from "./arena-mode.js";
 
-export type { ArenaMode } from "./arena-mode.js";
-export { isArenaMode, parseArenaMode } from "./arena-mode.js";
+export type { ArenaMode, ProfileKind } from "./arena-mode.js";
+export {
+  isArenaMode,
+  parseArenaMode,
+  isProfileKind,
+  parseProfileKind,
+  economyForProfile,
+} from "./arena-mode.js";
 
-export async function getUserArenaMode(userId: string): Promise<ArenaMode> {
-  const res = await query<{ active_arena_mode: string }>(
-    `select active_arena_mode::text from profiles where id = $1`,
+export async function getProfileKind(userId: string): Promise<import("./arena-mode.js").ProfileKind> {
+  const res = await query<{ profile_kind: string }>(
+    `select coalesce(profile_kind::text, 'demo') as profile_kind from profiles where id = $1`,
     [userId],
   );
-  return parseArenaMode(res.rows[0]?.active_arena_mode, "demo");
+  return parseProfileKind(res.rows[0]?.profile_kind, "demo");
 }
 
+/** Economy for this profile — derived from profile_kind (separate accounts, not a toggle). */
+export async function getUserArenaMode(userId: string): Promise<ArenaMode> {
+  const kind = await getProfileKind(userId);
+  return economyForProfile(kind);
+}
+
+/** @deprecated Mode is fixed by profile_kind; kept for API compat during migration. */
 export async function setUserArenaMode(userId: string, mode: ArenaMode): Promise<ArenaMode> {
-  await ensureModeAccounts(userId, mode);
-  await query(`update profiles set active_arena_mode = $1::arena_mode, updated_at = now() where id = $2`, [
-    mode,
-    userId,
-  ]);
-  return mode;
+  const kind = await getProfileKind(userId);
+  const locked = economyForProfile(kind);
+  if (mode !== locked) {
+    throw new Error(
+      kind === "demo"
+        ? "Demo accounts cannot switch to on-chain. Sign in with a wallet at /onchain."
+        : "On-chain accounts cannot switch to demo. Use a separate email account for Demo.",
+    );
+  }
+  await ensureModeAccounts(userId, locked);
+  return locked;
 }
 
 /** Ensure demo/onchain available+escrow accounts exist for a user. */
@@ -258,17 +276,19 @@ export async function listLedger(userId: string, limit = 50, mode?: ArenaMode) {
   return res.rows;
 }
 
-/** Credit on-chain mirrored available balance after a confirmed vault deposit (indexer). */
+/** Credit on-chain mirrored available balance after a confirmed vault deposit (indexer) or test faucet. */
 export async function creditOnchainDeposit(userId: string, amount: number, txHash: string) {
+  await ensureModeAccounts(userId, "onchain");
   const available = await accountId(userId, "user_available", "available", "onchain");
   const clearing = await accountId(null, "system_clearing", "clearing", "onchain");
+  const isFaucet = txHash.startsWith("onchain-faucet-") || txHash.startsWith("welcome-faucet-");
   return transfer({
     idempotencyKey: `onchain-deposit-${txHash}`,
-    description: `On-chain vault deposit ${amount}`,
+    description: isFaucet ? `Testnet faucet +$${amount}` : `On-chain vault deposit ${amount}`,
     fromAccountId: clearing,
     toAccountId: available,
     amount,
-    referenceType: "chain_deposit",
+    referenceType: isFaucet ? "faucet" : "chain_deposit",
     referenceId: txHash,
   });
 }

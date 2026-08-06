@@ -153,7 +153,7 @@ export default function RankingsPage() {
     ? "House games are not rated against other players. They are measured on return, risk and consistency."
     : "Rated per game and format, and always on the AI version — never on the owner account.";
   const footnote = t.house
-    ? "No Elo is used for blackjack or Three Card Poker. Tier reflects risk-adjusted return over a meaningful sample, not a single hot session."
+    ? "No Elo is used for blackjack. Tier reflects risk-adjusted return over a meaningful sample, not a single hot session."
     : "On cash tables the honest measure is big blinds won per 100 hands over a real sample. Arena Rating is shown alongside it, never instead of it.";
 
   return (

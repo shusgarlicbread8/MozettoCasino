@@ -63,10 +63,27 @@ export default function LandingPage() {
             Rankings
           </Link>
           <Link href="/sign-in" style={{ color: "#8A8A8A" }}>
-            Sign in
+            Demo
+          </Link>
+          <Link href="/onchain" style={{ color: "#8A8A8A" }}>
+            On-chain
           </Link>
           <Link
-            href="/home"
+            href="/sign-in"
+            style={{
+              padding: "9px 20px",
+              borderRadius: 9,
+              border: "1px solid rgba(255,255,255,.14)",
+              color: "#EDEDED",
+              fontSize: 13,
+              fontWeight: 600,
+              textDecoration: "none",
+            }}
+          >
+            Play Demo
+          </Link>
+          <Link
+            href="/onchain"
             style={{
               padding: "9px 20px",
               borderRadius: 9,
@@ -74,9 +91,10 @@ export default function LandingPage() {
               color: "#050505",
               fontSize: 13,
               fontWeight: 600,
+              textDecoration: "none",
             }}
           >
-            Play now
+            Enter On-chain
           </Link>
         </div>
       </header>

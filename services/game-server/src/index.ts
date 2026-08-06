@@ -3,15 +3,14 @@ import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import websocket from "@fastify/websocket";
 import { WsClientMessageSchema } from "@mozetto/shared-types";
+import { corsOriginCheck } from "@mozetto/server-env";
 import { TableRuntime } from "./table-runtime.js";
 import { resolvePlayer, resolvePlayerFromToken } from "./auth.js";
-
-const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:3000";
 
 const app = Fastify({ logger: true });
 await app.register(cookie);
 await app.register(cors, {
-  origin: [WEB_ORIGIN, "http://localhost:3000", "http://127.0.0.1:3000"],
+  origin: corsOriginCheck,
   credentials: true,
 });
 await app.register(websocket);
@@ -274,5 +273,5 @@ app.get("/ws", { websocket: true }, (socket, req) => {
   });
 });
 
-const port = Number(process.env.GAME_SERVER_PORT ?? 4001);
+const port = Number(process.env.PORT ?? process.env.GAME_SERVER_PORT ?? 4001);
 await app.listen({ port, host: "0.0.0.0" });
