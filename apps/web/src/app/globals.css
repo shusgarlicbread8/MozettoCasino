@@ -263,3 +263,28 @@ a:hover {
 .mz-game-card:hover .mz-game-card-felt {
   transform: scale(1.08) rotate(1deg);
 }
+
+/* Soft platform motion — buttons, status, panels */
+button,
+a[role="button"],
+.mz-soft-btn {
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.22s ease,
+    opacity 0.2s ease,
+    transform 0.18s ease;
+}
+.mz-status-line {
+  transition: color 0.25s ease, opacity 0.25s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

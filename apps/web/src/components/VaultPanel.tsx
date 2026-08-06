@@ -12,6 +12,7 @@ import {
 } from "wagmi";
 import { api } from "@/lib/api";
 import { useSession } from "@/lib/session";
+import { confirmInWallet, useWalletBrand } from "@/lib/wallet-brand";
 import {
   arenaVaultAbi,
   erc20Abi,
@@ -23,6 +24,7 @@ import {
 export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
+  const wallet = useWalletBrand();
   const { me } = useSession();
   const publicClient = usePublicClient();
   const { switchChainAsync } = useSwitchChain();
@@ -95,7 +97,7 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
     }
     if (!walletMatch) {
       setMsg(
-        `Wrong wallet connected. Switch MetaMask to ${sessionWallet?.slice(0, 6)}…${sessionWallet?.slice(-4)}.`,
+        `Wrong wallet connected. Switch ${wallet.short} to ${sessionWallet?.slice(0, 6)}…${sessionWallet?.slice(-4)}.`,
       );
       return false;
     }
@@ -103,7 +105,7 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
       try {
         await switchChainAsync({ chainId: me.chainId as typeof preferredChainId });
       } catch {
-        setMsg(`Switch MetaMask to chain ${me.chainId} to continue.`);
+        setMsg(`Switch ${wallet.short} to chain ${me.chainId} to continue.`);
         return false;
       }
     }
@@ -140,13 +142,13 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
         return;
       }
       if (walletBal != null && (walletBal as bigint) < raw) {
-        setMsg(`Insufficient ${symbol} in MetaMask. Use Get Test mUSDC first.`);
+        setMsg(`Insufficient ${symbol} in ${wallet.short}. Use Get Test mUSDC first.`);
         return;
       }
 
       const currentAllowance = (allowance as bigint | undefined) ?? 0n;
       if (currentAllowance < raw) {
-        setMsg(`Confirm MetaMask: approve ${symbol} spending…`);
+        setMsg(confirmInWallet(wallet, `approve ${symbol} spending…`));
         const approveHash = await writeContractAsync({
           address: usdc,
           abi: erc20Abi,
@@ -157,7 +159,7 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
         void refetchAllowance();
       }
 
-      setMsg("Confirm MetaMask: deposit into ArenaVault…");
+      setMsg(confirmInWallet(wallet, "deposit into ArenaVault…"));
       const tx = await writeContractAsync({
         address: vault as `0x${string}`,
         abi: arenaVaultAbi,
@@ -189,7 +191,7 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
     try {
       if (!(await ensureReady())) return;
       const raw = parseUnits(amount || "0", 6);
-      setMsg("Confirm MetaMask: withdraw from ArenaVault…");
+      setMsg(confirmInWallet(wallet, "withdraw from ArenaVault…"));
       const tx = await writeContractAsync({
         address: vault as `0x${string}`,
         abi: arenaVaultAbi,
@@ -229,8 +231,8 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
         Allowance: {allowance != null ? formatUnits(allowance as bigint, 6) : "—"}
       </div>
       <p style={{ margin: "8px 0 0", fontSize: 11, color: "#636363" }}>
-        Deposit requires two MetaMask steps when allowance is low: approve, then deposit. Playable
-        balance updates after the indexer confirms the Deposited event.
+        Deposit requires two {wallet.short} steps when allowance is low: approve, then deposit.
+        Playable balance updates after the indexer confirms the Deposited event.
       </p>
       {!walletMatch && isConnected && (
         <p style={{ margin: "8px 0 0", fontSize: 12, color: "#FF8A8A" }}>
@@ -262,7 +264,11 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
           Withdraw
         </button>
       </div>
-      {msg && <p style={{ margin: "10px 0 0", fontSize: 12, color: "#8A8A8A" }}>{msg}</p>}
+      {msg && (
+        <p className="mz-status-line" style={{ margin: "10px 0 0", fontSize: 12, color: "#8A8A8A" }}>
+          {msg}
+        </p>
+      )}
     </div>
   );
 }

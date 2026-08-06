@@ -11,8 +11,10 @@ import {
   useWriteContract,
 } from "wagmi";
 import { anvil } from "wagmi/chains";
+import { SoftSwap } from "@/components/PageFade";
 import { api, ApiError } from "@/lib/api";
 import { useSession } from "@/lib/session";
+import { confirmInWallet, useWalletBrand } from "@/lib/wallet-brand";
 import { erc20Abi, getChainAsset, isMockUsdcChain, preferredChainId } from "@/lib/wagmi";
 
 const DEFAULT_FAUCET = "10000";
@@ -21,6 +23,7 @@ const DEFAULT_FAUCET = "10000";
 export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
+  const wallet = useWalletBrand();
   const { me } = useSession();
   const publicClient = usePublicClient();
   const { switchChainAsync } = useSwitchChain();
@@ -47,7 +50,7 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
     if (chainId === 8453) return null;
     return (
       <div style={{ marginTop: 14, fontSize: 12.5, color: "#7A7A7A", lineHeight: 1.5 }}>
-        Get Test mUSDC is available on Anvil (local). Switch network in MetaMask / the on-chain
+        Get Test mUSDC is available on Anvil (local). Switch network in your wallet / the on-chain
         portal, then return here.
       </div>
     );
@@ -77,7 +80,7 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
 
   async function runFaucet() {
     if (!address || !asset?.usdc || !publicClient) {
-      setMsg("Connect MetaMask first.");
+      setMsg(`Connect ${wallet.name} first.`);
       return;
     }
     if (!walletMatch) {
@@ -92,7 +95,6 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
       if (chainId !== anvil.id && preferredChainId === anvil.id) {
         await switchChainAsync({ chainId: anvil.id });
       }
-      // Ensure Anvil gas for MetaMask txs.
       try {
         await api("/v1/wallet/onchain/drip-gas", { method: "POST", body: "{}" });
       } catch {
@@ -100,7 +102,7 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
       }
 
       const raw = parseUnits(amount || DEFAULT_FAUCET, 6);
-      setMsg("Confirm MetaMask: mint test mUSDC…");
+      setMsg(confirmInWallet(wallet, "mint test mUSDC…"));
       const hash = await writeContractAsync({
         address: asset.usdc,
         abi: erc20Abi,
@@ -137,8 +139,8 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
         CHAIN TEST · mUSDC
       </div>
       <p style={{ margin: "8px 0 0", fontSize: 13, color: "#9A9A9A", lineHeight: 1.5 }}>
-        Mints real ERC-20 tokens into MetaMask (not database chips). Then approve + deposit to fund
-        your playable vault balance.
+        Mints real ERC-20 tokens into {wallet.name} (not database chips). Then approve + deposit to
+        fund your playable vault balance.
       </p>
       <div style={{ marginTop: 10, font: "500 13px var(--font-geist-mono), monospace", color: "#EDEDED" }}>
         Wallet mUSDC: {bal != null ? formatUnits(bal as bigint, 6) : "—"}
@@ -160,6 +162,7 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
           type="button"
           disabled={busy || isPending || !isConnected}
           onClick={() => void runFaucet()}
+          className="mz-soft-btn"
           style={{
             padding: "10px 18px",
             borderRadius: 8,
@@ -175,6 +178,7 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
         <button
           type="button"
           onClick={() => void watchAsset()}
+          className="mz-soft-btn"
           style={{
             padding: "10px 14px",
             borderRadius: 8,
@@ -184,20 +188,23 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
             cursor: "pointer",
           }}
         >
-          Import in MetaMask
+          Import in {wallet.short}
         </button>
       </div>
       {msg && (
-        <p
-          style={{
-            margin: "10px 0 0",
-            fontSize: 12.5,
-            color: msg.toLowerCase().includes("minted") ? "#00E676" : "#FF8A8A",
-            lineHeight: 1.45,
-          }}
-        >
-          {msg}
-        </p>
+        <SoftSwap id={msg}>
+          <p
+            className="mz-status-line"
+            style={{
+              margin: "10px 0 0",
+              fontSize: 12.5,
+              color: msg.toLowerCase().includes("minted") ? "#00E676" : "#FF8A8A",
+              lineHeight: 1.45,
+            }}
+          >
+            {msg}
+          </p>
+        </SoftSwap>
       )}
     </div>
   );

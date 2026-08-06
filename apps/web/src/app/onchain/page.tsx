@@ -12,8 +12,10 @@ import {
   useSwitchChain,
 } from "wagmi";
 import { anvil, base, baseSepolia } from "wagmi/chains";
+import { SoftSwap } from "@/components/PageFade";
 import { api, ApiError } from "@/lib/api";
 import { createClient } from "@/lib/supabase/client";
+import { checkingWallet, useWalletBrand } from "@/lib/wallet-brand";
 import { preferredChainId } from "@/lib/wagmi";
 
 const localAnvil =
@@ -28,6 +30,7 @@ type WalletAccount = {
 export default function OnchainPortalPage() {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
+  const wallet = useWalletBrand();
   const { connectAsync, connectors, isPending: connecting, reset: resetConnect } = useConnect();
   const { disconnectAsync, isPending: disconnecting } = useDisconnect();
   const { switchChainAsync, isPending: switching } = useSwitchChain();
@@ -97,8 +100,8 @@ export default function OnchainPortalPage() {
       setConnectBusy(true);
       resetConnect();
       try {
-        // Already linked — skip connect (and never disconnect first: that breaks the
-        // user-gesture chain and MetaMask only flashes its toolbar icon).
+        // Already linked — skip connect (never disconnect first: that breaks the
+        // user-gesture chain and the wallet only flashes its toolbar icon).
         if (isConnected) {
           setStatus(null);
           return;
@@ -162,7 +165,7 @@ export default function OnchainPortalPage() {
       const nonceRes = await api<{ message: string; chainId: number }>(
         `/v1/auth/wallet/nonce?address=${address}&chainId=${useChain}`,
       );
-      // Must stay in the same user gesture chain after connect for MetaMask to surface the popup.
+      // Keep the same user-gesture chain so the wallet popup surfaces.
       const signature = await signMessageAsync({ message: nonceRes.message });
       const res = await api<{
         user?: { displayName?: string };
@@ -186,14 +189,14 @@ export default function OnchainPortalPage() {
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Sign-in failed";
       if (/rejected|denied|user rejected/i.test(msg)) {
-        setStatus("Signature cancelled in MetaMask — click Sign in again.");
+        setStatus(`Signature cancelled in ${wallet.short} — click Sign in again.`);
       } else {
         setStatus(msg);
       }
     } finally {
       setBusy(false);
     }
-  }, [address, chainId, displayName, signMessageAsync, switchChainAsync, walletAccount]);
+  }, [address, chainId, displayName, signMessageAsync, switchChainAsync, wallet.short, walletAccount]);
 
   const pending = connecting || connectBusy || disconnecting;
 
@@ -260,7 +263,8 @@ export default function OnchainPortalPage() {
           </div>
 
           {!isConnected ? (
-            <div style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 10 }}>
+            <SoftSwap id="connect">
+              <div style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 10 }}>
               <div style={{ marginBottom: 2 }}>
                 <div style={{ color: "#EDEDED", fontSize: 17, fontWeight: 600 }}>Connect your wallet</div>
                 <div style={{ color: "#707070", fontSize: 13, marginTop: 5 }}>
@@ -274,21 +278,26 @@ export default function OnchainPortalPage() {
                   disabled={pending}
                   onClick={() => void connectWallet(c)}
                   style={primaryBtn}
+                  className="mz-soft-btn"
                 >
                   {pending ? "Opening wallet…" : `Connect ${c.name}`}
                 </button>
               ))}
               <p style={{ margin: "4px 0 0", fontSize: 12, color: "#636363", lineHeight: 1.45 }}>
-                If MetaMask does not open, click the extension icon in your browser toolbar — some
-                browsers block the popup until you focus it once.
+                If the wallet popup does not open, click the extension icon in your browser toolbar —
+                some browsers block it until you focus it once.
               </p>
-            </div>
+              </div>
+            </SoftSwap>
           ) : checkingAccount ? (
-            <div style={identityCard}>
-              <div style={{ color: "#8A8A8A", fontSize: 14 }}>Checking your player profile…</div>
-              <div style={{ ...walletText, marginTop: 8 }}>{shortAddr(address)}</div>
-            </div>
+            <SoftSwap id="checking">
+              <div style={identityCard}>
+                <div style={{ color: "#8A8A8A", fontSize: 14 }}>Checking your player profile…</div>
+                <div style={{ ...walletText, marginTop: 8 }}>{shortAddr(address)}</div>
+              </div>
+            </SoftSwap>
           ) : (
+            <SoftSwap id={walletAccount?.exists ? "returning" : "new"}>
             <div style={{ marginTop: 22 }}>
               {walletAccount?.exists ? (
                 <div style={identityCard}>
@@ -296,7 +305,9 @@ export default function OnchainPortalPage() {
                   <div style={{ fontSize: 24, fontWeight: 600, letterSpacing: "-.025em", marginTop: 7 }}>
                     {walletAccount.displayName}
                   </div>
-                  <div style={{ ...walletText, marginTop: 7 }}>{shortAddr(address)}</div>
+                  <div style={{ ...walletText, marginTop: 7 }}>
+                    {wallet.short} · {shortAddr(address)}
+                  </div>
                   <div style={{ color: "#777", fontSize: 12, marginTop: 10 }}>
                     Your existing player profile is ready.
                   </div>
@@ -320,7 +331,9 @@ export default function OnchainPortalPage() {
                     autoComplete="nickname"
                     style={nameInput}
                   />
-                  <div style={{ ...walletText, marginTop: 9 }}>Wallet · {shortAddr(address)}</div>
+                  <div style={{ ...walletText, marginTop: 9 }}>
+                    {wallet.short} · {shortAddr(address)}
+                  </div>
                 </label>
               )}
               {!walletAccount && (
@@ -343,6 +356,7 @@ export default function OnchainPortalPage() {
                         (displayName.trim().length < 2 || displayName.trim().length > 48))
                     }
                     onClick={() => void signIn()}
+                    className="mz-soft-btn"
                     style={{
                       ...primaryBtn,
                       opacity:
@@ -354,7 +368,7 @@ export default function OnchainPortalPage() {
                     }}
                   >
                     {busy || signing
-                      ? "Check MetaMask…"
+                      ? checkingWallet(wallet)
                       : walletAccount?.exists
                         ? `Sign in as ${walletAccount.displayName}`
                         : "Create account & sign in"}
@@ -384,22 +398,27 @@ export default function OnchainPortalPage() {
                     })();
                   }}
                   style={ghostBtn}
+                  className="mz-soft-btn"
                 >
                   Disconnect
                 </button>
               </div>
             </div>
+            </SoftSwap>
           )}
           {status && (
-            <p
-              style={{
-                margin: "16px 0 0",
-                fontSize: 13,
-                color: status.includes("Signed") || status.includes("Funded") ? "#00E676" : "#FF8A8A",
-              }}
-            >
-              {status}
-            </p>
+            <SoftSwap id={status}>
+              <p
+                className="mz-status-line"
+                style={{
+                  margin: "16px 0 0",
+                  fontSize: 13,
+                  color: status.includes("Signed") || status.includes("Funded") || status.includes("Welcome") || status.includes("Account created") ? "#00E676" : "#FF8A8A",
+                }}
+              >
+                {status}
+              </p>
+            </SoftSwap>
           )}
         </div>
 
@@ -433,7 +452,7 @@ function dedupeConnectors(connectors: readonly Connector[]) {
 
 function friendlyConnectError(msg: string) {
   if (/provider not found|no ethereum/i.test(msg)) {
-    return "No wallet detected. Install MetaMask (or unlock it) and refresh.";
+    return "No wallet detected. Install MetaMask or Coinbase Wallet (and unlock it), then refresh.";
   }
   return msg.replace(/\s*Version:\s*@wagmi\/core@[\d.]+/i, "").trim();
 }

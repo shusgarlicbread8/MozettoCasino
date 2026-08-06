@@ -12,6 +12,7 @@ import { TestMusdcPanel } from "@/components/TestMusdcPanel";
 import { VaultPanel } from "@/components/VaultPanel";
 import { api } from "@/lib/api";
 import { money, useSession } from "@/lib/session";
+import { useWalletBrand } from "@/lib/wallet-brand";
 import { getChainAsset, preferredChainId } from "@/lib/wagmi";
 
 const FONT_MONO = "var(--font-geist-mono), monospace";
@@ -61,6 +62,7 @@ function ledgerCategory(ref: string) {
 
 export default function WalletPage() {
   const { me, refresh } = useSession();
+  const wallet = useWalletBrand();
   const [f, setF] = useState(0);
   const [adv, setAdv] = useState(false);
   const [hoverDeposit, setHoverDeposit] = useState(false);
@@ -181,7 +183,7 @@ export default function WalletPage() {
           <div style={{ fontSize: 12.5, color: "#6A6A6A", marginTop: 8 }}>
             {isOnchain
               ? isChainTest
-                ? "Playable balance mirrors ArenaVault after indexer confirmation. Mint mUSDC into MetaMask, then deposit."
+                ? `Playable balance mirrors ArenaVault after indexer confirmation. Mint mUSDC into ${wallet.short}, then deposit.`
                 : "On-chain wallet account (separate from Demo email). Fund via ArenaVault with Circle USDC."
               : "Demo paper USDC. For real Base USDC, sign out and use /onchain with a wallet."}
           </div>
@@ -194,8 +196,8 @@ export default function WalletPage() {
           <div style={{ display: "flex", gap: 10, marginTop: 22, flexWrap: "wrap" }}>
             {isOnchain ? (
               <div style={{ fontSize: 12.5, color: "#6A6A6A", lineHeight: 1.45 }}>
-                Wallet tokens stay in MetaMask until you deposit. Indexed available balance above is
-                what matchmaking uses.
+                Wallet tokens stay in {wallet.short} until you deposit. Indexed available balance
+                above is what matchmaking uses.
               </div>
             ) : (
               <>
