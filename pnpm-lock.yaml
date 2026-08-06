@@ -48,6 +48,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@coinbase/wallet-sdk':
+        specifier: ^4.3.6
+        version: 4.3.7(typescript@5.9.3)(zod@3.25.76)
       '@mozetto/chain-manifest':
         specifier: workspace:*
         version: link:../../packages/chain-manifest
@@ -65,7 +68,7 @@ importers:
         version: 5.101.4(react@19.1.0)
       '@wagmi/connectors':
         specifier: ^8.1.0
-        version: 8.1.0(@wagmi/core@3.6.4(@tanstack/query-core@5.101.4)(@types/react@19.2.18)(react@19.1.0)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.1.0))(viem@2.55.11(typescript@5.9.3)(zod@3.25.76)))(typescript@5.9.3)(viem@2.55.11(typescript@5.9.3)(zod@3.25.76))
+        version: 8.1.0(@coinbase/wallet-sdk@4.3.7(typescript@5.9.3)(zod@3.25.76))(@wagmi/core@3.6.4(@tanstack/query-core@5.101.4)(@types/react@19.2.18)(react@19.1.0)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.1.0))(viem@2.55.11(typescript@5.9.3)(zod@3.25.76)))(typescript@5.9.3)(viem@2.55.11(typescript@5.9.3)(zod@3.25.76))
       '@wagmi/core':
         specifier: ^3.6.4
         version: 3.6.4(@tanstack/query-core@5.101.4)(@types/react@19.2.18)(react@19.1.0)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.1.0))(viem@2.55.11(typescript@5.9.3)(zod@3.25.76))
@@ -86,7 +89,7 @@ importers:
         version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
       wagmi:
         specifier: ^3.7.6
-        version: 3.7.6(@tanstack/query-core@5.101.4)(@tanstack/react-query@5.101.4(react@19.1.0))(@types/react@19.2.18)(react@19.1.0)(typescript@5.9.3)(viem@2.55.11(typescript@5.9.3)(zod@3.25.76))
+        version: 3.7.6(@coinbase/wallet-sdk@4.3.7(typescript@5.9.3)(zod@3.25.76))(@tanstack/query-core@5.101.4)(@tanstack/react-query@5.101.4(react@19.1.0))(@types/react@19.2.18)(react@19.1.0)(typescript@5.9.3)(viem@2.55.11(typescript@5.9.3)(zod@3.25.76))
       zustand:
         specifier: ^5.0.3
         version: 5.0.14(@types/react@19.2.18)(react@19.1.0)(use-sync-external-store@1.4.0(react@19.1.0))
@@ -463,6 +466,9 @@ packages:
   '@alloc/quick-lru@5.2.0':
     resolution: {integrity: sha512-UrcABB+4bUrFABwbluTIBErXwvbsU/V7TZWfmbgJfbkwiBuziS9gxdODUyuiecfdGQ85jglMW6juS3+z5TsKLw==}
     engines: {node: '>=10'}
+
+  '@coinbase/wallet-sdk@4.3.7':
+    resolution: {integrity: sha512-z6e5XDw6EF06RqkeyEa+qD0dZ2ZbLci99vx3zwDY//XO8X7166tqKJrR2XlQnzVmtcUuJtCd5fCvr9Cu6zzX7w==}
 
   '@emnapi/core@1.10.0':
     resolution: {integrity: sha512-yq6OkJ4p82CAfPl0u9mQebQHKPJkY7WrIuk205cTYnYe+k2Z8YBh11FrbRG/H6ihirqcacOgl2BIO8oyMQLeXw==}
@@ -1516,6 +1522,10 @@ packages:
   client-only@0.0.1:
     resolution: {integrity: sha512-IV3Ou0jSMzZrd3pZ48nLkT9DA7Ag1pnPzaiQhpW7c3RbcqqzvzzVu+L8gfqMp/8IM2MQtSiqaCxrrcfu8I8rMA==}
 
+  clsx@1.2.1:
+    resolution: {integrity: sha512-EcR6r5a8bj6pu3ycsa/E/cKVGuTgZJZdsyUYHOksG/UHIiKfjxzRxYJpyVBwYaQeOvghal9fcc4PidlgzugAQg==}
+    engines: {node: '>=6'}
+
   cluster-key-slot@1.1.1:
     resolution: {integrity: sha512-rwHwUfXL40Chm1r08yrhU3qpUvdVlgkKNeyeGPOxnW8/SyVDvgRaed/Uz54AqWNaTCAThlj6QAs3TZcKI0xDEw==}
     engines: {node: '>=0.10.0'}
@@ -2497,6 +2507,14 @@ packages:
     resolution: {integrity: sha512-GD3qdB0x1z9xgFI6cdRD6xu2Sp2WCOEoe3mtnyB5Ee0XrrL5Pe+e4CCnJrRMnL1zYtRDZmQQVbvOttLnKDLnaw==}
     engines: {node: '>=12'}
 
+  preact@10.29.8:
+    resolution: {integrity: sha512-ej2aVZ+vZ8WO7tvlQWRM9N63A0KzF9q4mWJfDUHgYaIofWY9hu74QdnQrjoPMmZi2/nZ5gN0bJCQF49xQqx09Q==}
+    peerDependencies:
+      preact-render-to-string: '>=5'
+    peerDependenciesMeta:
+      preact-render-to-string:
+        optional: true
+
   prelude-ls@1.2.1:
     resolution: {integrity: sha512-vkcDPrRZo1QZLbn5RLGPpg/WmIQ65qoWWhcGKf/b5eplkkarX0m9z8ppCat4mlOqUsWpyNuYgO3VRyrYHSzX5g==}
     engines: {node: '>= 0.8.0'}
@@ -2958,6 +2976,20 @@ snapshots:
   '@adraffy/ens-normalize@1.11.1': {}
 
   '@alloc/quick-lru@5.2.0': {}
+
+  '@coinbase/wallet-sdk@4.3.7(typescript@5.9.3)(zod@3.25.76)':
+    dependencies:
+      '@noble/hashes': 1.8.0
+      clsx: 1.2.1
+      eventemitter3: 5.0.1
+      preact: 10.29.8
+      viem: 2.55.11(typescript@5.9.3)(zod@3.25.76)
+    transitivePeerDependencies:
+      - bufferutil
+      - preact-render-to-string
+      - typescript
+      - utf-8-validate
+      - zod
 
   '@emnapi/core@1.10.0':
     dependencies:
@@ -3667,11 +3699,12 @@ snapshots:
   '@unrs/resolver-binding-win32-x64-msvc@1.12.2':
     optional: true
 
-  '@wagmi/connectors@8.1.0(@wagmi/core@3.6.4(@tanstack/query-core@5.101.4)(@types/react@19.2.18)(react@19.1.0)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.1.0))(viem@2.55.11(typescript@5.9.3)(zod@3.25.76)))(typescript@5.9.3)(viem@2.55.11(typescript@5.9.3)(zod@3.25.76))':
+  '@wagmi/connectors@8.1.0(@coinbase/wallet-sdk@4.3.7(typescript@5.9.3)(zod@3.25.76))(@wagmi/core@3.6.4(@tanstack/query-core@5.101.4)(@types/react@19.2.18)(react@19.1.0)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.1.0))(viem@2.55.11(typescript@5.9.3)(zod@3.25.76)))(typescript@5.9.3)(viem@2.55.11(typescript@5.9.3)(zod@3.25.76))':
     dependencies:
       '@wagmi/core': 3.6.4(@tanstack/query-core@5.101.4)(@types/react@19.2.18)(react@19.1.0)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.1.0))(viem@2.55.11(typescript@5.9.3)(zod@3.25.76))
       viem: 2.55.11(typescript@5.9.3)(zod@3.25.76)
     optionalDependencies:
+      '@coinbase/wallet-sdk': 4.3.7(typescript@5.9.3)(zod@3.25.76)
       typescript: 5.9.3
 
   '@wagmi/core@3.6.4(@tanstack/query-core@5.101.4)(@types/react@19.2.18)(react@19.1.0)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.1.0))(viem@2.55.11(typescript@5.9.3)(zod@3.25.76))':
@@ -3860,6 +3893,8 @@ snapshots:
       supports-color: 7.2.0
 
   client-only@0.0.1: {}
+
+  clsx@1.2.1: {}
 
   cluster-key-slot@1.1.1: {}
 
@@ -4109,8 +4144,8 @@ snapshots:
       '@typescript-eslint/parser': 8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
       eslint: 9.39.5(jiti@2.7.0)
       eslint-import-resolver-node: 0.3.10
-      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0))
-      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0))
+      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0)(eslint@9.39.5(jiti@2.7.0))
+      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.5(jiti@2.7.0))
       eslint-plugin-jsx-a11y: 6.10.2(eslint@9.39.5(jiti@2.7.0))
       eslint-plugin-react: 7.37.5(eslint@9.39.5(jiti@2.7.0))
       eslint-plugin-react-hooks: 5.2.0(eslint@9.39.5(jiti@2.7.0))
@@ -4129,7 +4164,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0)):
+  eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0)(eslint@9.39.5(jiti@2.7.0)):
     dependencies:
       '@nolyfill/is-core-module': 1.0.39
       debug: 4.4.3
@@ -4140,22 +4175,22 @@ snapshots:
       tinyglobby: 0.2.17
       unrs-resolver: 1.12.2
     optionalDependencies:
-      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0))
+      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.5(jiti@2.7.0))
     transitivePeerDependencies:
       - supports-color
 
-  eslint-module-utils@2.14.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0)):
+  eslint-module-utils@2.14.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.5(jiti@2.7.0)):
     dependencies:
       debug: 3.2.7
     optionalDependencies:
       '@typescript-eslint/parser': 8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
       eslint: 9.39.5(jiti@2.7.0)
       eslint-import-resolver-node: 0.3.10
-      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0))
+      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0)(eslint@9.39.5(jiti@2.7.0))
     transitivePeerDependencies:
       - supports-color
 
-  eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0)):
+  eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.5(jiti@2.7.0)):
     dependencies:
       '@rtsao/scc': 1.1.0
       array-includes: 3.1.9
@@ -4166,7 +4201,7 @@ snapshots:
       doctrine: 2.1.0
       eslint: 9.39.5(jiti@2.7.0)
       eslint-import-resolver-node: 0.3.10
-      eslint-module-utils: 2.14.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0))
+      eslint-module-utils: 2.14.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.5(jiti@2.7.0))
       hasown: 2.0.4
       is-core-module: 2.16.2
       is-glob: 4.0.3
@@ -5027,6 +5062,8 @@ snapshots:
 
   postgres@3.4.9: {}
 
+  preact@10.29.8: {}
+
   prelude-ls@1.2.1: {}
 
   process-warning@4.0.1: {}
@@ -5469,10 +5506,10 @@ snapshots:
       - utf-8-validate
       - zod
 
-  wagmi@3.7.6(@tanstack/query-core@5.101.4)(@tanstack/react-query@5.101.4(react@19.1.0))(@types/react@19.2.18)(react@19.1.0)(typescript@5.9.3)(viem@2.55.11(typescript@5.9.3)(zod@3.25.76)):
+  wagmi@3.7.6(@coinbase/wallet-sdk@4.3.7(typescript@5.9.3)(zod@3.25.76))(@tanstack/query-core@5.101.4)(@tanstack/react-query@5.101.4(react@19.1.0))(@types/react@19.2.18)(react@19.1.0)(typescript@5.9.3)(viem@2.55.11(typescript@5.9.3)(zod@3.25.76)):
     dependencies:
       '@tanstack/react-query': 5.101.4(react@19.1.0)
-      '@wagmi/connectors': 8.1.0(@wagmi/core@3.6.4(@tanstack/query-core@5.101.4)(@types/react@19.2.18)(react@19.1.0)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.1.0))(viem@2.55.11(typescript@5.9.3)(zod@3.25.76)))(typescript@5.9.3)(viem@2.55.11(typescript@5.9.3)(zod@3.25.76))
+      '@wagmi/connectors': 8.1.0(@coinbase/wallet-sdk@4.3.7(typescript@5.9.3)(zod@3.25.76))(@wagmi/core@3.6.4(@tanstack/query-core@5.101.4)(@types/react@19.2.18)(react@19.1.0)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.1.0))(viem@2.55.11(typescript@5.9.3)(zod@3.25.76)))(typescript@5.9.3)(viem@2.55.11(typescript@5.9.3)(zod@3.25.76))
       '@wagmi/core': 3.6.4(@tanstack/query-core@5.101.4)(@types/react@19.2.18)(react@19.1.0)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.1.0))(viem@2.55.11(typescript@5.9.3)(zod@3.25.76))
       react: 19.1.0
       use-sync-external-store: 1.4.0(react@19.1.0)

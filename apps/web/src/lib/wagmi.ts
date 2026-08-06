@@ -94,7 +94,11 @@ export function getWagmiConfig() {
       shimDisconnect: true,
       unstable_shimAsyncInject: 2_000,
     }),
-    coinbaseWallet({ appName: "Mozetto Arena", preference: "eoaOnly" }),
+    // Requires peer `@coinbase/wallet-sdk`. eoaOnly prefers the browser extension over Smart Wallet.
+    coinbaseWallet({
+      appName: "Mozetto Arena",
+      preference: { options: "eoaOnly" },
+    }),
   ];
   if (wcProjectId) {
     connectors.push(

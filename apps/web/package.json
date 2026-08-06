@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@coinbase/wallet-sdk": "^4.3.6",
     "@mozetto/chain-manifest": "workspace:*",
     "@mozetto/shared-types": "workspace:*",
     "@supabase/ssr": "^0.12.4",
