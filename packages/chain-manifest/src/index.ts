@@ -3,9 +3,9 @@ export {
   type ChainManifestEntry,
   type HexAddress,
   type NetworkKey,
-} from "./generated";
+} from "./generated.js";
 
-import { chainManifest, type NetworkKey } from "./generated";
+import { chainManifest, type NetworkKey } from "./generated.js";
 
 export function resolveNetworkKey(raw?: string | null): NetworkKey {
   const v = (raw || process.env.MOZETTO_CHAIN_ENV || "base-sepolia").toLowerCase();

@@ -474,14 +474,26 @@ async function tick(pollCount: { n: number }) {
   const latest = await client.getBlockNumber();
   const safeHead = latest > BigInt(CONFIRMATIONS) ? latest - BigInt(CONFIRMATIONS) : 0n;
   let from = await ensureCursor(cfg.chainId, vault, cfg.deploymentBlock, latest);
-  if (from > safeHead) return;
+  if (from > safeHead) {
+    // Cursor is caught up — still try backfill for deposits recorded before SIWE.
+    await backfillUnmirrored();
+    return;
+  }
   const to = from + 2_000n > safeHead ? safeHead : from + 2_000n;
+  const fromBlock = from === 0n ? from : from + 1n;
 
-  const logs = await client.getLogs({
-    address: vault,
-    events: [depositedEvent, withdrawnEvent, sessionOpenedEvent, sessionSettledEvent],
-    fromBlock: from === 0n ? from : from + 1n,
-    toBlock: to,
+  // Fetch event types separately — Anvil/some RPCs drop multi-event topic ORs.
+  const [deposited, withdrawn, opened, settled] = await Promise.all([
+    client.getLogs({ address: vault, event: depositedEvent, fromBlock, toBlock: to }),
+    client.getLogs({ address: vault, event: withdrawnEvent, fromBlock, toBlock: to }),
+    client.getLogs({ address: vault, event: sessionOpenedEvent, fromBlock, toBlock: to }),
+    client.getLogs({ address: vault, event: sessionSettledEvent, fromBlock, toBlock: to }),
+  ]);
+
+  const logs = [...deposited, ...withdrawn, ...opened, ...settled].sort((a, b) => {
+    const bn = Number((a.blockNumber ?? 0n) - (b.blockNumber ?? 0n));
+    if (bn !== 0) return bn;
+    return (a.logIndex ?? 0) - (b.logIndex ?? 0);
   });
 
   for (const log of logs) {
@@ -501,7 +513,7 @@ async function tick(pollCount: { n: number }) {
     await reconcile(cfg.chainId, vault, client);
   }
   if (logs.length) {
-    console.log(`[indexer] processed ${logs.length} logs blocks ${from}-${to}`);
+    console.log(`[indexer] processed ${logs.length} logs blocks ${fromBlock}-${to}`);
   }
 }
 
@@ -511,7 +523,19 @@ console.log("[indexer] starting", getChainConfig().env, {
   symbol: getChainConfig().symbol,
 });
 const counter = { n: 0 };
+let ticking = false;
+async function safeTick() {
+  if (ticking) return;
+  ticking = true;
+  try {
+    await tick(counter);
+  } catch (err) {
+    console.error("[indexer] tick failed", err);
+  } finally {
+    ticking = false;
+  }
+}
 setInterval(() => {
-  void tick(counter).catch((err) => console.error("[indexer] tick failed", err));
+  void safeTick();
 }, POLL_MS);
-void tick(counter).catch(console.error);
+void safeTick();
