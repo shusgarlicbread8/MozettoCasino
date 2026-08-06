@@ -38,3 +38,6 @@ contracts/broadcast/
 .vscode/
 *.swp
 .cursor/
+.env*
+
+!.env.example
