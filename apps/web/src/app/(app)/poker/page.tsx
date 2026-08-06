@@ -7,11 +7,14 @@
  * table — players never pick an opponent or seat.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSignTypedData } from "wagmi";
+import { InstantEnablePanel } from "@/components/InstantEnablePanel";
+import { SplitFlapNumber } from "@/components/SplitFlapNumber";
 import { api, ApiError } from "@/lib/api";
 import { signAndSubmitSeatTicket } from "@/lib/seat-ticket";
-import { useSession } from "@/lib/session";
+import { money as formatMoney, useSession } from "@/lib/session";
+import { useMozettoBalances } from "@/lib/use-mozetto-balances";
 
 const MONO = "var(--font-geist-mono), 'Geist Mono', monospace";
 
@@ -77,8 +80,12 @@ function stakesForBuyIn(buyIn: number) {
 export default function PokerPage() {
   const { me, refresh } = useSession();
   const { signTypedDataAsync } = useSignTypedData();
-  const wallet = me?.available ?? 0;
+  const balances = useMozettoBalances();
   const isOnchain = me?.profileKind === "onchain";
+  const asset = balances.asset;
+  const playable = isOnchain
+    ? balances.wallet + balances.legacyMozetto
+    : (me?.available ?? 0);
 
   const [leagues, setLeagues] = useState<ArenaLeague[]>([]);
   const [leagueId, setLeagueId] = useState("bronze");
@@ -89,8 +96,34 @@ export default function PokerPage() {
   const [needsTopUp, setNeedsTopUp] = useState<{ needed: number; available: number } | null>(null);
   const [topUpBusy, setTopUpBusy] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [showEnable, setShowEnable] = useState(false);
+  const [instantEnabled, setInstantEnabled] = useState(!isOnchain);
+  const [remainingBudget, setRemainingBudget] = useState<number | null>(null);
+
+  const refreshInstant = useCallback(async () => {
+    if (!isOnchain) {
+      setInstantEnabled(true);
+      return;
+    }
+    try {
+      const s = await api<{
+        enabled: boolean;
+        permission?: { remainingSpendUsdc?: number } | null;
+      }>("/v1/arena/instant-status");
+      setInstantEnabled(Boolean(s.enabled));
+      setRemainingBudget(s.permission?.remainingSpendUsdc ?? null);
+    } catch {
+      setInstantEnabled(false);
+    }
+  }, [isOnchain]);
 
   useEffect(() => setMounted(true), []);
+
+  useEffect(() => {
+    void refreshInstant();
+    const t = setInterval(() => void refreshInstant(), 4000);
+    return () => clearInterval(t);
+  }, [refreshInstant]);
 
   useEffect(() => {
     const load = () =>
@@ -106,17 +139,30 @@ export default function PokerPage() {
   const league = useMemo(() => list.find((l) => l.id === leagueId) ?? list[0], [list, leagueId]);
   const selectedProfile = PROFILES.find((p) => p.id === profile) ?? PROFILES[0];
   const { sb, bb } = stakesForBuyIn(league.buyIn);
-  const canAfford = wallet >= league.buyIn;
-  const shortBy = Math.max(0, league.buyIn - wallet);
+  const canAfford = playable >= league.buyIn;
+  const shortBy = Math.max(0, league.buyIn - playable);
 
   async function findMatch() {
     if (busy || !league) return;
+    if (isOnchain && !instantEnabled) {
+      setShowEnable(true);
+      setError("Enable Instant Play once before finding a match.");
+      return;
+    }
     setBusy(true);
     setError(null);
     setNeedsTopUp(null);
-    setStatus(isOnchain ? "Sign seat ticket…" : "Searching for opponents…");
+    setStatus(
+      isOnchain
+        ? instantEnabled
+          ? `Joining ${formatMoney(league.buyIn)} — Mozetto handles signing and submission…`
+          : "Confirm seat ticket in your wallet…"
+        : "Searching for opponents…",
+    );
     try {
-      if (isOnchain) {
+      // Instant-enabled: API session signer creates SeatTicket (no wallet popup).
+      // Fallback: player-signed ticket when Instant is off.
+      if (isOnchain && !instantEnabled) {
         await signAndSubmitSeatTicket({
           leagueId: league.id,
           profileKey: profile,
@@ -168,7 +214,7 @@ export default function PokerPage() {
       if (e instanceof ApiError && e.data.error === "insufficient_funds") {
         setNeedsTopUp({
           needed: Number(e.data.needed ?? league.buyIn),
-          available: Number(e.data.available ?? wallet),
+          available: Number(e.data.available ?? playable),
         });
         setStatus(null);
         setBusy(false);
@@ -181,6 +227,10 @@ export default function PokerPage() {
   }
 
   async function topUp(amount: number) {
+    if (isOnchain) {
+      setError(`Mint or transfer ${money(amount)} more ${asset?.symbol ?? "USDC"} into your wallet, then retry.`);
+      return;
+    }
     setTopUpBusy(true);
     try {
       await api("/v1/wallet/deposit", { method: "POST", body: JSON.stringify({ amount: Math.ceil(amount) }) });
@@ -210,13 +260,16 @@ export default function PokerPage() {
         <div>
           <h1 style={{ margin: 0, fontSize: 29, fontWeight: 600, letterSpacing: "-.035em" }}>Ranked Arena</h1>
           <p style={{ margin: "8px 0 0", fontSize: 13.5, color: "#7A7A7A", maxWidth: 540 }}>
-            Choose your league and AI profile. Buy-in is fixed per league — the platform seats you, you never pick
-            the table or opponent.
+            Choose your league and AI profile. Buy-in locks from your wallet when matched and returns on settle.
+            After Enable Instant Play, joining is a signature — Mozetto pays open/settle gas.
           </p>
         </div>
         <div style={{ textAlign: "right", fontFamily: MONO, fontSize: 11, color: "#6A6A6A", letterSpacing: ".04em" }}>
           <div>
-            WALLET <span style={{ color: "#00E676" }}>{money(wallet)}</span>
+            WALLET{" "}
+            <span style={{ color: "#00E676" }}>
+              <SplitFlapNumber value={playable} color="#00E676" />
+            </span>
           </div>
           <div style={{ marginTop: 4 }}>
             LIVE <span style={{ color: "#EDEDED" }}>{liveSeated}</span> seated
@@ -384,9 +437,14 @@ export default function PokerPage() {
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", font: `400 11.5px ${MONO}` }}>
-              <span style={{ color: "#6A6A6A" }}>WALLET BALANCE</span>
-              <span style={{ color: "#EDEDED" }}>{money(wallet)}</span>
+              <span style={{ color: "#6A6A6A" }}>{isOnchain ? "WALLET BALANCE" : "DEMO BALANCE"}</span>
+              <span style={{ color: "#EDEDED" }}>{money(playable)}</span>
             </div>
+            {isOnchain && (
+              <div style={{ marginTop: 8, font: `400 10px ${MONO}`, color: instantEnabled ? "#6DFFB0" : "#FFB86C" }}>
+                INSTANT {instantEnabled ? "ENABLED" : "NOT ENABLED"} · open/settle gas paid by Mozetto
+              </div>
+            )}
 
             <div
               style={{
@@ -428,27 +486,52 @@ export default function PokerPage() {
                 }}
               >
                 <div style={{ fontSize: 12.5, color: "#FF8A8A", lineHeight: 1.45 }}>
-                  You&apos;re {money(shortBy)} short for {league.name}. Top up your wallet to enter this league.
+                  You&apos;re {money(shortBy)} short for {league.name}.{" "}
+                  {isOnchain
+                    ? `Add ${asset?.symbol ?? "USDC"} to your wallet (Get Test mUSDC on the wallet page).`
+                    : "Top up your demo wallet to enter this league."}
                 </div>
-                <button
-                  type="button"
-                  disabled={topUpBusy}
-                  onClick={() => void topUp(shortBy)}
-                  className="mz-open-cta"
-                  style={{
-                    marginTop: 10,
-                    width: "100%",
-                    padding: "10px 12px",
-                    borderRadius: 9,
-                    border: "1px solid rgba(0,230,118,.4)",
-                    background: "rgba(0,230,118,.12)",
-                    color: "#00E676",
-                    font: `600 12.5px ${MONO}`,
-                    cursor: topUpBusy ? "wait" : "pointer",
+                {!isOnchain && (
+                  <button
+                    type="button"
+                    disabled={topUpBusy}
+                    onClick={() => void topUp(shortBy)}
+                    className="mz-open-cta"
+                    style={{
+                      marginTop: 10,
+                      width: "100%",
+                      padding: "10px 12px",
+                      borderRadius: 9,
+                      border: "1px solid rgba(0,230,118,.4)",
+                      background: "rgba(0,230,118,.12)",
+                      color: "#00E676",
+                      font: `600 12.5px ${MONO}`,
+                      cursor: topUpBusy ? "wait" : "pointer",
+                    }}
+                  >
+                    {topUpBusy ? "Adding funds…" : `Top up ${money(shortBy)}`}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {isOnchain && instantEnabled && remainingBudget != null && (
+              <div style={{ marginTop: 12, font: `400 11.5px ${MONO}`, color: "#6A6A6A", lineHeight: 1.45 }}>
+                Buy-in {money(league.buyIn)} · remaining Instant budget {money(remainingBudget)}.
+                Mozetto handles signing and submission — no wallet popup.
+              </div>
+            )}
+
+            {isOnchain && (!instantEnabled || showEnable) && (
+              <div style={{ marginTop: 14 }}>
+                <InstantEnablePanel
+                  compact
+                  onUpdated={() => {
+                    void refreshInstant();
+                    setShowEnable(false);
+                    setError(null);
                   }}
-                >
-                  {topUpBusy ? "Adding funds…" : `Top up ${money(shortBy)}`}
-                </button>
+                />
               </div>
             )}
           </div>
@@ -520,25 +603,36 @@ export default function PokerPage() {
 
           <button
             type="button"
-            disabled={!canAfford || busy}
+            disabled={!canAfford || busy || (isOnchain && !instantEnabled)}
             onClick={() => void findMatch()}
-            className={canAfford && !busy ? "mz-join-cta" : undefined}
+            className={
+              canAfford && !busy && (!isOnchain || instantEnabled) ? "mz-join-cta" : undefined
+            }
             style={{
               marginTop: 18,
               width: "100%",
               padding: "15px 18px",
               borderRadius: 12,
               border: "none",
-              background: canAfford && !busy ? "#00E676" : "rgba(255,255,255,.08)",
-              color: canAfford && !busy ? "#050505" : "#6A6A6A",
+              background:
+                canAfford && !busy && (!isOnchain || instantEnabled)
+                  ? "#00E676"
+                  : "rgba(255,255,255,.08)",
+              color:
+                canAfford && !busy && (!isOnchain || instantEnabled) ? "#050505" : "#6A6A6A",
               fontSize: 15,
               fontWeight: 650,
               letterSpacing: "-.01em",
-              cursor: canAfford && !busy ? "pointer" : "not-allowed",
+              cursor:
+                canAfford && !busy && (!isOnchain || instantEnabled) ? "pointer" : "not-allowed",
               transition: "box-shadow .2s ease, transform .12s ease",
             }}
           >
-            {busy ? "Finding match…" : "Find Match"}
+            {busy
+              ? "Finding match…"
+              : isOnchain && !instantEnabled
+                ? "Enable Instant Play first"
+                : "Find Match"}
           </button>
         </aside>
       </div>

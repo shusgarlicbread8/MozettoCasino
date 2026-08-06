@@ -12,6 +12,7 @@ import { useParams } from "next/navigation";
 import { api, gameWsUrl, getAccessToken } from "@/lib/api";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { money, useSession } from "@/lib/session";
+import { useMozettoBalances } from "@/lib/use-mozetto-balances";
 import { JoinTableSheet, type JoinTableData } from "@/components/JoinTableSheet";
 
 type CardT = { r: string; s: string; color: string; bg?: string; border?: string; empty?: boolean };
@@ -153,6 +154,7 @@ const FONT_SANS = "var(--font-geist-sans), sans-serif";
 export default function ArenaPage() {
   const { tableId } = useParams<{ tableId: string }>();
   const { me, refresh } = useSession();
+  const balances = useMozettoBalances();
   const { setSeatedTable, confirmLeave } = useLeaveGuard();
   const [i, setI] = useState(0);
   const [ch, setCh] = useState(0);
@@ -806,9 +808,9 @@ export default function ArenaPage() {
   const seatedCount = live?.seats?.filter((s) => s.playerId && !s.sitOut && Number(s.stack) > 0).length ?? 0;
   const session = [
     { k: "TABLE BALANCE", v: myLiveSeat ? money(myLiveSeat.stack) : "—", color: "#EDEDED" },
-    { k: "AT TABLES", v: money(me?.atTables ?? 0), color: "#FFB020" },
+    { k: "AT TABLES", v: money(balances.displayLocked), color: "#FFB020" },
     { k: "SEATED", v: `${seatedCount}/6`, color: "#EDEDED" },
-    { k: "WALLET LEFT", v: money(me?.available ?? 0), color: "#8A8A8A" },
+    { k: "WALLET LEFT", v: money(balances.displayWallet), color: "#8A8A8A" },
   ];
 
   const myStats = [

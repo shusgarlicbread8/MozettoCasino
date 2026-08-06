@@ -1,16 +1,16 @@
 {
   "chainId": 31337,
-  "usdc": "0x74Df809b1dfC099E8cdBc98f6a8D1F5c2C3f66f8",
+  "usdc": "0x41219a0a9C0b86ED81933c788a6B63Dfef8f17eE",
   "symbol": "mUSDC",
   "decimals": 6,
   "isTestAsset": true,
   "faucetEnabled": true,
-  "arenaVault": "0x4DAf17c8142A483B2E2348f56ae0F2cFDAe22ceE",
-  "tableRegistry": "0x618fB9dbd2BD6eb968B4c1af36af6CB0b45310Ec",
-  "settlementHub": "0x1D13fF25b10C9a6741DFdce229073bed652197c7",
-  "checkpointRegistry": "0xa779C1D17bC5230c07afdC51376CAC1cb3Dd5314",
-  "randomnessCoordinator": "0x76cec9299B6Fa418dc71416FF353737AB7933A7D",
+  "arenaVault": "0xeA8AE08513f8230cAA8d031D28cB4Ac8CE720c68",
+  "tableRegistry": "0x776D6996c8180838dC0587aE0DE5D614b1350f37",
+  "settlementHub": "0x6431AF84d34F0522cAA58b221d94A150B5AdAC69",
+  "checkpointRegistry": "0x3A906C603F080D96dc08f81CF2889dAB6FF299dE",
+  "randomnessCoordinator": "0x820638ecd57B55e51CE6EaD7D137962E7A201dD9",
   "feeTreasury": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
-  "deploymentBlock": 9061,
+  "deploymentBlock": 16544,
   "protocolVersion": "1.0.0-anvil"
 }

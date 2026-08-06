@@ -4,12 +4,15 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useLeaveGuard } from "@/lib/leave-guard";
-import { money, useSession } from "@/lib/session";
+import { SplitFlapNumber } from "@/components/SplitFlapNumber";
+import { useSession } from "@/lib/session";
+import { useMozettoBalances } from "@/lib/use-mozetto-balances";
 
 type Notif = { id: string; title: string; body: string; href: string | null; created_at: string; read_at: string | null };
 
 export function Topbar() {
   const { me, stats, loading, signOut } = useSession();
+  const balances = useMozettoBalances();
   const { leaveIfSeated } = useLeaveGuard();
   const [open, setOpen] = useState(false);
   const [notifs, setNotifs] = useState<Notif[]>([]);
@@ -144,13 +147,17 @@ export function Topbar() {
             <div style={{ font: "400 9px var(--font-geist-mono), monospace", letterSpacing: ".1em", color: "#4A4A4A" }}>
               WALLET
             </div>
-            <div style={{ font: "500 13px var(--font-geist-mono), monospace" }}>{money(me?.available ?? 0)}</div>
+            <div style={{ font: "500 13px var(--font-geist-mono), monospace" }}>
+              <SplitFlapNumber value={balances.displayWallet} fontSize={13} />
+            </div>
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ font: "400 9px var(--font-geist-mono), monospace", letterSpacing: ".1em", color: "#4A4A4A" }}>
               AT TABLES
             </div>
-            <div style={{ font: "500 13px var(--font-geist-mono), monospace", color: "#FFB020" }}>{money(me?.atTables ?? 0)}</div>
+            <div style={{ font: "500 13px var(--font-geist-mono), monospace", color: "#FFB020" }}>
+              <SplitFlapNumber value={balances.displayLocked} color="#FFB020" fontSize={13} />
+            </div>
           </div>
         </Link>
         <Link

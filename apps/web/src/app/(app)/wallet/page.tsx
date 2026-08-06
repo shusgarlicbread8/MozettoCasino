@@ -1,28 +1,29 @@
 "use client";
 
 /**
- * Pixel-for-pixel port of design/Wallet.dc.html. Nav + Topbar are provided by
- * the (app) AppShell layout — this page renders the main column only.
- * Balances / ledger / open tables come from the live session API.
+ * Mozetto wallet dashboard — live on-chain net worth, faucet CTA, sessions,
+ * activity, Instant Play at bottom. No advanced Arena custody UI.
  */
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { TestMusdcPanel } from "@/components/TestMusdcPanel";
+import { InstantEnablePanel } from "@/components/InstantEnablePanel";
+import { NetWorthChart } from "@/components/NetWorthChart";
+import { SplitFlapNumber } from "@/components/SplitFlapNumber";
 import { VaultPanel } from "@/components/VaultPanel";
 import { api } from "@/lib/api";
 import { money, useSession } from "@/lib/session";
+import { useMozettoBalances } from "@/lib/use-mozetto-balances";
 import { useWalletBrand } from "@/lib/wallet-brand";
-import { getChainAsset, preferredChainId } from "@/lib/wagmi";
 
 const FONT_MONO = "var(--font-geist-mono), monospace";
 
 const FILTERS = ["ALL", "POKER", "CASINO", "TRANSFERS", "SHOP"];
 
 const flow = [
-  { icon: "⬡", k: "Wallet balance", sub: "Untouched until you buy in — withdrawable at any time", color: "#EDEDED", bg: "#0D0D0D", border: "rgba(255,255,255,.1)" },
-  { icon: "◈", k: "Table balance in escrow", sub: "Only this amount is at risk during a session", color: "#FFB020", bg: "rgba(255,177,32,.08)", border: "rgba(255,177,32,.24)" },
-  { icon: "▲", k: "Winners, rake and house edge", sub: "Pots settle to winners on-chain; rake on poker only, house edge on casino games", color: "#00E676", bg: "rgba(0,230,118,.08)", border: "rgba(0,230,118,.24)" },
+  { icon: "⬡", k: "Wallet balance", sub: "Your ERC-20 balance — primary playable funds in Instant Mode", color: "#EDEDED", bg: "#0D0D0D", border: "rgba(255,255,255,.1)" },
+  { icon: "◈", k: "Locked in table", sub: "Buy-in locked from your wallet when a match opens", color: "#FFB020", bg: "rgba(255,177,32,.08)", border: "rgba(255,177,32,.24)" },
+  { icon: "▲", k: "Settle to wallet", sub: "Session end returns USDC to your wallet — Mozetto submits settle txs", color: "#00E676", bg: "rgba(0,230,118,.08)", border: "rgba(0,230,118,.24)" },
 ];
 
 function formatLedgerLabel(row: { description?: string; reference_type?: string }) {
@@ -47,7 +48,6 @@ function formatLedgerLabel(row: { description?: string; reference_type?: string 
     const m = raw.match(/([\d.]+)/);
     return m ? `Cashed out $${m[1]} to wallet` : "Table cash-out";
   }
-  // Drop opaque hand UUIDs from older rows.
   return raw.replace(/hand_[a-z0-9_]+/gi, "hand").replace(/\s+/g, " ") || "Ledger entry";
 }
 
@@ -63,6 +63,7 @@ function ledgerCategory(ref: string) {
 export default function WalletPage() {
   const { me, refresh } = useSession();
   const wallet = useWalletBrand();
+  const balances = useMozettoBalances();
   const [f, setF] = useState(0);
   const [adv, setAdv] = useState(false);
   const [hoverDeposit, setHoverDeposit] = useState(false);
@@ -91,11 +92,14 @@ export default function WalletPage() {
     return () => clearInterval(t);
   }, [refresh]);
 
-  const available = me?.available ?? 0;
-  const atTables = me?.atTables ?? 0;
-  const isOnchain = (me?.profileKind ?? me?.arenaMode) === "onchain";
-  const asset = getChainAsset(me?.chainId ?? preferredChainId);
+  const isOnchain = balances.isOnchain;
+  const asset = balances.asset;
   const isChainTest = isOnchain && Boolean(asset?.isTestAsset);
+  const primaryBalance = isOnchain ? balances.wallet : (me?.available ?? 0);
+  const lockedDisplay = isOnchain ? balances.locked : (me?.atTables ?? 0);
+  const netWorth = isOnchain ? balances.netWorth : primaryBalance + lockedDisplay;
+  const showLegacy = isOnchain && balances.legacyMozetto > 0.000001;
+
   const league = (me?.profile?.league || "bronze").toUpperCase();
   const leagueStatus = [
     { k: "CURRENT LEAGUE", v: league, color: "#C9A227" },
@@ -113,27 +117,34 @@ export default function WalletPage() {
   }));
   const kpis = [
     {
-      k: "AVAILABLE",
-      v: money(available),
+      k: isOnchain ? "WALLET" : "AVAILABLE",
+      v: primaryBalance,
       color: "#EDEDED",
-      sub: isOnchain ? "indexed vault mirror" : "demo paper USDC",
+      sub: isOnchain ? `${asset?.symbol ?? "USDC"} in ${wallet.short}` : "demo paper USDC",
     },
-    { k: "AT TABLES", v: money(atTables), color: "#FFB020", sub: "escrowed buy-ins" },
-    { k: "OPEN SESSIONS", v: String(tables.length), color: "#EDEDED", sub: "this mode only" },
+    {
+      k: "LOCKED",
+      v: lockedDisplay,
+      color: "#FFB020",
+      sub: isOnchain ? "in active sessions" : "escrowed buy-ins",
+    },
+    { k: "OPEN SESSIONS", v: tables.length, color: "#EDEDED", sub: "this mode only", raw: true },
     {
       k: "MODE",
       v: isOnchain ? (isChainTest ? "CHAIN TEST" : "ON-CHAIN") : "DEMO",
       color: isOnchain ? "#00E676" : "#8A8A8A",
       sub: isChainTest
-        ? `${asset?.symbol ?? "mUSDC"} test path`
+        ? `${asset?.symbol ?? "mUSDC"} Instant`
         : isOnchain
-          ? "Base USDC path"
+          ? "Instant Mode"
           : "isolated paper ledger",
+      label: true,
     },
   ];
 
   const refreshWallet = () => {
     void refresh();
+    balances.refetch();
     void api<{ sessions: any[]; ledger: any[] }>("/v1/wallet").then((r) => {
       setSessions(r.sessions || []);
       setLedgerRows(r.ledger || []);
@@ -141,17 +152,16 @@ export default function WalletPage() {
   };
   const ledger = ledgerRows
     .filter((row) => {
-      if (f === 0) return true; // ALL
+      if (f === 0) return true;
       const ref = (row.reference_type || "").toLowerCase();
-      if (f === 1) return ref === "hand" || ref === "table_session" || ref === "rake"; // POKER
-      if (f === 2) return false; // CASINO
-      if (f === 3) return ref === "deposit" || ref === "withdraw"; // TRANSFERS
-      if (f === 4) return false; // SHOP
+      if (f === 1) return ref === "hand" || ref === "table_session" || ref === "rake";
+      if (f === 2) return false;
+      if (f === 3) return ref === "deposit" || ref === "withdraw";
+      if (f === 4) return false;
       return true;
     })
     .slice(0, 16)
     .map((row) => {
-      // Wallet moves prefer available_delta; hand P/L lives on escrow.
       const avail = row.available_delta != null ? Number(row.available_delta) : null;
       const esc = row.escrow_delta != null ? Number(row.escrow_delta) : null;
       const amt = avail != null && !Number.isNaN(avail) ? avail : esc != null && !Number.isNaN(esc) ? esc : 0;
@@ -175,31 +185,71 @@ export default function WalletPage() {
           <div style={{ font: `400 10px ${FONT_MONO}`, letterSpacing: ".13em", color: "#5A5A5A" }}>
             {isOnchain
               ? isChainTest
-                ? "CHAIN TEST BALANCE"
-                : "ON-CHAIN BALANCE"
+                ? "MOZETTO NET WORTH · mUSDC"
+                : "MOZETTO NET WORTH · USDC"
               : "DEMO WALLET BALANCE"}
           </div>
-          <div style={{ font: `500 48px ${FONT_MONO}`, letterSpacing: "-.035em", marginTop: 10 }}>{money(available)}</div>
-          <div style={{ fontSize: 12.5, color: "#6A6A6A", marginTop: 8 }}>
+          <div style={{ font: `500 48px ${FONT_MONO}`, letterSpacing: "-.035em", marginTop: 10 }}>
+            <SplitFlapNumber value={netWorth} fontSize={48} />
+          </div>
+          <div style={{ display: "flex", gap: 18, marginTop: 10, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ font: `400 9px ${FONT_MONO}`, letterSpacing: ".1em", color: "#4A4A4A" }}>WALLET</div>
+              <SplitFlapNumber value={primaryBalance} fontSize={15} style={{ marginTop: 4 }} />
+            </div>
+            <div>
+              <div style={{ font: `400 9px ${FONT_MONO}`, letterSpacing: ".1em", color: "#4A4A4A" }}>LOCKED</div>
+              <SplitFlapNumber value={lockedDisplay} color="#FFB020" fontSize={15} style={{ marginTop: 4 }} />
+            </div>
+            {showLegacy ? (
+              <div>
+                <div style={{ font: `400 9px ${FONT_MONO}`, letterSpacing: ".1em", color: "#4A4A4A" }}>HELD BY MOZETTO</div>
+                <SplitFlapNumber value={balances.legacyMozetto} color="#8FE3D2" fontSize={15} style={{ marginTop: 4 }} />
+              </div>
+            ) : null}
+          </div>
+          <div style={{ fontSize: 12.5, color: "#6A6A6A", marginTop: 12, lineHeight: 1.45 }}>
             {isOnchain
-              ? isChainTest
-                ? `Playable balance mirrors ArenaVault after indexer confirmation. Mint mUSDC into ${wallet.short}, then deposit.`
-                : "On-chain wallet account (separate from Demo email). Fund via ArenaVault with Circle USDC."
+              ? `Funds stay in ${wallet.short} until a match locks them. Enable Instant Play once for popup-free joins; Mozetto submits open/settle txs — match fee/rake covers network costs.`
               : "Demo paper USDC. For real Base USDC, sign out and use /onchain with a wallet."}
           </div>
-          {isOnchain && (
-            <>
-              <TestMusdcPanel onUpdated={refreshWallet} />
-              <VaultPanel onUpdated={refreshWallet} />
-            </>
+          {isOnchain && isChainTest && (
+            <Link
+              href="/wallet/test-musdc"
+              style={{
+                display: "inline-block",
+                marginTop: 16,
+                padding: "10px 18px",
+                borderRadius: 10,
+                background: "#00E676",
+                color: "#050505",
+                fontSize: 13,
+                fontWeight: 600,
+                textDecoration: "none",
+              }}
+            >
+              Get Test mUSDC
+            </Link>
+          )}
+          {showLegacy && (
+            <div
+              style={{
+                marginTop: 16,
+                padding: 14,
+                borderRadius: 12,
+                border: "1px solid rgba(143,227,210,.25)",
+                background: "rgba(143,227,210,.06)",
+              }}
+            >
+              <div style={{ fontSize: 13, color: "#EDEDED", fontWeight: 550 }}>Funds held by Mozetto</div>
+              <div style={{ fontSize: 12, color: "#7A7A7A", marginTop: 4, lineHeight: 1.45 }}>
+                Legacy idle balance from an earlier deposit. Withdraw anytime — Instant Play does not require this.
+              </div>
+              <VaultPanel onUpdated={refreshWallet} compact />
+            </div>
           )}
           <div style={{ display: "flex", gap: 10, marginTop: 22, flexWrap: "wrap" }}>
-            {isOnchain ? (
-              <div style={{ fontSize: 12.5, color: "#6A6A6A", lineHeight: 1.45 }}>
-                Wallet tokens stay in {wallet.short} until you deposit. Indexed available balance
-                above is what matchmaking uses.
-              </div>
-            ) : (
+            {!isOnchain && (
               <>
                 <Link
                   href="/wallet/deposit"
@@ -257,7 +307,9 @@ export default function WalletPage() {
               <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#FFB020", animation: "ar-pulse 1.8s infinite" }} />
               <div style={{ font: `400 10px ${FONT_MONO}`, letterSpacing: ".13em", color: "#8A7040" }}>AT TABLES</div>
             </div>
-            <div style={{ font: `500 32px ${FONT_MONO}`, letterSpacing: "-.03em", marginTop: 8, color: "#FFB020" }}>{money(atTables)}</div>
+            <div style={{ font: `500 32px ${FONT_MONO}`, letterSpacing: "-.03em", marginTop: 8, color: "#FFB020" }}>
+              <SplitFlapNumber value={lockedDisplay} color="#FFB020" fontSize={32} />
+            </div>
             <div style={{ fontSize: 12, color: "#7A7A7A", marginTop: 6 }}>This is the maximum you can lose right now.</div>
           </div>
           {tables.length === 0 ? (
@@ -299,11 +351,21 @@ export default function WalletPage() {
         {kpis.map((k) => (
           <div key={k.k} style={{ borderRadius: 14, border: "1px solid rgba(255,255,255,.07)", background: "#0A0A0A", padding: "18px 20px" }}>
             <div style={{ font: `400 9.5px ${FONT_MONO}`, letterSpacing: ".11em", color: "#4A4A4A" }}>{k.k}</div>
-            <div style={{ font: `500 22px ${FONT_MONO}`, marginTop: 8, color: k.color }}>{k.v}</div>
+            <div style={{ font: `500 22px ${FONT_MONO}`, marginTop: 8, color: k.color }}>
+              {"label" in k && k.label ? (
+                String(k.v)
+              ) : "raw" in k && k.raw ? (
+                String(k.v)
+              ) : (
+                <SplitFlapNumber value={Number(k.v)} color={k.color} fontSize={22} />
+              )}
+            </div>
             <div style={{ fontSize: 11, color: "#6A6A6A", marginTop: 5 }}>{k.sub}</div>
           </div>
         ))}
       </div>
+
+      {isOnchain ? <NetWorthChart /> : null}
 
       <div style={{ borderRadius: 16, border: "1px solid rgba(255,255,255,.07)", background: "#0A0A0A", marginTop: 14, overflow: "hidden" }}>
         <div style={{ padding: "15px 20px", borderBottom: "1px solid rgba(255,255,255,.06)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -367,8 +429,8 @@ export default function WalletPage() {
           }}
         >
           <div>
-            <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-.02em" }}>Advanced breakdown</div>
-            <div style={{ fontSize: 11.5, color: "#5A5A5A", marginTop: 3 }}>Rake, house edge, reasoning energy and on-chain settlement records.</div>
+            <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-.02em" }}>How Instant Mode works</div>
+            <div style={{ fontSize: 11.5, color: "#5A5A5A", marginTop: 3 }}>Wallet → lock → settle back to wallet. Fully non-custodial.</div>
           </div>
           <span style={{ font: `400 12px ${FONT_MONO}`, color: "#5A5A5A" }}>{adv ? "▾" : "▸"}</span>
         </div>
@@ -376,13 +438,10 @@ export default function WalletPage() {
           <div style={{ padding: "4px 20px 22px", animation: "ar-up .2s ease-out both" }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 22 }}>
               <div>
-                <div style={{ font: `500 9.5px ${FONT_MONO}`, letterSpacing: ".14em", color: "#4A4A4A", marginBottom: 12 }}>WHERE THE MONEY WENT · 30 DAYS</div>
-                <div style={{ font: `400 12px ${FONT_MONO}`, color: "#6A6A6A", lineHeight: 1.7 }}>
-                  Detailed P/L breakdown is coming soon. Live balances and ledger entries above are real for this account.
-                </div>
+                <div style={{ font: `500 9.5px ${FONT_MONO}`, letterSpacing: ".14em", color: "#4A4A4A", marginBottom: 12 }}>NET WORTH</div>
                 <div style={{ borderTop: "1px solid rgba(255,255,255,.06)", marginTop: 14, paddingTop: 12, display: "flex", justifyContent: "space-between", font: `500 13px ${FONT_MONO}` }}>
-                  <span style={{ color: "#8A8A8A" }}>WALLET + ESCROW</span>
-                  <span style={{ color: "#EDEDED" }}>{money(available + atTables)}</span>
+                  <span style={{ color: "#8A8A8A" }}>WALLET + LOCKED{showLegacy ? " + MOZETTO" : ""}</span>
+                  <span style={{ color: "#EDEDED" }}>{money(netWorth)}</span>
                 </div>
               </div>
               <div>
@@ -398,14 +457,17 @@ export default function WalletPage() {
                     </div>
                   </div>
                 ))}
-                <div style={{ padding: "12px 14px", borderRadius: 11, background: "rgba(110,168,255,.05)", border: "1px solid rgba(110,168,255,.16)", fontSize: 11.5, lineHeight: 1.6, color: "#8A8A8A" }}>
-                  Reasoning energy is included in every buy-in. You are never billed for compute, and every AI at a table receives the same allowance.
-                </div>
               </div>
             </div>
           </div>
         ) : null}
       </div>
+
+      {isOnchain && (
+        <div style={{ marginTop: 14 }}>
+          <InstantEnablePanel onUpdated={refreshWallet} />
+        </div>
+      )}
     </main>
   );
 }

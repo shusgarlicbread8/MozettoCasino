@@ -170,9 +170,24 @@ export async function lockBuyIn(userId: string, amount: number, sessionId: strin
 
 export async function releaseSession(userId: string, amount: number, sessionId: string, mode?: ArenaMode) {
   const arenaMode = mode ?? (await getUserArenaMode(userId));
-  const available = await accountId(userId, "user_available", "available", arenaMode);
   const escrow = await accountId(userId, "user_table_escrow", "escrow", arenaMode);
   if (amount <= 0) return null;
+
+  // Instant / on-chain: settle transfers USDC to the wallet — do not leave idle Mozetto available.
+  if (arenaMode === "onchain") {
+    const clearing = await accountId(null, "system_clearing", "clearing", "onchain");
+    return transfer({
+      idempotencyKey: `cashout-${arenaMode}-${sessionId}`,
+      description: `Cashed out $${amount} to wallet (onchain Instant)`,
+      fromAccountId: escrow,
+      toAccountId: clearing,
+      amount,
+      referenceType: "table_session",
+      referenceId: sessionId,
+    });
+  }
+
+  const available = await accountId(userId, "user_available", "available", arenaMode);
   return transfer({
     idempotencyKey: `cashout-${arenaMode}-${sessionId}`,
     description: `Cashed out $${amount} to wallet (${arenaMode})`,
@@ -295,6 +310,60 @@ export async function creditOnchainDeposit(userId: string, amount: number, txHas
     amount,
     referenceType: "chain_deposit",
     referenceId: hash,
+  });
+}
+
+/**
+ * Instant Mode: mirror wallet→vault lock so table join can lockBuyIn against available.
+ * Only credits the fromWallet portion (fromAvailable was already mirrored via deposit).
+ */
+export async function creditOnchainBuyInFromWallet(
+  userId: string,
+  amount: number,
+  txHash: string,
+  logIndex: number,
+) {
+  const hash = normalizeTxHash(txHash);
+  if (amount <= 0) return null;
+  await ensureModeAccounts(userId, "onchain");
+  const available = await accountId(userId, "user_available", "available", "onchain");
+  const clearing = await accountId(null, "system_clearing", "clearing", "onchain");
+  return transfer({
+    idempotencyKey: `onchain-buyin-wallet-${hash}-${logIndex}`,
+    description: `Instant lock from wallet ${amount}`,
+    fromAccountId: clearing,
+    toAccountId: available,
+    amount,
+    referenceType: "chain_buyin_lock",
+    referenceId: `${hash}:${logIndex}`,
+  });
+}
+
+/**
+ * Instant Mode: settle/emergency payout returns USDC to the wallet — clear the mirror.
+ */
+export async function debitOnchainSessionPayout(
+  userId: string,
+  amount: number,
+  txHash: string,
+  logIndex: number,
+) {
+  const hash = normalizeTxHash(txHash);
+  if (amount <= 0) return null;
+  await ensureModeAccounts(userId, "onchain");
+  const available = await accountId(userId, "user_available", "available", "onchain");
+  const clearing = await accountId(null, "system_clearing", "clearing", "onchain");
+  const bal = await getAvailableBalance(userId, "onchain");
+  const debit = Math.min(amount, bal);
+  if (debit <= 0) return null;
+  return transfer({
+    idempotencyKey: `onchain-payout-${hash}-${logIndex}`,
+    description: `Session payout to wallet ${debit}`,
+    fromAccountId: available,
+    toAccountId: clearing,
+    amount: debit,
+    referenceType: "chain_session_payout",
+    referenceId: `${hash}:${logIndex}`,
   });
 }
 

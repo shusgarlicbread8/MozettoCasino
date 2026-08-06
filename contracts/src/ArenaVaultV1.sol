@@ -11,12 +11,17 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
 
 /// @title ArenaVaultV1 — session-custody USDC vault (available + session-locked)
 /// @dev Solvency invariant (tested off-chain): usdcBalance() == sum(available) + sum(locked) + accruedProtocolFees
+///      Instant Mode locks from wallet (transferFrom) when available is insufficient; settle pays out to wallet.
 ///      Summing all users on-chain is intentionally not exposed — liabilities are tracked per-user in storage.
 contract ArenaVaultV1 is Ownable, Pausable, ReentrancyGuard, EIP712 {
     using SafeERC20 for IERC20;
 
     bytes32 public constant SEAT_TICKET_TYPEHASH = keccak256(
         "SeatTicket(address player,bytes32 gameTemplateId,uint256 buyIn,bytes32 controllerHash,bytes32 agentProfileHash,uint64 expiresAt,uint256 nonce,bytes32 matchmakingPool)"
+    );
+
+    bytes32 public constant INSTANT_PERMISSION_TYPEHASH = keccak256(
+        "InstantPermission(address player,address sessionSigner,uint256 spendCap,uint256 maxSingleBuyIn,uint64 expiresAt,uint256 nonce,bool enabled)"
     );
 
     IERC20 public immutable usdc;
@@ -29,6 +34,20 @@ contract ArenaVaultV1 is Ownable, Pausable, ReentrancyGuard, EIP712 {
     mapping(address => uint256) public totalLocked;
     uint256 public accruedProtocolFees;
     mapping(address => mapping(uint256 => bool)) public usedNonces;
+
+    /// @dev Scoped Instant Play permission — sessionSigner may sign SeatTickets within caps.
+    struct InstantAuth {
+        address sessionSigner;
+        uint256 spendCap;
+        uint256 spent;
+        uint256 maxSingleBuyIn;
+        uint64 expiresAt;
+        bool enabled;
+    }
+
+    mapping(address => InstantAuth) public instantAuth;
+    /// @dev Replay protection for authorize/revoke InstantPermission typed data.
+    mapping(address => uint256) public instantAuthNonce;
 
     struct Session {
         bytes32 sessionId;
@@ -75,8 +94,12 @@ contract ArenaVaultV1 is Ownable, Pausable, ReentrancyGuard, EIP712 {
     event Withdrawn(address indexed user, address indexed to, uint256 amount);
     event SessionOpened(bytes32 indexed sessionId, bytes32 indexed templateId, uint256 playerCount);
     event SessionToppedUp(bytes32 indexed sessionId, address indexed player, uint256 amount);
+    event BuyInLocked(
+        bytes32 indexed sessionId, address indexed player, uint256 fromAvailable, uint256 fromWallet
+    );
     event CheckpointApplied(bytes32 indexed sessionId, uint64 sequence, bytes32 balanceRoot, bytes32 eventRoot);
     event SessionSettled(bytes32 indexed sessionId, uint256 rake, uint256 playerCount);
+    event SessionPayout(bytes32 indexed sessionId, address indexed player, uint256 amount);
     event EmergencyExit(
         bytes32 indexed sessionId, address indexed player, uint256 tableBalance, uint64 lastSequence
     );
@@ -84,6 +107,14 @@ contract ArenaVaultV1 is Ownable, Pausable, ReentrancyGuard, EIP712 {
     event SettlementHubUpdated(address indexed hub);
     event FeeTreasuryUpdated(address indexed treasury);
     event SessionRelayerUpdated(address indexed relayer);
+    event InstantPermissionAuthorized(
+        address indexed player,
+        address indexed sessionSigner,
+        uint256 spendCap,
+        uint256 maxSingleBuyIn,
+        uint64 expiresAt
+    );
+    event InstantPermissionRevoked(address indexed player, address indexed sessionSigner);
 
     error Unauthorized();
     error InsufficientAvailable();
@@ -103,6 +134,12 @@ contract ArenaVaultV1 is Ownable, Pausable, ReentrancyGuard, EIP712 {
     error SequenceRegression();
     error InsufficientFees();
     error Deprecated();
+    error InstantPermissionInactive();
+    error InstantSpendCapExceeded();
+    error InstantBuyInTooHigh();
+    error InstantPermissionExpired();
+    error BadInstantNonce();
+    error ZeroAddress();
 
     modifier onlySettlement() {
         if (msg.sender != settlementHub) revert Unauthorized();
@@ -139,6 +176,73 @@ contract ArenaVaultV1 is Ownable, Pausable, ReentrancyGuard, EIP712 {
     function setSessionRelayer(address relayer) external onlyOwner {
         sessionRelayer = relayer;
         emit SessionRelayerUpdated(relayer);
+    }
+
+    /// @notice Authorize or revoke Instant Play via player-signed EIP-712 InstantPermission.
+    /// @dev Relayer may submit; player may call with their own signature. Settlement does not refill spend.
+    function setInstantPermission(
+        address player,
+        address sessionSigner,
+        uint256 spendCap,
+        uint256 maxSingleBuyIn,
+        uint64 expiresAt,
+        uint256 nonce,
+        bool enabled,
+        bytes calldata signature
+    ) external nonReentrant whenNotPaused {
+        if (player == address(0)) revert ZeroAddress();
+        if (nonce != instantAuthNonce[player]) revert BadInstantNonce();
+
+        bytes32 digest = _hashTypedDataV4(
+            keccak256(
+                abi.encode(
+                    INSTANT_PERMISSION_TYPEHASH,
+                    player,
+                    sessionSigner,
+                    spendCap,
+                    maxSingleBuyIn,
+                    expiresAt,
+                    nonce,
+                    enabled
+                )
+            )
+        );
+        if (!SignatureChecker.isValidSignatureNow(player, digest, signature)) {
+            revert BadSignature();
+        }
+
+        instantAuthNonce[player] = nonce + 1;
+
+        if (!enabled) {
+            address prev = instantAuth[player].sessionSigner;
+            delete instantAuth[player];
+            emit InstantPermissionRevoked(player, prev);
+            return;
+        }
+
+        if (sessionSigner == address(0)) revert ZeroAddress();
+        if (spendCap == 0 || maxSingleBuyIn == 0) revert ZeroAmount();
+        if (expiresAt <= block.timestamp) revert InstantPermissionExpired();
+
+        instantAuth[player] = InstantAuth({
+            sessionSigner: sessionSigner,
+            spendCap: spendCap,
+            spent: 0,
+            maxSingleBuyIn: maxSingleBuyIn,
+            expiresAt: expiresAt,
+            enabled: true
+        });
+
+        emit InstantPermissionAuthorized(player, sessionSigner, spendCap, maxSingleBuyIn, expiresAt);
+    }
+
+    /// @notice Remaining Instant spend budget (0 if inactive/expired).
+    function remainingInstantSpend(address player) external view returns (uint256) {
+        InstantAuth storage auth = instantAuth[player];
+        if (!auth.enabled || block.timestamp > auth.expiresAt || auth.spent >= auth.spendCap) {
+            return 0;
+        }
+        return auth.spendCap - auth.spent;
     }
 
     function pause() external onlyOwner {
@@ -224,6 +328,7 @@ contract ArenaVaultV1 is Ownable, Pausable, ReentrancyGuard, EIP712 {
     }
 
     /// @notice Settle a session. Invariant: sum(startLocked) == sum(endBalance) + rake.
+    /// @dev Instant Mode pays endBalance to each player's ERC-20 wallet (not idle available).
     function settleSession(bytes32 sessionId, SettlementPlayer[] calldata players, uint256 rake)
         external
         onlySettlement
@@ -239,19 +344,22 @@ contract ArenaVaultV1 is Ownable, Pausable, ReentrancyGuard, EIP712 {
             SettlementPlayer calldata p = players[i];
             startSum += p.startLocked;
             endSum += p.endBalance;
-
             uint256 locked = lockedBySession[sessionId][p.user];
             if (locked < p.startLocked) revert BadSettlement();
-
-            lockedBySession[sessionId][p.user] = locked - p.startLocked;
-            totalLocked[p.user] -= p.startLocked;
-
-            if (p.endBalance > 0) {
-                available[p.user] += p.endBalance;
-            }
         }
 
         if (startSum != endSum + rake) revert BadSettlement();
+
+        for (uint256 i = 0; i < players.length; i++) {
+            SettlementPlayer calldata p = players[i];
+            lockedBySession[sessionId][p.user] -= p.startLocked;
+            totalLocked[p.user] -= p.startLocked;
+
+            if (p.endBalance > 0) {
+                usdc.safeTransfer(p.user, p.endBalance);
+                emit SessionPayout(sessionId, p.user, p.endBalance);
+            }
+        }
 
         if (rake > 0) {
             accruedProtocolFees += rake;
@@ -291,9 +399,10 @@ contract ArenaVaultV1 is Ownable, Pausable, ReentrancyGuard, EIP712 {
 
         lockedBySession[sessionId][player] = locked - tableBalance;
         totalLocked[player] -= tableBalance;
-        available[player] += tableBalance;
+        usdc.safeTransfer(player, tableBalance);
 
         emit EmergencyExit(sessionId, player, tableBalance, lastSequence);
+        emit SessionPayout(sessionId, player, tableBalance);
     }
 
     /// @dev Deprecated table-seat lock — use openSession with signed SeatTickets.
@@ -322,16 +431,36 @@ contract ArenaVaultV1 is Ownable, Pausable, ReentrancyGuard, EIP712 {
         if (usedNonces[ticket.player][ticket.nonce]) revert NonceUsed();
 
         bytes32 digest = _hashSeatTicket(ticket);
-        if (!SignatureChecker.isValidSignatureNow(ticket.player, digest, signature)) {
-            revert BadSignature();
+        bool playerSigned = SignatureChecker.isValidSignatureNow(ticket.player, digest, signature);
+
+        if (!playerSigned) {
+            InstantAuth storage auth = instantAuth[ticket.player];
+            if (!auth.enabled) revert InstantPermissionInactive();
+            if (block.timestamp > auth.expiresAt) revert InstantPermissionExpired();
+            if (ticket.buyIn > auth.maxSingleBuyIn) revert InstantBuyInTooHigh();
+            if (auth.spent + ticket.buyIn > auth.spendCap) revert InstantSpendCapExceeded();
+            if (!SignatureChecker.isValidSignatureNow(auth.sessionSigner, digest, signature)) {
+                revert BadSignature();
+            }
+            auth.spent += ticket.buyIn;
         }
 
-        if (available[ticket.player] < ticket.buyIn) revert InsufficientAvailable();
-
         usedNonces[ticket.player][ticket.nonce] = true;
-        available[ticket.player] -= ticket.buyIn;
+
+        uint256 avail = available[ticket.player];
+        uint256 fromAvailable = avail < ticket.buyIn ? avail : ticket.buyIn;
+        uint256 fromWallet = ticket.buyIn - fromAvailable;
+
+        if (fromAvailable > 0) {
+            available[ticket.player] = avail - fromAvailable;
+        }
+        if (fromWallet > 0) {
+            usdc.safeTransferFrom(ticket.player, address(this), fromWallet);
+        }
+
         lockedBySession[sessionId][ticket.player] += ticket.buyIn;
         totalLocked[ticket.player] += ticket.buyIn;
+        emit BuyInLocked(sessionId, ticket.player, fromAvailable, fromWallet);
     }
 
     function _hashSeatTicket(SeatTicket calldata ticket) internal view returns (bytes32) {

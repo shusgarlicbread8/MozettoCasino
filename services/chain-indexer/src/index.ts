@@ -9,10 +9,22 @@ import {
   formatUnits,
   type Hex,
   type Log,
+  type PublicClient,
 } from "viem";
 import { base, baseSepolia } from "viem/chains";
-import { getChainConfig } from "@mozetto/blockchain";
-import { query, creditOnchainDeposit, debitOnchainWithdrawal } from "@mozetto/database";
+import { arenaVaultAbi, getChainConfig } from "@mozetto/blockchain";
+import { query, creditOnchainDeposit, debitOnchainWithdrawal, creditOnchainBuyInFromWallet, debitOnchainSessionPayout } from "@mozetto/database";
+
+const SNAPSHOT_MS = Number(process.env.INDEXER_NET_WORTH_MS ?? 60_000);
+const erc20BalanceOf = [
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+] as const;
 
 const CONFIRMATIONS = Number(process.env.INDEXER_CONFIRMATIONS ?? 3);
 const POLL_MS = Number(process.env.INDEXER_POLL_MS ?? 8_000);
@@ -27,8 +39,14 @@ const withdrawnEvent = parseAbiItem(
 const sessionOpenedEvent = parseAbiItem(
   "event SessionOpened(bytes32 indexed sessionId, bytes32 indexed templateId, uint256 playerCount)",
 );
+const buyInLockedEvent = parseAbiItem(
+  "event BuyInLocked(bytes32 indexed sessionId, address indexed player, uint256 fromAvailable, uint256 fromWallet)",
+);
 const sessionSettledEvent = parseAbiItem(
   "event SessionSettled(bytes32 indexed sessionId, uint256 rake, uint256 playerCount)",
+);
+const sessionPayoutEvent = parseAbiItem(
+  "event SessionPayout(bytes32 indexed sessionId, address indexed player, uint256 amount)",
 );
 
 function viemChain(chainId: number) {
@@ -51,6 +69,83 @@ async function resolveProfileId(wallet: string): Promise<string | null> {
     [wallet],
   );
   return res.rows[0]?.user_id ?? null;
+}
+
+async function upsertNetWorthSnapshot(
+  chainId: number,
+  profileId: string,
+  wallet: Hex,
+  client: PublicClient,
+  usdc: Hex,
+  vault: Hex | null,
+) {
+  const walletRaw = (await client.readContract({
+    address: usdc,
+    abi: erc20BalanceOf,
+    functionName: "balanceOf",
+    args: [wallet],
+  })) as bigint;
+  let lockedRaw = 0n;
+  let legacyRaw = 0n;
+  if (vault) {
+    lockedRaw = (await client.readContract({
+      address: vault,
+      abi: arenaVaultAbi,
+      functionName: "totalLocked",
+      args: [wallet],
+    })) as bigint;
+    legacyRaw = (await client.readContract({
+      address: vault,
+      abi: arenaVaultAbi,
+      functionName: "available",
+      args: [wallet],
+    })) as bigint;
+  }
+  const walletUsdc = Number(formatUnits(walletRaw, 6));
+  const lockedUsdc = Number(formatUnits(lockedRaw, 6));
+  const legacyUsdc = Number(formatUnits(legacyRaw, 6));
+  const totalUsdc = walletUsdc + lockedUsdc + legacyUsdc;
+  await query(
+    `insert into wallet_net_worth_snapshots
+       (profile_id, chain_id, bucket_at, wallet_usdc, locked_usdc, legacy_mozetto_usdc, total_usdc)
+     values ($1, $2, date_trunc('minute', now()), $3, $4, $5, $6)
+     on conflict (profile_id, chain_id, bucket_at) do update set
+       wallet_usdc = excluded.wallet_usdc,
+       locked_usdc = excluded.locked_usdc,
+       legacy_mozetto_usdc = excluded.legacy_mozetto_usdc,
+       total_usdc = excluded.total_usdc`,
+    [profileId, chainId, walletUsdc, lockedUsdc, legacyUsdc, totalUsdc],
+  );
+}
+
+async function snapshotWallet(
+  chainId: number,
+  wallet: string,
+  client: PublicClient,
+  usdc: Hex,
+  vault: Hex | null,
+) {
+  const profileId = await resolveProfileId(wallet);
+  if (!profileId) return;
+  try {
+    await upsertNetWorthSnapshot(chainId, profileId, wallet as Hex, client, usdc, vault);
+  } catch (err) {
+    console.warn("[indexer] net-worth snapshot failed", wallet, err);
+  }
+}
+
+async function snapshotAllLinkedWallets(
+  chainId: number,
+  client: PublicClient,
+  usdc: Hex,
+  vault: Hex | null,
+) {
+  const res = await query<{ address: string }>(
+    `select distinct lower(address) as address from wallet_identities where address is not null`,
+  );
+  for (const row of res.rows) {
+    await snapshotWallet(chainId, row.address, client, usdc, vault);
+  }
 }
 
 async function ensureCursor(
@@ -390,6 +485,78 @@ async function handleSessionSettled(
   );
 }
 
+/** Instant Mode: credit wallet portion of buy-in so join lockBuyIn can succeed. */
+async function handleBuyInLocked(
+  chainId: number,
+  log: Log & {
+    args: {
+      sessionId?: Hex;
+      player?: Hex;
+      fromAvailable?: bigint;
+      fromWallet?: bigint;
+    };
+  },
+) {
+  const player = log.args.player;
+  const fromWallet = log.args.fromWallet ?? 0n;
+  if (!player || !log.transactionHash || log.removed) return;
+  if (fromWallet === 0n) return;
+
+  const amountUsdc = Number(formatUnits(fromWallet, 6));
+  const profileId = await resolveProfileId(player);
+  if (!profileId) {
+    console.warn(`[indexer] BuyInLocked from unknown wallet ${player}`);
+    return;
+  }
+  try {
+    await creditOnchainBuyInFromWallet(
+      profileId,
+      amountUsdc,
+      log.transactionHash,
+      log.logIndex ?? 0,
+    );
+    console.log(
+      `[indexer] Instant buy-in mirror ${amountUsdc} USDC from wallet → ${profileId}`,
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/duplicate|unique|idempotency/i.test(msg)) return;
+    throw e;
+  }
+}
+
+/** Instant Mode: payout returned to ERC-20 wallet — clear durable playable mirror. */
+async function handleSessionPayout(
+  _chainId: number,
+  log: Log & { args: { sessionId?: Hex; player?: Hex; amount?: bigint } },
+) {
+  const player = log.args.player;
+  const amount = log.args.amount;
+  if (!player || amount === undefined || !log.transactionHash || log.removed) return;
+
+  const amountUsdc = Number(formatUnits(amount, 6));
+  const profileId = await resolveProfileId(player);
+  if (!profileId) {
+    console.warn(`[indexer] SessionPayout to unknown wallet ${player}`);
+    return;
+  }
+  try {
+    await debitOnchainSessionPayout(
+      profileId,
+      amountUsdc,
+      log.transactionHash,
+      log.logIndex ?? 0,
+    );
+    console.log(
+      `[indexer] Session payout debit ${amountUsdc} USDC ← ${profileId}`,
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/duplicate|unique|idempotency/i.test(msg)) return;
+    throw e;
+  }
+}
+
 async function reconcile(chainId: number, vault: Hex, client: ReturnType<typeof createPublicClient>) {
   const run = await query<{ id: string }>(
     `insert into reconciliation_runs (chain_id, started_at) values ($1, now()) returning id::text`,
@@ -483,27 +650,49 @@ async function tick(pollCount: { n: number }) {
   const fromBlock = from === 0n ? from : from + 1n;
 
   // Fetch event types separately — Anvil/some RPCs drop multi-event topic ORs.
-  const [deposited, withdrawn, opened, settled] = await Promise.all([
+  const [deposited, withdrawn, opened, buyInLocked, settled, payouts] = await Promise.all([
     client.getLogs({ address: vault, event: depositedEvent, fromBlock, toBlock: to }),
     client.getLogs({ address: vault, event: withdrawnEvent, fromBlock, toBlock: to }),
     client.getLogs({ address: vault, event: sessionOpenedEvent, fromBlock, toBlock: to }),
+    client.getLogs({ address: vault, event: buyInLockedEvent, fromBlock, toBlock: to }),
     client.getLogs({ address: vault, event: sessionSettledEvent, fromBlock, toBlock: to }),
+    client.getLogs({ address: vault, event: sessionPayoutEvent, fromBlock, toBlock: to }),
   ]);
 
-  const logs = [...deposited, ...withdrawn, ...opened, ...settled].sort((a, b) => {
-    const bn = Number((a.blockNumber ?? 0n) - (b.blockNumber ?? 0n));
-    if (bn !== 0) return bn;
-    return (a.logIndex ?? 0) - (b.logIndex ?? 0);
-  });
+  const logs = [...deposited, ...withdrawn, ...opened, ...buyInLocked, ...settled, ...payouts].sort(
+    (a, b) => {
+      const bn = Number((a.blockNumber ?? 0n) - (b.blockNumber ?? 0n));
+      if (bn !== 0) return bn;
+      return (a.logIndex ?? 0) - (b.logIndex ?? 0);
+    },
+  );
 
+  const snapWallets = new Set<string>();
   for (const log of logs) {
     const name = (log as { eventName?: string }).eventName;
     const args = (log as { args?: Record<string, unknown> }).args ?? {};
     await persistEvent(cfg.chainId, log, name ?? "Unknown", args);
-    if (name === "Deposited") await handleDeposited(cfg.chainId, log as never);
-    else if (name === "Withdrawn") await handleWithdrawn(cfg.chainId, log as never);
-    else if (name === "SessionOpened") await handleSessionOpened(cfg.chainId, log as never);
-    else if (name === "SessionSettled") await handleSessionSettled(cfg.chainId, log as never);
+    if (name === "Deposited") {
+      await handleDeposited(cfg.chainId, log as never);
+      if (args.user) snapWallets.add(String(args.user).toLowerCase());
+    } else if (name === "Withdrawn") {
+      await handleWithdrawn(cfg.chainId, log as never);
+      if (args.user) snapWallets.add(String(args.user).toLowerCase());
+    } else if (name === "BuyInLocked") {
+      await handleBuyInLocked(cfg.chainId, log as never);
+      if (args.player) snapWallets.add(String(args.player).toLowerCase());
+    } else if (name === "SessionOpened") {
+      await handleSessionOpened(cfg.chainId, log as never);
+    } else if (name === "SessionPayout") {
+      await handleSessionPayout(cfg.chainId, log as never);
+      if (args.player) snapWallets.add(String(args.player).toLowerCase());
+    } else if (name === "SessionSettled") {
+      await handleSessionSettled(cfg.chainId, log as never);
+    }
+  }
+
+  for (const w of snapWallets) {
+    await snapshotWallet(cfg.chainId, w, client, cfg.usdc, vault);
   }
 
   await setCursor(cfg.chainId, to, 0);
@@ -539,3 +728,30 @@ setInterval(() => {
   void safeTick();
 }, POLL_MS);
 void safeTick();
+
+let snapshotting = false;
+async function safeSnapshotAll() {
+  if (snapshotting) return;
+  snapshotting = true;
+  try {
+    const cfg = getChainConfig();
+    const vault = cfg.contracts.arenaVault;
+    if (!vault) return;
+    const client = createPublicClient({
+      chain: viemChain(cfg.chainId),
+      transport: http(
+        process.env[cfg.rpcUrlEnv] ||
+          (cfg.chainId === 31337 ? "http://127.0.0.1:8545" : undefined),
+      ),
+    });
+    await snapshotAllLinkedWallets(cfg.chainId, client as PublicClient, cfg.usdc, vault);
+  } catch (err) {
+    console.error("[indexer] net-worth sweep failed", err);
+  } finally {
+    snapshotting = false;
+  }
+}
+setInterval(() => {
+  void safeSnapshotAll();
+}, SNAPSHOT_MS);
+void safeSnapshotAll();

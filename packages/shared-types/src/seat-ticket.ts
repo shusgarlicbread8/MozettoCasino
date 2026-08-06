@@ -63,3 +63,27 @@ export const TicketParamsResponseSchema = z.object({
   leagueId: z.string(),
 });
 export type TicketParamsResponse = z.infer<typeof TicketParamsResponseSchema>;
+
+export const InstantPermitSubmitSchema = z.object({
+  owner: address,
+  spender: address,
+  value: z.union([z.string(), z.number(), z.bigint()]),
+  deadline: z.union([z.string(), z.number(), z.bigint()]),
+  signature: z.string().regex(/^0x[a-fA-F0-9]+$/),
+  token: address.optional(),
+});
+export type InstantPermitSubmit = z.infer<typeof InstantPermitSubmitSchema>;
+
+export const InstantPermissionSubmitSchema = z.object({
+  player: address,
+  sessionSigner: address,
+  spendCap: z.union([z.string(), z.number(), z.bigint()]),
+  maxSingleBuyIn: z.union([z.string(), z.number(), z.bigint()]),
+  expiresAt: z.union([z.string(), z.number(), z.bigint()]),
+  nonce: z.union([z.string(), z.number(), z.bigint()]),
+  enabled: z.boolean(),
+  signature: z.string().regex(/^0x[a-fA-F0-9]+$/),
+  /** Optional EIP-2612 permit submitted in the same enable flow. */
+  permit: InstantPermitSubmitSchema.optional(),
+});
+export type InstantPermissionSubmit = z.infer<typeof InstantPermissionSubmitSchema>;

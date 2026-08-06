@@ -21,7 +21,7 @@ import {
 } from "@/lib/wagmi";
 
 /** On-chain vault deposit / withdraw — mirror credits come from chain-indexer only. */
-export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
+export function VaultPanel({ onUpdated, compact }: { onUpdated?: () => void; compact?: boolean }) {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
   const wallet = useWalletBrand();
@@ -213,56 +213,99 @@ export function VaultPanel({ onUpdated }: { onUpdated?: () => void }) {
   return (
     <div
       style={{
-        marginTop: 18,
-        padding: 16,
-        borderRadius: 12,
-        border: "1px solid rgba(0,230,118,.2)",
-        background: "rgba(0,230,118,.04)",
+        marginTop: compact ? 12 : 18,
+        padding: compact ? 0 : 16,
+        borderRadius: compact ? 0 : 12,
+        border: compact ? "none" : "1px solid rgba(143,227,210,.2)",
+        background: compact ? "transparent" : "rgba(143,227,210,.04)",
       }}
     >
-      <div style={{ font: "600 11px var(--font-geist-mono), monospace", color: "#00E676" }}>
-        ARENA VAULT
-      </div>
-      <div style={{ marginTop: 10, fontSize: 13, color: "#9A9A9A", lineHeight: 1.55 }}>
-        Wallet {symbol}: {walletBal != null ? formatUnits(walletBal as bigint, 6) : "—"}
-        <br />
-        Vault available: {vaultAvail != null ? formatUnits(vaultAvail as bigint, 6) : "—"}
-        <br />
-        Allowance: {allowance != null ? formatUnits(allowance as bigint, 6) : "—"}
-      </div>
-      <p style={{ margin: "8px 0 0", fontSize: 11, color: "#636363" }}>
-        Deposit requires two {wallet.short} steps when allowance is low: approve, then deposit.
-        Playable balance updates after the indexer confirms the Deposited event.
-      </p>
+      {!compact && (
+        <>
+          <div style={{ font: "600 11px var(--font-geist-mono), monospace", color: "#8A8A8A" }}>
+            FUNDS HELD BY MOZETTO
+          </div>
+          <div style={{ marginTop: 10, fontSize: 13, color: "#9A9A9A", lineHeight: 1.55 }}>
+            Wallet {symbol}: {walletBal != null ? formatUnits(walletBal as bigint, 6) : "—"}
+            <br />
+            Held by Mozetto: {vaultAvail != null ? formatUnits(vaultAvail as bigint, 6) : "—"}
+          </div>
+        </>
+      )}
       {!walletMatch && isConnected && (
         <p style={{ margin: "8px 0 0", fontSize: 12, color: "#FF8A8A" }}>
           Connected wallet does not match your signed-in on-chain account.
         </p>
       )}
-      <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-        <input
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-          style={{
-            width: 100,
-            padding: "10px 12px",
-            borderRadius: 8,
-            border: "1px solid rgba(255,255,255,.12)",
-            background: "#0A0A0A",
-            color: "#EDEDED",
-          }}
-        />
-        <button type="button" disabled={isPending || busy} onClick={() => void deposit()} style={btn}>
-          Deposit
-        </button>
-        <button
-          type="button"
-          disabled={isPending || busy}
-          onClick={() => void withdraw()}
-          style={{ ...btn, background: "transparent", color: "#BABABA", border: "1px solid rgba(255,255,255,.14)" }}
-        >
-          Withdraw
-        </button>
+      <div style={{ display: "flex", gap: 8, marginTop: compact ? 10 : 12, flexWrap: "wrap" }}>
+        {!compact && (
+          <input
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            style={{
+              width: 100,
+              padding: "10px 12px",
+              borderRadius: 8,
+              border: "1px solid rgba(255,255,255,.12)",
+              background: "#0A0A0A",
+              color: "#EDEDED",
+            }}
+          />
+        )}
+        {compact ? (
+          <button
+            type="button"
+            disabled={isPending || busy || vaultAvail == null || (vaultAvail as bigint) === 0n}
+            onClick={() => {
+              if (vaultAvail != null) {
+                const full = formatUnits(vaultAvail as bigint, 6);
+                setAmount(full);
+                void (async () => {
+                  if (!address || !vault || !publicClient) return;
+                  setMsg(null);
+                  setBusy(true);
+                  try {
+                    if (!(await ensureReady())) return;
+                    const raw = vaultAvail as bigint;
+                    setMsg(confirmInWallet(wallet, "withdraw from Mozetto…"));
+                    const tx = await writeContractAsync({
+                      address: vault as `0x${string}`,
+                      abi: arenaVaultAbi,
+                      functionName: "withdraw",
+                      args: [raw, address],
+                    });
+                    await publicClient.waitForTransactionReceipt({ hash: tx });
+                    setMsg("Withdraw confirmed on-chain.");
+                    void refetchVault();
+                    void refetchWallet();
+                    onUpdated?.();
+                  } catch (e) {
+                    setMsg(e instanceof Error ? e.message : "Withdraw failed");
+                  } finally {
+                    setBusy(false);
+                  }
+                })();
+              }
+            }}
+            style={btn}
+          >
+            Withdraw all
+          </button>
+        ) : (
+          <>
+            <button type="button" disabled={isPending || busy} onClick={() => void deposit()} style={btn}>
+              Deposit
+            </button>
+            <button
+              type="button"
+              disabled={isPending || busy}
+              onClick={() => void withdraw()}
+              style={{ ...btn, background: "transparent", color: "#BABABA", border: "1px solid rgba(255,255,255,.14)" }}
+            >
+              Withdraw
+            </button>
+          </>
+        )}
       </div>
       {msg && (
         <p className="mz-status-line" style={{ margin: "10px 0 0", fontSize: 12, color: "#8A8A8A" }}>

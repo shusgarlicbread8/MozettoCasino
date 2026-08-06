@@ -159,6 +159,13 @@ export const arenaVaultAbi = [
   },
   {
     type: "function",
+    name: "totalLocked",
+    stateMutability: "view",
+    inputs: [{ name: "user", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
     name: "lockedBySession",
     stateMutability: "view",
     inputs: [
@@ -166,6 +173,69 @@ export const arenaVaultAbi = [
       { name: "player", type: "address" },
     ],
     outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "instantAuth",
+    stateMutability: "view",
+    inputs: [{ name: "player", type: "address" }],
+    outputs: [
+      { name: "sessionSigner", type: "address" },
+      { name: "spendCap", type: "uint256" },
+      { name: "spent", type: "uint256" },
+      { name: "maxSingleBuyIn", type: "uint256" },
+      { name: "expiresAt", type: "uint64" },
+      { name: "enabled", type: "bool" },
+    ],
+  },
+  {
+    type: "function",
+    name: "instantAuthNonce",
+    stateMutability: "view",
+    inputs: [{ name: "player", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "remainingInstantSpend",
+    stateMutability: "view",
+    inputs: [{ name: "player", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "setInstantPermission",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "player", type: "address" },
+      { name: "sessionSigner", type: "address" },
+      { name: "spendCap", type: "uint256" },
+      { name: "maxSingleBuyIn", type: "uint256" },
+      { name: "expiresAt", type: "uint64" },
+      { name: "nonce", type: "uint256" },
+      { name: "enabled", type: "bool" },
+      { name: "signature", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "event",
+    name: "InstantPermissionAuthorized",
+    inputs: [
+      { name: "player", type: "address", indexed: true },
+      { name: "sessionSigner", type: "address", indexed: true },
+      { name: "spendCap", type: "uint256", indexed: false },
+      { name: "maxSingleBuyIn", type: "uint256", indexed: false },
+      { name: "expiresAt", type: "uint64", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "InstantPermissionRevoked",
+    inputs: [
+      { name: "player", type: "address", indexed: true },
+      { name: "sessionSigner", type: "address", indexed: true },
+    ],
   },
   {
     type: "event",
@@ -195,6 +265,16 @@ export const arenaVaultAbi = [
   },
   {
     type: "event",
+    name: "BuyInLocked",
+    inputs: [
+      { name: "sessionId", type: "bytes32", indexed: true },
+      { name: "player", type: "address", indexed: true },
+      { name: "fromAvailable", type: "uint256", indexed: false },
+      { name: "fromWallet", type: "uint256", indexed: false },
+    ],
+  },
+  {
+    type: "event",
     name: "SessionSettled",
     inputs: [
       { name: "sessionId", type: "bytes32", indexed: true },
@@ -202,7 +282,66 @@ export const arenaVaultAbi = [
       { name: "playerCount", type: "uint256", indexed: false },
     ],
   },
+  {
+    type: "event",
+    name: "SessionPayout",
+    inputs: [
+      { name: "sessionId", type: "bytes32", indexed: true },
+      { name: "player", type: "address", indexed: true },
+      { name: "amount", type: "uint256", indexed: false },
+    ],
+  },
 ] as const;
+
+/** EIP-2612 permit helpers for MockUSDC / permit-capable USDC. */
+export const erc20PermitAbi = [
+  {
+    type: "function",
+    name: "permit",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" },
+      { name: "value", type: "uint256" },
+      { name: "deadline", type: "uint256" },
+      { name: "v", type: "uint8" },
+      { name: "r", type: "bytes32" },
+      { name: "s", type: "bytes32" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "nonces",
+    stateMutability: "view",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "DOMAIN_SEPARATOR",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "bytes32" }],
+  },
+  {
+    type: "function",
+    name: "name",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "string" }],
+  },
+] as const;
+
+export const PERMIT_TYPES = {
+  Permit: [
+    { name: "owner", type: "address" },
+    { name: "spender", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "nonce", type: "uint256" },
+    { name: "deadline", type: "uint256" },
+  ],
+} as const;
 
 export type ArenaMode = "demo" | "onchain";
 
@@ -227,4 +366,20 @@ export function seatTicketDomain(chainId: number, verifyingContract: `0x${string
     chainId,
     verifyingContract,
   } as const;
+}
+
+export const INSTANT_PERMISSION_TYPES = {
+  InstantPermission: [
+    { name: "player", type: "address" },
+    { name: "sessionSigner", type: "address" },
+    { name: "spendCap", type: "uint256" },
+    { name: "maxSingleBuyIn", type: "uint256" },
+    { name: "expiresAt", type: "uint64" },
+    { name: "nonce", type: "uint256" },
+    { name: "enabled", type: "bool" },
+  ],
+} as const;
+
+export function instantPermissionDomain(chainId: number, verifyingContract: `0x${string}`) {
+  return seatTicketDomain(chainId, verifyingContract);
 }

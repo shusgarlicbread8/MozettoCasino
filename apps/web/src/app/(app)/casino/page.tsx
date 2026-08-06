@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { HoverDiv, HoverLink } from "@/components/Hoverable";
 import { useSession } from "@/lib/session";
+import { useMozettoBalances } from "@/lib/use-mozetto-balances";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -33,7 +34,8 @@ function money(n: number) {
 
 export default function CasinoPage() {
   const { me } = useSession();
-  const WALLET = me?.available ?? 0;
+  const balances = useMozettoBalances();
+  const WALLET = balances.displayWallet;
   const [game, setGame] = useState<"bj">("bj");
   const [league, setLeague] = useState("ALL");
   const [sheet, setSheet] = useState<Table | null>(null);

@@ -417,6 +417,56 @@ app.get("/v1/wallet", async (req, reply) => {
   };
 });
 
+app.get("/v1/wallet/net-worth", async (req, reply) => {
+  const session = await requireUser(req, reply);
+  if (!session) return;
+  if (session.profileKind !== "onchain" || !session.chainId) {
+    return { range: "1d", points: [] };
+  }
+  const rangeRaw = String((req.query as { range?: string }).range || "1d").toLowerCase();
+  const range = ["1h", "1d", "1w", "all"].includes(rangeRaw) ? rangeRaw : "1d";
+  const interval =
+    range === "1h" ? "1 hour" : range === "1d" ? "1 day" : range === "1w" ? "7 days" : null;
+  const res = interval
+    ? await query<{
+        bucket_at: string;
+        wallet_usdc: string;
+        locked_usdc: string;
+        legacy_mozetto_usdc: string;
+        total_usdc: string;
+      }>(
+        `select bucket_at, wallet_usdc::text, locked_usdc::text, legacy_mozetto_usdc::text, total_usdc::text
+         from wallet_net_worth_snapshots
+         where profile_id = $1 and chain_id = $2 and bucket_at >= now() - $3::interval
+         order by bucket_at asc`,
+        [session.profileId, session.chainId, interval],
+      )
+    : await query<{
+        bucket_at: string;
+        wallet_usdc: string;
+        locked_usdc: string;
+        legacy_mozetto_usdc: string;
+        total_usdc: string;
+      }>(
+        `select bucket_at, wallet_usdc::text, locked_usdc::text, legacy_mozetto_usdc::text, total_usdc::text
+         from wallet_net_worth_snapshots
+         where profile_id = $1 and chain_id = $2
+         order by bucket_at asc
+         limit 2000`,
+        [session.profileId, session.chainId],
+      );
+  return {
+    range,
+    points: res.rows.map((r) => ({
+      t: r.bucket_at,
+      wallet: Number(r.wallet_usdc),
+      locked: Number(r.locked_usdc),
+      legacy: Number(r.legacy_mozetto_usdc),
+      total: Number(r.total_usdc),
+    })),
+  };
+});
+
 app.post("/v1/wallet/deposit", async (req, reply) => {
   const session = await requireDemoUser(req, reply);
   if (!session) return;

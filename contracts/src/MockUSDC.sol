@@ -2,11 +2,12 @@
 pragma solidity ^0.8.24;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
-/// @notice Six-decimal USDC stand-in for Anvil / staging (mUSDC).
+/// @notice Six-decimal USDC stand-in for Anvil / staging (mUSDC) with EIP-2612 permit.
 /// @dev Local Anvil: unlimited faucet. Shared Sepolia: configure cooldown + caps.
-contract MockUSDC is ERC20, AccessControl {
+contract MockUSDC is ERC20, ERC20Permit, AccessControl {
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
 
     uint256 public maxFaucetMint;
@@ -20,7 +21,7 @@ contract MockUSDC is ERC20, AccessControl {
     error FaucetWalletCap();
     error FaucetDisabled();
 
-    constructor(address admin) ERC20("Mock USD Coin", "mUSDC") {
+    constructor(address admin) ERC20("Mock USD Coin", "mUSDC") ERC20Permit("Mock USD Coin") {
         if (admin == address(0)) revert ZeroAddress();
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(MINTER_ROLE, admin);

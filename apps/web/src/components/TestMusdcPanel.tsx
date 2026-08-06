@@ -48,7 +48,11 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
     abi: erc20Abi,
     functionName: "balanceOf",
     args: address ? [address] : undefined,
-    query: { enabled: Boolean(address && asset?.usdc && canFaucet) },
+    query: {
+      enabled: Boolean(address && asset?.usdc && canFaucet),
+      refetchInterval: 2_000,
+      refetchOnWindowFocus: true,
+    },
   });
 
   if (!canFaucet) {
@@ -129,7 +133,7 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
       await refetch();
       await watchAsset();
       setMsg(
-        `Minted ${amount} mUSDC to ${wallet.short}. Token ${asset.usdc}. Now deposit into ArenaVault below.`,
+        `Minted ${amount} mUSDC to ${wallet.short}. Token ${asset.usdc}. Enable Instant Play, then Find Match — no deposit needed.`,
       );
       onUpdated?.();
     } catch (e) {
@@ -155,8 +159,8 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
         CHAIN TEST · mUSDC
       </div>
       <p style={{ margin: "8px 0 0", fontSize: 13, color: "#9A9A9A", lineHeight: 1.5 }}>
-        Mints real ERC-20 tokens into {wallet.name} (not database chips). Then approve + deposit to
-        fund your playable vault balance.
+        Mints real ERC-20 tokens into {wallet.name} (not database chips). Then Enable Instant Play
+        and join — buy-ins lock from your wallet when matched.
         {!isConnected && (
           <>
             {" "}

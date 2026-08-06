@@ -10,6 +10,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useSession } from "@/lib/session";
+import { useMozettoBalances } from "@/lib/use-mozetto-balances";
 
 const MONO = "var(--font-geist-mono), 'Geist Mono', monospace";
 
@@ -140,7 +141,8 @@ const LADDER = [
 
 export default function HomePage() {
   const { me } = useSession();
-  const WALLET = me?.available ?? 0;
+  const balances = useMozettoBalances();
+  const WALLET = balances.displayWallet;
   const [gameId, setGameId] = useState("holdem");
   const [sessions, setSessions] = useState<any[]>([]);
   const [arenaLive, setArenaLive] = useState({ tables: 0, seated: 0 });
@@ -541,7 +543,7 @@ export default function HomePage() {
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, font: `400 11.5px ${MONO}` }}>
               <span style={{ color: "#6A6A6A" }}>AT TABLES</span>
-              <span style={{ color: "#FFB020" }}>${Number(me?.atTables ?? 0).toLocaleString()}</span>
+              <span style={{ color: "#FFB020" }}>${Number(balances.displayLocked).toLocaleString()}</span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, font: `400 11.5px ${MONO}` }}>
               <span style={{ color: "#6A6A6A" }}>WALLET</span>

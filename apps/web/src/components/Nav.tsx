@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { money, useSession } from "@/lib/session";
+import { useMozettoBalances } from "@/lib/use-mozetto-balances";
 
 const routes: Record<string, string> = {
   home: "/home",
@@ -37,6 +38,7 @@ export function Nav() {
   const pathname = usePathname();
   const active = activeId(pathname);
   const { me, stats } = useSession();
+  const balances = useMozettoBalances();
   const rawLabel =
     me?.session?.displayName ||
     me?.profile?.display_name ||
@@ -53,7 +55,7 @@ export function Nav() {
         : rawLabel;
   const agentHandle = me?.agent?.handle ?? "—";
   const league = (me?.profile?.league ?? "bronze").toUpperCase();
-  const walletTag = me ? money(me.available).replace(/\.00$/, "") : "—";
+  const walletTag = me ? money(balances.displayWallet).replace(/\.00$/, "") : "—";
   const shortWallet =
     me?.walletAddress && /^0x[a-fA-F0-9]{40}$/i.test(me.walletAddress)
       ? `${me.walletAddress.slice(0, 6)}…${me.walletAddress.slice(-4)}`
