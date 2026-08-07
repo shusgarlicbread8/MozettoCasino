@@ -1,3 +1,6 @@
+# Foundry toolchain pin: see repo-root `.foundry-version` (v1.7.1) and docs/TOOL_VERSIONS.md
+# Install: foundryup -i v1.7.1
+
 [profile.default]
 src = "src"
 out = "out"
@@ -9,7 +12,15 @@ via_ir = true
 fs_permissions = [
   { access = "read-write", path = "./" },
   { access = "read-write", path = "../packages/chain-manifest/deployments" },
+  { access = "read", path = "../specs" },
 ]
+
+# WP-025 custody invariants — agreed CI default; docs/WP-025_CONTRACT_INVARIANTS.md for higher runs.
+[invariant]
+runs = 256
+depth = 32
+fail_on_revert = false
+call_override = false
 
 [rpc_endpoints]
 anvil = "http://127.0.0.1:8545"

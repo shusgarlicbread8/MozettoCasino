@@ -1,0 +1,42 @@
+import { keccak256, toBytes, type Hex } from "viem";
+
+/** Domain tag = keccak256(bytes(domainString)) — matches Solidity keccak256(bytes(...)). */
+export function domainTag(domainString: string): Hex {
+  return keccak256(toBytes(domainString));
+}
+
+export const DOMAIN_STRINGS = {
+  SESSION_V2: "MOZETTO_SESSION_V2",
+  SESSION_ID_V1: "MOZETTO_SESSION_ID_V1",
+  HAND_ID_V1: "MOZETTO_HAND_ID_V1",
+  PARTICIPANT_LEAF_V1: "MOZETTO_PARTICIPANT_LEAF_V1",
+  EVENT_V1: "MOZETTO_EVENT_V1",
+  CARD_LEAF_V1: "MOZETTO_CARD_LEAF_V1",
+  DECK_ROOT_V1: "MOZETTO_DECK_ROOT_V1",
+  SECRET_LEAF_V1: "MOZETTO_SECRET_LEAF_V1",
+  HAND_SEED_V1: "MOZETTO_HAND_SEED_V1",
+  BALANCE_LEAF_V1: "MOZETTO_BALANCE_LEAF_V1",
+  PROFILE_V1: "MOZETTO_PROFILE_V1",
+  MODEL_POLICY_V1: "MOZETTO_MODEL_POLICY_V1",
+  PROOF_BATCH_V1: "MOZETTO_PROOF_BATCH_V1",
+  SETTLEMENT_V3: "MOZETTO_SETTLEMENT_V3",
+  ENERGY_OP_V1: "MOZETTO_ENERGY_OP_V1",
+  ENERGY_LEDGER_V1: "MOZETTO_ENERGY_LEDGER_V1",
+  GAME_TEMPLATE_V2: "MOZETTO_GAME_TEMPLATE_V2",
+  CONTROLLER_REQ_V1: "MOZETTO_CONTROLLER_REQUEST_V1",
+  CONTROLLER_RESP_V1: "MOZETTO_CONTROLLER_RESPONSE_V1",
+  OPENING_BALANCE_LEAF_V1: "MOZETTO_OPENING_BALANCE_LEAF_V1",
+  CONTROLLER_LEAF_V1: "MOZETTO_CONTROLLER_LEAF_V1",
+  DECK_BATCH_V1: "MOZETTO_DECK_BATCH_V1",
+  HAND_ROOT_V1: "MOZETTO_HAND_ROOT_V1",
+} as const;
+
+export type DomainKey = keyof typeof DOMAIN_STRINGS;
+
+export function allDomainDigests(): Record<DomainKey, Hex> {
+  const out = {} as Record<DomainKey, Hex>;
+  for (const [k, s] of Object.entries(DOMAIN_STRINGS) as [DomainKey, string][]) {
+    out[k] = domainTag(s);
+  }
+  return out;
+}

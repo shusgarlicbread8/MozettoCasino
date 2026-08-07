@@ -19,6 +19,8 @@ contract ArenaAccountFactory is Ownable {
     error ZeroAddress();
     error AccountExists();
     error DeployFailed();
+    error Unauthorized();
+    error UnknownAccount();
 
     constructor(address implementation_, address owner_) Ownable(owner_) {
         if (implementation_ == address(0)) revert ZeroAddress();
@@ -45,6 +47,19 @@ contract ArenaAccountFactory is Ownable {
         accountOf[owner] = account;
         ownerOf[account] = owner;
         emit AccountCreated(owner, account);
+    }
+
+    /// @notice Called by ArenaAccount during two-step ownership transfer to keep mappings consistent.
+    function syncOwner(address previousOwner, address newOwner) external {
+        if (ownerOf[msg.sender] != previousOwner) revert Unauthorized();
+        if (accountOf[previousOwner] != msg.sender) revert UnknownAccount();
+        if (newOwner == address(0)) revert ZeroAddress();
+        if (accountOf[newOwner] != address(0)) revert AccountExists();
+
+        accountOf[previousOwner] = address(0);
+        accountOf[newOwner] = msg.sender;
+        ownerOf[msg.sender] = newOwner;
+        emit AccountCreated(newOwner, msg.sender);
     }
 
     function getOrPredict(address owner) external view returns (address account, bool deployed) {

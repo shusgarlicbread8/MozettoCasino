@@ -1,0 +1,15 @@
+[package]
+name = "protocol-vectors-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mozetto Protocol V3 golden-vector encoders (WP-015)"
+
+[dependencies]
+alloy-primitives = { version = "0.8", features = ["serde"] }
+alloy-sol-types = "0.8"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Pin for rustc 1.85 (repo rust-toolchain.toml); ruint 1.15+ needs newer rustc
+ruint = "=1.14.0"

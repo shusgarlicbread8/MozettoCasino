@@ -8,14 +8,50 @@ import {ArenaAccount} from "../src/ArenaAccount.sol";
 import {ArenaAccountFactory} from "../src/ArenaAccountFactory.sol";
 import {ArenaVaultV2} from "../src/ArenaVaultV2.sol";
 import {TableRegistryV1} from "../src/TableRegistryV1.sol";
+import {GameRegistryV2} from "../src/GameRegistryV2.sol";
+import {SessionLifecycleV2} from "../src/SessionLifecycleV2.sol";
+import {ProtocolFeeVault} from "../src/ProtocolFeeVault.sol";
 import {PokerSettlementHubV1} from "../src/PokerSettlementHubV1.sol";
 import {PokerSettlementHubV2} from "../src/PokerSettlementHubV2.sol";
+import {PokerSettlementHubV3} from "../src/PokerSettlementHubV3.sol";
+import {SignatureQuorumVerifier} from "../src/SignatureQuorumVerifier.sol";
+import {VerifierRouter} from "../src/VerifierRouter.sol";
 import {CheckpointRegistryV1} from "../src/CheckpointRegistryV1.sol";
 import {RandomnessCoordinatorV1} from "../src/RandomnessCoordinatorV1.sol";
+import {RandomnessBeaconV2} from "../src/RandomnessBeaconV2.sol";
+import {ProofBatchRegistryV1} from "../src/ProofBatchRegistryV1.sol";
 
-/// @dev Local Anvil deploy — always deploys mintable mUSDC + V1 (compat) + ArenaAccount V2 stack.
+/// @dev Local Anvil deploy — mintable mUSDC + V1 (compat) + ArenaAccount V2 stack.
+///      Helpers keep `run()` under the EVM stack limit (via-IR still stressed by many locals).
 contract DeployLocal is Script {
     bytes32 internal constant NLHE_HU_STANDARD_V1 = keccak256("NLHE_HU_STANDARD_V1");
+    bytes32 internal constant FAMILY_NLHE = keccak256("NLHE");
+
+    struct Core {
+        MockUSDC usdc;
+        ArenaAccount accountImpl;
+        ArenaAccountFactory factory;
+        ArenaVaultV2 vault;
+        ArenaVaultV1 vaultV1;
+        ProtocolFeeVault feeVault;
+        PokerSettlementHubV1 hubV1;
+        PokerSettlementHubV2 hub;
+        PokerSettlementHubV3 hubV3;
+        VerifierRouter verifierRouter;
+        SignatureQuorumVerifier quorum;
+        bool hubV3Primary;
+    }
+
+    struct Aux {
+        TableRegistryV1 registry;
+        GameRegistryV2 gameRegistry;
+        SessionLifecycleV2 sessionLifecycle;
+        CheckpointRegistryV1 checkpoints;
+        RandomnessCoordinatorV1 randomness;
+        RandomnessBeaconV2 beacon;
+        ProofBatchRegistryV1 proofBatchRegistry;
+        address treasury;
+    }
 
     function run() external {
         uint256 pk = vm.envOr("PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80));
@@ -23,43 +59,97 @@ contract DeployLocal is Script {
         address treasury = vm.envOr("FEE_TREASURY_ADDRESS", deployer);
 
         vm.startBroadcast(pk);
+        Core memory core = _deployCore(deployer, treasury);
+        Aux memory aux = _deployAux(deployer, treasury, core);
+        _configureAttestors(deployer, core);
+        _seedTemplates(aux.registry, aux.gameRegistry);
+        vm.stopBroadcast();
 
-        // Always deploy fresh MockUSDC on Anvil (ignore stale USDC_ADDRESS).
-        MockUSDC usdc = new MockUSDC(deployer);
-        usdc.setFaucetPolicy(type(uint256).max, 0, type(uint256).max);
-        usdc.mint(deployer, 100_000_000e6);
+        _log(core, aux);
+        _writeManifest(core, aux);
+    }
 
-        // V1 kept for compatibility reference / legacy sessions.
-        ArenaVaultV1 vaultV1 = new ArenaVaultV1(address(usdc), treasury, deployer);
-        PokerSettlementHubV1 hubV1 = new PokerSettlementHubV1(address(vaultV1), deployer);
-        vaultV1.setSettlementHub(address(hubV1));
-        vaultV1.setSessionRelayer(deployer);
+    function _deployCore(address deployer, address treasury) internal returns (Core memory c) {
+        c.usdc = new MockUSDC(deployer);
+        c.usdc.setFaucetPolicy(type(uint256).max, 0, type(uint256).max);
+        c.usdc.mint(deployer, 100_000_000e6);
 
-        // V2 ArenaAccount stack (primary).
-        ArenaAccount accountImpl = new ArenaAccount();
-        ArenaAccountFactory factory = new ArenaAccountFactory(address(accountImpl), deployer);
-        ArenaVaultV2 vault = new ArenaVaultV2(address(usdc), address(factory), treasury, deployer);
-        PokerSettlementHubV2 hub = new PokerSettlementHubV2(address(vault), deployer);
-        vault.setSettlementHub(address(hub));
-        vault.setSessionRelayer(deployer);
+        c.vaultV1 = new ArenaVaultV1(address(c.usdc), treasury, deployer);
+        c.hubV1 = new PokerSettlementHubV1(address(c.vaultV1), deployer);
+        c.vaultV1.setSettlementHub(address(c.hubV1));
+        c.vaultV1.setSessionRelayer(deployer);
 
-        TableRegistryV1 registry = new TableRegistryV1(deployer);
-        CheckpointRegistryV1 checkpoints = new CheckpointRegistryV1(deployer);
-        RandomnessCoordinatorV1 randomness = new RandomnessCoordinatorV1(deployer);
+        c.feeVault = new ProtocolFeeVault(address(c.usdc), treasury, deployer, deployer, 0);
 
-        // Distinct Anvil attestors so 2-of-N quorum works with GAME/REPLAY/DEALER keys.
-        hub.setAttestor(deployer, true);
-        hub.setAttestor(0x70997970C51812dc3A010C7d01b50e0d17dc79C8, true);
-        hub.setAttestor(0x14dC79964da2C08b23698B3D3cc7Ca32193d9955, true);
-        hub.setAttestor(0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f, true);
-        hub.setMinSignatures(2);
+        c.accountImpl = new ArenaAccount();
+        c.factory = new ArenaAccountFactory(address(c.accountImpl), deployer);
+        c.vault = new ArenaVaultV2(address(c.usdc), address(c.factory), address(c.feeVault), deployer);
+        c.feeVault.setDepositor(address(c.vault), true);
+        c.hub = new PokerSettlementHubV2(address(c.vault), deployer);
 
-        hubV1.setAttestor(deployer, true);
-        hubV1.setAttestor(0x70997970C51812dc3A010C7d01b50e0d17dc79C8, true);
-        hubV1.setAttestor(0x14dC79964da2C08b23698B3D3cc7Ca32193d9955, true);
-        hubV1.setAttestor(0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f, true);
-        hubV1.setMinSignatures(2);
+        // WP-063: Hub V3 + VerifierRouter additive; V2 remains vault settlementHub for demos
+        // unless SETTLEMENT_HUB_V3_AS_PRIMARY=1.
+        c.quorum = new SignatureQuorumVerifier(deployer);
+        c.verifierRouter = new VerifierRouter(deployer);
+        c.hubV3 = new PokerSettlementHubV3(address(c.vault), address(c.verifierRouter), deployer);
+        c.verifierRouter.setVerifier(c.hubV3.SEASON1_QUORUM_POLICY(), address(c.quorum));
+        c.verifierRouter.setDefaultPolicyId(c.hubV3.SEASON1_QUORUM_POLICY());
 
+        c.hubV3Primary = vm.envOr("SETTLEMENT_HUB_V3_AS_PRIMARY", false);
+        if (c.hubV3Primary) {
+            c.vault.setSettlementHub(address(c.hubV3));
+        } else {
+            c.vault.setSettlementHub(address(c.hub));
+        }
+        c.vault.setSessionRelayer(deployer);
+    }
+
+    function _deployAux(address deployer, address treasury, Core memory core) internal returns (Aux memory a) {
+        a.treasury = treasury;
+        a.registry = new TableRegistryV1(deployer);
+        a.gameRegistry = new GameRegistryV2(deployer, deployer, 0);
+        a.sessionLifecycle = new SessionLifecycleV2(deployer);
+        a.checkpoints = new CheckpointRegistryV1(deployer);
+        a.randomness = new RandomnessCoordinatorV1(deployer);
+        a.beacon = new RandomnessBeaconV2(deployer, true);
+        a.beacon.setOperator(deployer);
+        // WP-062: global proof-batch registry; publisher = deployer, minDelay=0 for Anvil.
+        a.proofBatchRegistry = new ProofBatchRegistryV1(deployer, deployer, 0);
+        // Wire into Hub V3 (requireProofBatch=false so demos need not publish batches first).
+        core.hubV3.setProofBatchRegistry(address(a.proofBatchRegistry), false);
+
+        a.sessionLifecycle.setVault(address(core.vault));
+        a.sessionLifecycle.setSessionRelayer(deployer);
+        a.sessionLifecycle.setGameRegistry(address(a.gameRegistry));
+        core.vault.setSessionLifecycle(address(a.sessionLifecycle));
+        core.vault.setGameRegistry(address(a.gameRegistry));
+    }
+
+    function _configureAttestors(address deployer, Core memory c) internal {
+        address a1 = 0x70997970C51812dc3A010C7d01b50e0d17dc79C8;
+        address a2 = 0x14dC79964da2C08b23698B3D3cc7Ca32193d9955;
+        address a3 = 0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f;
+
+        c.hub.setAttestor(deployer, true);
+        c.hub.setAttestor(a1, true);
+        c.hub.setAttestor(a2, true);
+        c.hub.setAttestor(a3, true);
+        c.hub.setMinSignatures(2);
+
+        c.quorum.setAttestor(deployer, true);
+        c.quorum.setAttestor(a1, true);
+        c.quorum.setAttestor(a2, true);
+        c.quorum.setAttestor(a3, true);
+        c.quorum.setMinSignatures(2);
+
+        c.hubV1.setAttestor(deployer, true);
+        c.hubV1.setAttestor(a1, true);
+        c.hubV1.setAttestor(a2, true);
+        c.hubV1.setAttestor(a3, true);
+        c.hubV1.setMinSignatures(2);
+    }
+
+    function _seedTemplates(TableRegistryV1 registry, GameRegistryV2 gameRegistry) internal {
         registry.registerTemplate(
             NLHE_HU_STANDARD_V1,
             TableRegistryV1.GameTemplate({
@@ -78,43 +168,120 @@ contract DeployLocal is Script {
                 enabled: true
             })
         );
+        _seedGameRegistryV2(gameRegistry);
+    }
 
-        console2.log("MockUSDC", address(usdc));
-        console2.log("ArenaAccountImplementation", address(accountImpl));
-        console2.log("ArenaAccountFactory", address(factory));
-        console2.log("ArenaVaultV2", address(vault));
-        console2.log("PokerSettlementHubV2", address(hub));
-        console2.log("ArenaVaultV1", address(vaultV1));
-        console2.log("PokerSettlementHubV1", address(hubV1));
-        console2.log("TableRegistryV1", address(registry));
-        console2.log("CheckpointRegistryV1", address(checkpoints));
-        console2.log("RandomnessCoordinatorV1", address(randomness));
-        console2.log("FeeTreasury", treasury);
+    function _log(Core memory c, Aux memory a) internal view {
+        console2.log("MockUSDC", address(c.usdc));
+        console2.log("ArenaAccountImplementation", address(c.accountImpl));
+        console2.log("ArenaAccountFactory", address(c.factory));
+        console2.log("ArenaVaultV2", address(c.vault));
+        console2.log("PokerSettlementHubV2", address(c.hub));
+        console2.log("PokerSettlementHubV3", address(c.hubV3));
+        console2.log("VerifierRouter", address(c.verifierRouter));
+        console2.log("SignatureQuorumVerifier", address(c.quorum));
+        console2.log("ArenaVaultV1", address(c.vaultV1));
+        console2.log("PokerSettlementHubV1", address(c.hubV1));
+        console2.log("TableRegistryV1", address(a.registry));
+        console2.log("GameRegistryV2", address(a.gameRegistry));
+        console2.log("SessionLifecycleV2", address(a.sessionLifecycle));
+        console2.log("ProtocolFeeVault", address(c.feeVault));
+        console2.log("CheckpointRegistryV1", address(a.checkpoints));
+        console2.log("RandomnessCoordinatorV1", address(a.randomness));
+        console2.log("RandomnessBeaconV2", address(a.beacon));
+        console2.log("ProofBatchRegistryV1", address(a.proofBatchRegistry));
+        console2.log("FeeTreasury", a.treasury);
+    }
 
-        vm.stopBroadcast();
-
+    function _writeManifest(Core memory c, Aux memory a) internal {
+        address settlementHub = c.hubV3Primary ? address(c.hubV3) : address(c.hub);
         string memory json = string.concat(
             "{\n",
             '  "chainId": 31337,\n',
-            '  "usdc": "', vm.toString(address(usdc)), '",\n',
+            '  "usdc": "', vm.toString(address(c.usdc)), '",\n',
             '  "symbol": "mUSDC",\n',
             '  "decimals": 6,\n',
             '  "isTestAsset": true,\n',
             '  "faucetEnabled": true,\n',
-            '  "arenaVault": "', vm.toString(address(vault)), '",\n',
-            '  "arenaVaultV1": "', vm.toString(address(vaultV1)), '",\n',
-            '  "arenaAccountFactory": "', vm.toString(address(factory)), '",\n',
-            '  "arenaAccountImplementation": "', vm.toString(address(accountImpl)), '",\n',
-            '  "tableRegistry": "', vm.toString(address(registry)), '",\n',
-            '  "settlementHub": "', vm.toString(address(hub)), '",\n',
-            '  "settlementHubV1": "', vm.toString(address(hubV1)), '",\n',
-            '  "checkpointRegistry": "', vm.toString(address(checkpoints)), '",\n',
-            '  "randomnessCoordinator": "', vm.toString(address(randomness)), '",\n',
-            '  "feeTreasury": "', vm.toString(treasury), '",\n',
+            '  "arenaVault": "', vm.toString(address(c.vault)), '",\n',
+            '  "arenaVaultV1": "', vm.toString(address(c.vaultV1)), '",\n',
+            '  "arenaAccountFactory": "', vm.toString(address(c.factory)), '",\n',
+            '  "arenaAccountImplementation": "', vm.toString(address(c.accountImpl)), '",\n',
+            '  "tableRegistry": "', vm.toString(address(a.registry)), '",\n',
+            '  "gameRegistry": "', vm.toString(address(a.gameRegistry)), '",\n',
+            '  "sessionLifecycle": "', vm.toString(address(a.sessionLifecycle)), '",\n',
+            '  "protocolFeeVault": "', vm.toString(address(c.feeVault)), '",\n',
+            '  "settlementHub": "', vm.toString(settlementHub), '",\n',
+            '  "settlementHubV1": "', vm.toString(address(c.hubV1)), '",\n',
+            '  "settlementHubV2": "', vm.toString(address(c.hub)), '",\n',
+            '  "settlementHubV3": "', vm.toString(address(c.hubV3)), '",\n',
+            '  "verifierRouter": "', vm.toString(address(c.verifierRouter)), '",\n',
+            '  "signatureQuorumVerifier": "', vm.toString(address(c.quorum)), '",\n',
+            '  "checkpointRegistry": "', vm.toString(address(a.checkpoints)), '",\n',
+            '  "randomnessCoordinator": "', vm.toString(address(a.randomness)), '",\n',
+            '  "randomnessBeacon": "', vm.toString(address(a.beacon)), '",\n',
+            '  "proofBatchRegistry": "', vm.toString(address(a.proofBatchRegistry)), '",\n',
+            '  "feeTreasury": "', vm.toString(a.treasury), '",\n',
             '  "deploymentBlock": ', vm.toString(block.number), ",\n",
             '  "protocolVersion": "2.0.0-anvil"\n',
             "}"
         );
         vm.writeFile("../packages/chain-manifest/deployments/anvil.json", json);
+    }
+
+    function _seedGameRegistryV2(GameRegistryV2 gameRegistry) internal {
+        GameRegistryV2.GameTemplateV2 memory hu = GameRegistryV2.GameTemplateV2({
+            templateId: gameRegistry.NLHE_HU_STANDARD_V2(),
+            protocolVersion: 3,
+            gameFamilyId: FAMILY_NLHE,
+            maxSeats: 2,
+            minSeatsToStart: 2,
+            smallBlind: 0.5e6,
+            bigBlind: 1e6,
+            minBuyIn: 100e6,
+            maxBuyIn: 200e6,
+            engineHash: keccak256("mozetto-nlhe-engine-v3-draft"),
+            rulesHash: keccak256("nlhe-rules-v2"),
+            randomnessPolicyId: keccak256("randomness-policy-v2"),
+            settlementPolicyId: keccak256("settlement-policy-v3"),
+            modelPolicyHash: keccak256("model-policy-groq"),
+            energyPolicyHash: keccak256("energy-policy-v1"),
+            rakePolicyHash: keccak256("rake-policy-v1"),
+            actionDeadlineMs: 15_000,
+            emergencyExitDelaySec: 7 days,
+            ranked: true,
+            aiOnly: true,
+            leagueBit: 1
+        });
+        gameRegistry.registerTemplate(hu);
+        gameRegistry.scheduleActivation(hu.templateId);
+        gameRegistry.executeActivation(hu.templateId);
+
+        GameRegistryV2.GameTemplateV2 memory six = GameRegistryV2.GameTemplateV2({
+            templateId: gameRegistry.NLHE_SIXMAX_STANDARD_V2(),
+            protocolVersion: 3,
+            gameFamilyId: FAMILY_NLHE,
+            maxSeats: 6,
+            minSeatsToStart: 2,
+            smallBlind: 0.5e6,
+            bigBlind: 1e6,
+            minBuyIn: 100e6,
+            maxBuyIn: 200e6,
+            engineHash: keccak256("mozetto-nlhe-engine-v3-draft"),
+            rulesHash: keccak256("nlhe-rules-v2"),
+            randomnessPolicyId: keccak256("randomness-policy-v2"),
+            settlementPolicyId: keccak256("settlement-policy-v3"),
+            modelPolicyHash: keccak256("model-policy-groq"),
+            energyPolicyHash: keccak256("energy-policy-v1"),
+            rakePolicyHash: keccak256("rake-policy-v1"),
+            actionDeadlineMs: 15_000,
+            emergencyExitDelaySec: 7 days,
+            ranked: true,
+            aiOnly: true,
+            leagueBit: 1
+        });
+        gameRegistry.registerTemplate(six);
+        gameRegistry.scheduleActivation(six.templateId);
+        gameRegistry.executeActivation(six.templateId);
     }
 }

@@ -8,6 +8,10 @@ import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 
+interface IArenaAccountFactory {
+    function syncOwner(address previousOwner, address newOwner) external;
+}
+
 /// @title ArenaAccount — per-owner gaming custody (USDC held here; vault may only enter allowed games)
 /// @dev Owner is MetaMask/Coinbase EOA or ERC-1271 wallet. Platform has no withdraw/execute authority.
 contract ArenaAccount is Initializable, ReentrancyGuard, EIP712 {
@@ -18,6 +22,7 @@ contract ArenaAccount is Initializable, ReentrancyGuard, EIP712 {
     );
 
     address public owner;
+    address public pendingOwner;
     address public factory;
 
     struct GameAuth {
@@ -55,6 +60,9 @@ contract ArenaAccount is Initializable, ReentrancyGuard, EIP712 {
         uint16 maxConcurrentGames
     );
     event GamePermissionRevoked(address indexed sessionSigner);
+    event PermissionNonceBumped(uint256 newNonce);
+    event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event BuyInPulled(bytes32 indexed sessionId, address indexed vault, uint256 amount);
     event ExposureReleased(bytes32 indexed sessionId, uint256 amount);
     event Withdrawn(address indexed to, uint256 amount);
@@ -77,6 +85,7 @@ contract ArenaAccount is Initializable, ReentrancyGuard, EIP712 {
     error InsufficientBalance();
     error UnknownSession();
     error SessionAlreadyOpen();
+    error NoPendingOwner();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() EIP712("MozettoArenaAccount", "1") {
@@ -137,21 +146,7 @@ contract ArenaAccount is Initializable, ReentrancyGuard, EIP712 {
         gameAuthNonce = nonce + 1;
 
         if (!enabled) {
-            address prev = gameAuth.sessionSigner;
-            // Keep exposure counters; clear authority fields.
-            gameAuth.sessionSigner = address(0);
-            gameAuth.usdc = address(0);
-            gameAuth.vault = address(0);
-            gameAuth.gameTemplateId = bytes32(0);
-            gameAuth.leagueMask = 0;
-            gameAuth.lifetimeCommittedCap = 0;
-            gameAuth.maxTotalAtRisk = 0;
-            gameAuth.maxSingleBuyIn = 0;
-            gameAuth.validUntil = 0;
-            gameAuth.maxConcurrentGames = 0;
-            gameAuth.ratedOnly = false;
-            gameAuth.enabled = false;
-            emit GamePermissionRevoked(prev);
+            _clearPermissionAuthority();
             return;
         }
 
@@ -195,13 +190,71 @@ contract ArenaAccount is Initializable, ReentrancyGuard, EIP712 {
         );
     }
 
-    /// @notice Owner withdraws tokens from this account (platform cannot call).
+    /// @notice Owner-only emergency revoke: clear GamePermission and bump nonce (no EIP-712 required).
+    function revokeGamePermission() external nonReentrant {
+        if (msg.sender != owner) revert Unauthorized();
+        _clearPermissionAuthority();
+        unchecked {
+            gameAuthNonce += 1;
+        }
+        emit PermissionNonceBumped(gameAuthNonce);
+    }
+
+    /// @notice Alias for Plan 03 emergency nonce bump; clears authority and invalidates pending signatures.
+    function emergencyInvalidatePermissions() external nonReentrant {
+        if (msg.sender != owner) revert Unauthorized();
+        _clearPermissionAuthority();
+        unchecked {
+            gameAuthNonce += 1;
+        }
+        emit PermissionNonceBumped(gameAuthNonce);
+    }
+
+    /// @notice Start two-step ownership transfer (Plan 03 secure path).
+    function transferOwnership(address newOwner) external {
+        if (msg.sender != owner) revert Unauthorized();
+        if (newOwner == address(0)) revert ZeroAddress();
+        pendingOwner = newOwner;
+        emit OwnershipTransferStarted(owner, newOwner);
+    }
+
+    /// @notice Complete ownership transfer; syncs ArenaAccountFactory owner mappings.
+    function acceptOwnership() external nonReentrant {
+        if (msg.sender != pendingOwner) revert NoPendingOwner();
+        address previous = owner;
+        address next = pendingOwner;
+        pendingOwner = address(0);
+        owner = next;
+        IArenaAccountFactory(factory).syncOwner(previous, next);
+        emit OwnershipTransferred(previous, next);
+    }
+
+    /// @notice Owner withdraws idle tokens from this account (platform cannot call).
+    /// @dev Locked buy-ins already sit in the vault; this only moves remaining idle balance.
     function withdraw(address token, uint256 amount, address to) external nonReentrant {
         if (msg.sender != owner) revert Unauthorized();
         if (amount == 0) revert ZeroAmount();
         if (to == address(0)) revert ZeroAddress();
         IERC20(token).safeTransfer(to, amount);
         emit Withdrawn(to, amount);
+    }
+
+    function _clearPermissionAuthority() internal {
+        address prev = gameAuth.sessionSigner;
+        // Keep exposure counters; clear authority fields.
+        gameAuth.sessionSigner = address(0);
+        gameAuth.usdc = address(0);
+        gameAuth.vault = address(0);
+        gameAuth.gameTemplateId = bytes32(0);
+        gameAuth.leagueMask = 0;
+        gameAuth.lifetimeCommittedCap = 0;
+        gameAuth.maxTotalAtRisk = 0;
+        gameAuth.maxSingleBuyIn = 0;
+        gameAuth.validUntil = 0;
+        gameAuth.maxConcurrentGames = 0;
+        gameAuth.ratedOnly = false;
+        gameAuth.enabled = false;
+        emit GamePermissionRevoked(prev);
     }
 
     /// @notice Vault-only: pull buy-in USDC under an active GamePermission and reserve exposure.

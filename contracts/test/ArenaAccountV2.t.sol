@@ -349,6 +349,255 @@ contract ArenaAccountV2Test is Test {
         );
     }
 
+    function testOwnerOnlyRevokeWithoutSignature() public {
+        uint256 nonceBefore = ArenaAccount(aliceAccount).gameAuthNonce();
+        vm.prank(alice);
+        ArenaAccount(aliceAccount).revokeGamePermission();
+        (,,,,,,,,,,,,,, bool enabled) = ArenaAccount(aliceAccount).gameAuth();
+        assertFalse(enabled);
+        assertEq(ArenaAccount(aliceAccount).gameAuthNonce(), nonceBefore + 1);
+
+        ArenaVaultV2.SeatTicket[] memory tickets = new ArenaVaultV2.SeatTicket[](1);
+        bytes[] memory sigs = new bytes[](1);
+        tickets[0] = _ticket(aliceAccount, 100 * ONE, 50, LEAGUE_MICRO, true);
+        sigs[0] = _signSeatTicket(tickets[0], sessionSignerPk);
+        vm.expectRevert(ArenaVaultV2.PermissionInactive.selector);
+        vault.openSession(_config(keccak256("owner-revoke")), tickets, sigs);
+    }
+
+    function testNonOwnerCannotRevoke() public {
+        vm.expectRevert(ArenaAccount.Unauthorized.selector);
+        ArenaAccount(aliceAccount).revokeGamePermission();
+    }
+
+    function testEmergencyInvalidatePermissions() public {
+        uint256 nonceBefore = ArenaAccount(bobAccount).gameAuthNonce();
+        vm.prank(bob);
+        ArenaAccount(bobAccount).emergencyInvalidatePermissions();
+        (,,,,,,,,,,,,,, bool enabled) = ArenaAccount(bobAccount).gameAuth();
+        assertFalse(enabled);
+        assertEq(ArenaAccount(bobAccount).gameAuthNonce(), nonceBefore + 1);
+    }
+
+    function testLifetimeCapExceeded() public {
+        address frank = vm.addr(0xF4A4);
+        uint256 frankPk = 0xF4A4;
+        address frankAccount = factory.createAccount(frank);
+        usdc.mint(frankAccount, 5_000 * ONE);
+        // lifetime cap = 150; single buy-in ok at 100 but two sessions exceed lifetime
+        _enablePermission(frankAccount, frankPk, 150 * ONE, 5_000 * ONE, 1_000 * ONE, 4, true);
+
+        ArenaVaultV2.SeatTicket[] memory tickets = new ArenaVaultV2.SeatTicket[](2);
+        bytes[] memory sigs = new bytes[](2);
+        tickets[0] = _ticket(frankAccount, 100 * ONE, 1, LEAGUE_MICRO, true);
+        tickets[1] = _ticket(aliceAccount, 100 * ONE, 60, LEAGUE_MICRO, true);
+        sigs[0] = _signSeatTicket(tickets[0], sessionSignerPk);
+        sigs[1] = _signSeatTicket(tickets[1], sessionSignerPk);
+        vault.openSession(_config(keccak256("life-1")), tickets, sigs);
+
+        tickets[0] = _ticket(frankAccount, 100 * ONE, 2, LEAGUE_MICRO, true);
+        tickets[1] = _ticket(bobAccount, 100 * ONE, 60, LEAGUE_MICRO, true);
+        sigs[0] = _signSeatTicket(tickets[0], sessionSignerPk);
+        sigs[1] = _signSeatTicket(tickets[1], sessionSignerPk);
+        vm.expectRevert(ArenaAccount.LifetimeCapExceeded.selector);
+        vault.openSession(_config(keccak256("life-2")), tickets, sigs);
+    }
+
+    function testAtRiskCapExceeded() public {
+        address grace = vm.addr(0x68ACE);
+        uint256 gracePk = 0x68ACE;
+        address graceAccount = factory.createAccount(grace);
+        usdc.mint(graceAccount, 5_000 * ONE);
+        // maxTotalAtRisk = 150; concurrent games allow 2
+        _enablePermission(graceAccount, gracePk, 50_000 * ONE, 150 * ONE, 1_000 * ONE, 2, true);
+
+        ArenaVaultV2.SeatTicket[] memory tickets = new ArenaVaultV2.SeatTicket[](2);
+        bytes[] memory sigs = new bytes[](2);
+        tickets[0] = _ticket(graceAccount, 100 * ONE, 1, LEAGUE_MICRO, true);
+        tickets[1] = _ticket(aliceAccount, 100 * ONE, 61, LEAGUE_MICRO, true);
+        sigs[0] = _signSeatTicket(tickets[0], sessionSignerPk);
+        sigs[1] = _signSeatTicket(tickets[1], sessionSignerPk);
+        vault.openSession(_config(keccak256("risk-1")), tickets, sigs);
+
+        tickets[0] = _ticket(graceAccount, 100 * ONE, 2, LEAGUE_MICRO, true);
+        tickets[1] = _ticket(bobAccount, 100 * ONE, 61, LEAGUE_MICRO, true);
+        sigs[0] = _signSeatTicket(tickets[0], sessionSignerPk);
+        sigs[1] = _signSeatTicket(tickets[1], sessionSignerPk);
+        vm.expectRevert(ArenaAccount.AtRiskCapExceeded.selector);
+        vault.openSession(_config(keccak256("risk-2")), tickets, sigs);
+    }
+
+    function testWrongVaultCannotLockBuyIn() public {
+        vm.expectRevert(ArenaAccount.WrongVault.selector);
+        ArenaAccount(aliceAccount).lockBuyIn(keccak256("rogue"), 100 * ONE, templateId, LEAGUE_MICRO, true);
+    }
+
+    function testWrongTemplateReverts() public {
+        ArenaVaultV2.SeatTicket[] memory tickets = new ArenaVaultV2.SeatTicket[](1);
+        bytes[] memory sigs = new bytes[](1);
+        tickets[0] = ArenaVaultV2.SeatTicket({
+            player: aliceAccount,
+            gameTemplateId: keccak256("OTHER_TEMPLATE"),
+            buyIn: 100 * ONE,
+            controllerHash: keccak256("controller"),
+            agentProfileHash: keccak256("agent"),
+            expiresAt: uint64(block.timestamp + 1 hours),
+            nonce: 70,
+            matchmakingPool: keccak256("pool"),
+            leagueBit: LEAGUE_MICRO,
+            rated: true
+        });
+        sigs[0] = _signSeatTicket(tickets[0], sessionSignerPk);
+        // openSession checks template vs config first
+        vm.expectRevert(ArenaVaultV2.TemplateMismatch.selector);
+        vault.openSession(_config(keccak256("bad-template")), tickets, sigs);
+    }
+
+    function testRatedOnlyBlocksUnrated() public {
+        ArenaVaultV2.SeatTicket[] memory tickets = new ArenaVaultV2.SeatTicket[](1);
+        bytes[] memory sigs = new bytes[](1);
+        tickets[0] = _ticket(aliceAccount, 100 * ONE, 71, LEAGUE_MICRO, false);
+        sigs[0] = _signSeatTicket(tickets[0], sessionSignerPk);
+        vm.expectRevert(ArenaAccount.RatedRequired.selector);
+        vault.openSession(_config(keccak256("unrated")), tickets, sigs);
+    }
+
+    function testSettlementRejectsArbitraryRecipient() public {
+        bytes32 sid = keccak256("arb-dest");
+        ArenaVaultV2.SeatTicket[] memory tickets = new ArenaVaultV2.SeatTicket[](2);
+        bytes[] memory sigs = new bytes[](2);
+        tickets[0] = _ticket(aliceAccount, 100 * ONE, 72, LEAGUE_MICRO, true);
+        tickets[1] = _ticket(bobAccount, 100 * ONE, 72, LEAGUE_MICRO, true);
+        sigs[0] = _signSeatTicket(tickets[0], sessionSignerPk);
+        sigs[1] = _signSeatTicket(tickets[1], sessionSignerPk);
+        vault.openSession(_config(sid), tickets, sigs);
+
+        address attacker = address(0xBAD);
+        ArenaVaultV2.SettlementPlayer[] memory players = new ArenaVaultV2.SettlementPlayer[](2);
+        players[0] = ArenaVaultV2.SettlementPlayer(attacker, 100 * ONE, 100 * ONE);
+        players[1] = ArenaVaultV2.SettlementPlayer(bobAccount, 100 * ONE, 100 * ONE);
+        vm.expectRevert(ArenaVaultV2.NotArenaAccount.selector);
+        _settle(sid, players, 0, 1);
+    }
+
+    function testSettlementRejectsFeeTreasuryAsPlayer() public {
+        bytes32 sid = keccak256("fee-as-player");
+        ArenaVaultV2.SeatTicket[] memory tickets = new ArenaVaultV2.SeatTicket[](2);
+        bytes[] memory sigs = new bytes[](2);
+        tickets[0] = _ticket(aliceAccount, 100 * ONE, 73, LEAGUE_MICRO, true);
+        tickets[1] = _ticket(bobAccount, 100 * ONE, 73, LEAGUE_MICRO, true);
+        sigs[0] = _signSeatTicket(tickets[0], sessionSignerPk);
+        sigs[1] = _signSeatTicket(tickets[1], sessionSignerPk);
+        vault.openSession(_config(sid), tickets, sigs);
+
+        ArenaVaultV2.SettlementPlayer[] memory players = new ArenaVaultV2.SettlementPlayer[](2);
+        players[0] = ArenaVaultV2.SettlementPlayer(treasury, 100 * ONE, 100 * ONE);
+        players[1] = ArenaVaultV2.SettlementPlayer(bobAccount, 100 * ONE, 100 * ONE);
+        vm.expectRevert(ArenaVaultV2.SettlementDestination.selector);
+        _settle(sid, players, 0, 1);
+    }
+
+    function testSettlementRejectsPartialStartLocked() public {
+        bytes32 sid = keccak256("partial-lock");
+        ArenaVaultV2.SeatTicket[] memory tickets = new ArenaVaultV2.SeatTicket[](2);
+        bytes[] memory sigs = new bytes[](2);
+        tickets[0] = _ticket(aliceAccount, 100 * ONE, 74, LEAGUE_MICRO, true);
+        tickets[1] = _ticket(bobAccount, 100 * ONE, 74, LEAGUE_MICRO, true);
+        sigs[0] = _signSeatTicket(tickets[0], sessionSignerPk);
+        sigs[1] = _signSeatTicket(tickets[1], sessionSignerPk);
+        vault.openSession(_config(sid), tickets, sigs);
+
+        // Under-report startLocked would previously leave stranded liabilities
+        ArenaVaultV2.SettlementPlayer[] memory players = new ArenaVaultV2.SettlementPlayer[](2);
+        players[0] = ArenaVaultV2.SettlementPlayer(aliceAccount, 50 * ONE, 50 * ONE);
+        players[1] = ArenaVaultV2.SettlementPlayer(bobAccount, 100 * ONE, 100 * ONE);
+        vm.expectRevert(ArenaVaultV2.BadSettlement.selector);
+        _settle(sid, players, 0, 1);
+    }
+
+    function testDoubleSettlementReverts() public {
+        bytes32 sid = keccak256("double-settle");
+        ArenaVaultV2.SeatTicket[] memory tickets = new ArenaVaultV2.SeatTicket[](2);
+        bytes[] memory sigs = new bytes[](2);
+        tickets[0] = _ticket(aliceAccount, 100 * ONE, 75, LEAGUE_MICRO, true);
+        tickets[1] = _ticket(bobAccount, 100 * ONE, 75, LEAGUE_MICRO, true);
+        sigs[0] = _signSeatTicket(tickets[0], sessionSignerPk);
+        sigs[1] = _signSeatTicket(tickets[1], sessionSignerPk);
+        vault.openSession(_config(sid), tickets, sigs);
+
+        ArenaVaultV2.SettlementPlayer[] memory players = new ArenaVaultV2.SettlementPlayer[](2);
+        players[0] = ArenaVaultV2.SettlementPlayer(aliceAccount, 100 * ONE, 100 * ONE);
+        players[1] = ArenaVaultV2.SettlementPlayer(bobAccount, 100 * ONE, 100 * ONE);
+        _settle(sid, players, 0, 1);
+
+        vm.expectRevert(); // hub SequenceRegression or vault AlreadySettled
+        _settle(sid, players, 0, 2);
+    }
+
+    function testOwnerWithdrawDoesNotTouchVaultLocked() public {
+        bytes32 sid = keccak256("withdraw-idle");
+        ArenaVaultV2.SeatTicket[] memory tickets = new ArenaVaultV2.SeatTicket[](2);
+        bytes[] memory sigs = new bytes[](2);
+        tickets[0] = _ticket(aliceAccount, 100 * ONE, 76, LEAGUE_MICRO, true);
+        tickets[1] = _ticket(bobAccount, 100 * ONE, 76, LEAGUE_MICRO, true);
+        sigs[0] = _signSeatTicket(tickets[0], sessionSignerPk);
+        sigs[1] = _signSeatTicket(tickets[1], sessionSignerPk);
+        vault.openSession(_config(sid), tickets, sigs);
+
+        uint256 vaultBefore = usdc.balanceOf(address(vault));
+        uint256 idle = usdc.balanceOf(aliceAccount);
+        vm.prank(alice);
+        ArenaAccount(aliceAccount).withdraw(address(usdc), idle, alice);
+        assertEq(usdc.balanceOf(address(vault)), vaultBefore);
+        assertEq(vault.lockedBySession(sid, aliceAccount), 100 * ONE);
+    }
+
+    function testOwnershipTransferTwoStep() public {
+        address newOwner = address(0x1111);
+        vm.prank(alice);
+        ArenaAccount(aliceAccount).transferOwnership(newOwner);
+        assertEq(ArenaAccount(aliceAccount).pendingOwner(), newOwner);
+
+        vm.prank(newOwner);
+        ArenaAccount(aliceAccount).acceptOwnership();
+        assertEq(ArenaAccount(aliceAccount).owner(), newOwner);
+        assertEq(factory.ownerOf(aliceAccount), newOwner);
+        assertEq(factory.accountOf(newOwner), aliceAccount);
+        assertEq(factory.accountOf(alice), address(0));
+
+        // Previous owner can no longer withdraw
+        vm.prank(alice);
+        vm.expectRevert(ArenaAccount.Unauthorized.selector);
+        ArenaAccount(aliceAccount).withdraw(address(usdc), ONE, alice);
+
+        vm.prank(newOwner);
+        ArenaAccount(aliceAccount).withdraw(address(usdc), ONE, newOwner);
+        assertEq(usdc.balanceOf(newOwner), ONE);
+    }
+
+    function testNonOwnerCannotTransferOwnership() public {
+        vm.expectRevert(ArenaAccount.Unauthorized.selector);
+        ArenaAccount(aliceAccount).transferOwnership(address(0xBEEF));
+    }
+
+    function testTicketNonceReplayReverts() public {
+        ArenaVaultV2.SeatTicket[] memory tickets = new ArenaVaultV2.SeatTicket[](2);
+        bytes[] memory sigs = new bytes[](2);
+        tickets[0] = _ticket(aliceAccount, 100 * ONE, 80, LEAGUE_MICRO, true);
+        tickets[1] = _ticket(bobAccount, 100 * ONE, 80, LEAGUE_MICRO, true);
+        sigs[0] = _signSeatTicket(tickets[0], sessionSignerPk);
+        sigs[1] = _signSeatTicket(tickets[1], sessionSignerPk);
+        vault.openSession(_config(keccak256("nonce-a")), tickets, sigs);
+
+        // Reuse alice ticket nonce 80 in a new session
+        tickets[0] = _ticket(aliceAccount, 100 * ONE, 80, LEAGUE_MICRO, true);
+        tickets[1] = _ticket(bobAccount, 100 * ONE, 81, LEAGUE_MICRO, true);
+        sigs[0] = _signSeatTicket(tickets[0], sessionSignerPk);
+        sigs[1] = _signSeatTicket(tickets[1], sessionSignerPk);
+        vm.expectRevert(ArenaVaultV2.NonceUsed.selector);
+        vault.openSession(_config(keccak256("nonce-b")), tickets, sigs);
+    }
+
     // --- helpers ---
 
     function _config(bytes32 sid) internal view returns (ArenaVaultV2.SessionConfig memory) {
