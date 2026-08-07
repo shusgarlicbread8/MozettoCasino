@@ -1,0 +1,12 @@
+[package]
+name = "poker-eval"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mozetto Hold'em hand evaluator + golden vectors (WP-033)"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

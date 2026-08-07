@@ -1,0 +1,18 @@
+[package]
+name = "poker-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure deterministic NLHE engine (WP-031 HU; six-max WP-032)"
+
+[dependencies]
+poker-eval = { path = "../poker-eval" }
+alloy-primitives = { version = "0.8", default-features = false, features = ["std"] }
+hmac = "0.12"
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+hex = "0.4"

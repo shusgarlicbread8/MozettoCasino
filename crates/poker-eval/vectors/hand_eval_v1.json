@@ -1,0 +1,367 @@
+{
+  "version": 1,
+  "id": "mozetto_hand_eval_v1",
+  "workPacket": "WP-033",
+  "cardEncoding": "protocol_v3_suit_major_0_51",
+  "notes": [
+    "Cards are rank+suit keys (e.g. As). Optional codes[] use Protocol V3 uint8 0..51.",
+    "category uses TS snake_case ids. score is lexicographic compare vector (category first).",
+    "cmp: +1 means A beats B, 0 tie, -1 A loses to B.",
+    "PokerKit differential generators are WP-034; this file is the shared TS/Rust oracle."
+  ],
+  "vectors": [
+    {
+      "id": "five_high_card_akqj9",
+      "kind": "five_card",
+      "cards": ["As", "Kd", "Qc", "Jh", "9s"],
+      "codes": [51, 24, 10, 35, 46],
+      "expect": {
+        "category": "high_card",
+        "score": [0, 14, 13, 12, 11, 9],
+        "label": "High card"
+      }
+    },
+    {
+      "id": "five_pair_aces_kqj",
+      "kind": "five_card",
+      "cards": ["As", "Ah", "Kd", "Qc", "Jh"],
+      "expect": {
+        "category": "pair",
+        "score": [1, 14, 13, 12, 11],
+        "label": "Pair"
+      }
+    },
+    {
+      "id": "five_two_pair_ak_q",
+      "kind": "five_card",
+      "cards": ["As", "Ah", "Kd", "Kc", "Qh"],
+      "expect": {
+        "category": "two_pair",
+        "score": [2, 14, 13, 12],
+        "label": "Two pair"
+      }
+    },
+    {
+      "id": "five_trips_aces_kq",
+      "kind": "five_card",
+      "cards": ["As", "Ah", "Ad", "Kc", "Qh"],
+      "expect": {
+        "category": "three_kind",
+        "score": [3, 14, 13, 12],
+        "label": "Three of a kind"
+      }
+    },
+    {
+      "id": "five_straight_wheel",
+      "kind": "five_card",
+      "cards": ["As", "2c", "3d", "4h", "5s"],
+      "expect": {
+        "category": "straight",
+        "score": [4, 5],
+        "label": "Straight"
+      }
+    },
+    {
+      "id": "five_straight_broadway",
+      "kind": "five_card",
+      "cards": ["Ts", "Jh", "Qd", "Kc", "As"],
+      "expect": {
+        "category": "straight",
+        "score": [4, 14],
+        "label": "Straight"
+      }
+    },
+    {
+      "id": "five_straight_six_high",
+      "kind": "five_card",
+      "cards": ["2c", "3d", "4h", "5s", "6c"],
+      "expect": {
+        "category": "straight",
+        "score": [4, 6],
+        "label": "Straight"
+      }
+    },
+    {
+      "id": "five_flush_a_high",
+      "kind": "five_card",
+      "cards": ["As", "Ks", "Qs", "9s", "2s"],
+      "expect": {
+        "category": "flush",
+        "score": [5, 14, 13, 12, 9, 2],
+        "label": "Flush"
+      }
+    },
+    {
+      "id": "five_full_house_aaa_kk",
+      "kind": "five_card",
+      "cards": ["As", "Ah", "Ad", "Kc", "Kd"],
+      "expect": {
+        "category": "full_house",
+        "score": [6, 14, 13],
+        "label": "Full house"
+      }
+    },
+    {
+      "id": "five_quads_aces_k",
+      "kind": "five_card",
+      "cards": ["As", "Ah", "Ad", "Ac", "Kd"],
+      "expect": {
+        "category": "four_kind",
+        "score": [7, 14, 13],
+        "label": "Four of a kind"
+      }
+    },
+    {
+      "id": "five_straight_flush_nine",
+      "kind": "five_card",
+      "cards": ["5h", "6h", "7h", "8h", "9h"],
+      "expect": {
+        "category": "straight_flush",
+        "score": [8, 9],
+        "label": "Straight flush"
+      }
+    },
+    {
+      "id": "five_royal_flush_spades",
+      "kind": "five_card",
+      "cards": ["Ts", "Js", "Qs", "Ks", "As"],
+      "codes": [47, 48, 49, 50, 51],
+      "expect": {
+        "category": "straight_flush",
+        "score": [8, 14],
+        "label": "Royal flush"
+      }
+    },
+    {
+      "id": "five_wheel_straight_flush",
+      "kind": "five_card",
+      "cards": ["Ah", "2h", "3h", "4h", "5h"],
+      "expect": {
+        "category": "straight_flush",
+        "score": [8, 5],
+        "label": "Straight flush"
+      }
+    },
+    {
+      "id": "kicker_pair_king_beats_queen",
+      "kind": "compare_five",
+      "cardsA": ["As", "Ad", "Kc", "7h", "2s"],
+      "cardsB": ["As", "Ad", "Qc", "7h", "2s"],
+      "expect": { "cmp": 1 }
+    },
+    {
+      "id": "kicker_two_pair_queen_beats_jack",
+      "kind": "compare_five",
+      "cardsA": ["As", "Ah", "Kd", "Kc", "Qh"],
+      "cardsB": ["As", "Ah", "Kd", "Kc", "Jh"],
+      "expect": { "cmp": 1 }
+    },
+    {
+      "id": "kicker_trips_king_beats_queen",
+      "kind": "compare_five",
+      "cardsA": ["As", "Ah", "Ad", "Kc", "2h"],
+      "cardsB": ["As", "Ah", "Ad", "Qc", "2h"],
+      "expect": { "cmp": 1 }
+    },
+    {
+      "id": "kicker_flush_second_card",
+      "kind": "compare_five",
+      "cardsA": ["As", "Ks", "Qs", "9s", "2s"],
+      "cardsB": ["As", "Ks", "Js", "9s", "2s"],
+      "expect": { "cmp": 1 }
+    },
+    {
+      "id": "kicker_quads",
+      "kind": "compare_five",
+      "cardsA": ["As", "Ah", "Ad", "Ac", "Kd"],
+      "cardsB": ["As", "Ah", "Ad", "Ac", "Qd"],
+      "expect": { "cmp": 1 }
+    },
+    {
+      "id": "kicker_full_house_pair_rank",
+      "kind": "compare_five",
+      "cardsA": ["As", "Ah", "Ad", "Kc", "Kd"],
+      "cardsB": ["As", "Ah", "Ad", "Qc", "Qd"],
+      "expect": { "cmp": 1 }
+    },
+    {
+      "id": "tie_identical_five",
+      "kind": "compare_five",
+      "cardsA": ["As", "Kd", "Qc", "Jh", "9s"],
+      "cardsB": ["Ah", "Kc", "Qd", "Js", "9c"],
+      "expect": { "cmp": 0 }
+    },
+    {
+      "id": "category_sf_beats_quads",
+      "kind": "compare_five",
+      "cardsA": ["9h", "Th", "Jh", "Qh", "Kh"],
+      "cardsB": ["As", "Ah", "Ad", "Ac", "Kd"],
+      "expect": { "cmp": 1 }
+    },
+    {
+      "id": "category_boat_beats_flush",
+      "kind": "compare_five",
+      "cardsA": ["As", "Ah", "Ad", "Kc", "Kd"],
+      "cardsB": ["9h", "8h", "Ah", "Kh", "2h"],
+      "expect": { "cmp": 1 }
+    },
+    {
+      "id": "straight_six_beats_wheel",
+      "kind": "compare_five",
+      "cardsA": ["2c", "3d", "4h", "5s", "6c"],
+      "cardsB": ["As", "2d", "3h", "4c", "5d"],
+      "expect": { "cmp": 1 }
+    },
+    {
+      "id": "holdem_aa_beats_kk",
+      "kind": "holdem_compare",
+      "holeA": ["As", "Ah"],
+      "holeB": ["Kc", "Kd"],
+      "board": ["2c", "3d", "4h", "5s", "7c"],
+      "expect": {
+        "cmp": 1,
+        "categoryA": "straight",
+        "categoryB": "pair"
+      }
+    },
+    {
+      "id": "holdem_aa_pair_beats_kk_dry",
+      "kind": "holdem_compare",
+      "holeA": ["As", "Ah"],
+      "holeB": ["Kc", "Kd"],
+      "board": ["2c", "3d", "8h", "9s", "7c"],
+      "expect": {
+        "cmp": 1,
+        "categoryA": "pair",
+        "categoryB": "pair"
+      }
+    },
+    {
+      "id": "holdem_tie_same_strength",
+      "kind": "holdem_compare",
+      "holeA": ["As", "Kh"],
+      "holeB": ["Ad", "Kc"],
+      "board": ["2c", "3d", "4h", "5s", "7c"],
+      "expect": {
+        "cmp": 0,
+        "categoryA": "straight",
+        "categoryB": "straight"
+      }
+    },
+    {
+      "id": "holdem_tie_high_card_dry",
+      "kind": "holdem_compare",
+      "holeA": ["As", "Kh"],
+      "holeB": ["Ad", "Kc"],
+      "board": ["2c", "3d", "8h", "9s", "7c"],
+      "expect": {
+        "cmp": 0,
+        "categoryA": "high_card",
+        "categoryB": "high_card"
+      }
+    },
+    {
+      "id": "holdem_board_plays_chop",
+      "kind": "holdem_compare",
+      "holeA": ["2h", "3c"],
+      "holeB": ["2d", "3s"],
+      "board": ["As", "Kd", "Qc", "Jh", "9s"],
+      "expect": {
+        "cmp": 0,
+        "categoryA": "high_card",
+        "categoryB": "high_card"
+      }
+    },
+    {
+      "id": "holdem_pair_kicker_ak_vs_aq",
+      "kind": "holdem_compare",
+      "holeA": ["As", "Kd"],
+      "holeB": ["Ac", "Qd"],
+      "board": ["Ah", "2c", "3d", "7h", "9s"],
+      "expect": {
+        "cmp": 1,
+        "categoryA": "pair",
+        "categoryB": "pair"
+      }
+    },
+    {
+      "id": "holdem_royal_flush",
+      "kind": "holdem_best",
+      "hole": ["As", "Ks"],
+      "board": ["Qs", "Js", "Ts", "2c", "3d"],
+      "expect": {
+        "category": "straight_flush",
+        "score": [8, 14],
+        "label": "Royal flush"
+      }
+    },
+    {
+      "id": "holdem_best_of_three_pair",
+      "kind": "holdem_best",
+      "hole": ["2h", "3s"],
+      "board": ["Ac", "Ad", "Kc", "Kd", "Qh"],
+      "expect": {
+        "category": "two_pair",
+        "score": [2, 14, 13, 12],
+        "label": "Two pair"
+      }
+    },
+    {
+      "id": "holdem_full_house_from_seven",
+      "kind": "holdem_best",
+      "hole": ["As", "Ah"],
+      "board": ["Ad", "Kc", "Kd", "2c", "3d"],
+      "expect": {
+        "category": "full_house",
+        "score": [6, 14, 13],
+        "label": "Full house"
+      }
+    },
+    {
+      "id": "holdem_flush_over_board_pair",
+      "kind": "holdem_best",
+      "hole": ["9h", "8h"],
+      "board": ["Ah", "Kh", "2h", "2d", "3c"],
+      "expect": {
+        "category": "flush",
+        "score": [5, 14, 13, 9, 8, 2],
+        "label": "Flush"
+      }
+    },
+    {
+      "id": "holdem_use_one_hole_for_straight",
+      "kind": "holdem_best",
+      "hole": ["6c", "2d"],
+      "board": ["3d", "4h", "5s", "9c", "Kd"],
+      "expect": {
+        "category": "straight",
+        "score": [4, 6],
+        "label": "Straight"
+      }
+    },
+    {
+      "id": "holdem_sf_beats_quads_shared_board",
+      "kind": "holdem_compare",
+      "holeA": ["9h", "Th"],
+      "holeB": ["As", "Ad"],
+      "board": ["Jh", "Qh", "Kh", "Ac", "Ah"],
+      "expect": {
+        "cmp": 1,
+        "categoryA": "straight_flush",
+        "categoryB": "four_kind"
+      }
+    },
+    {
+      "id": "holdem_two_pair_kicker_decides",
+      "kind": "holdem_compare",
+      "holeA": ["As", "Qd"],
+      "holeB": ["Ah", "Jd"],
+      "board": ["Ac", "Kc", "Kd", "2h", "3s"],
+      "expect": {
+        "cmp": 1,
+        "categoryA": "two_pair",
+        "categoryB": "two_pair"
+      }
+    }
+  ]
+}

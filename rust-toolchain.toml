@@ -1,0 +1,6 @@
+# Pinned for CI and local reproducibility (Phase 0 / WP-000).
+# Rust is not required for the V2 ArenaAccount E2E path yet; pin early for Wave 3+.
+[toolchain]
+channel = "1.85.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
