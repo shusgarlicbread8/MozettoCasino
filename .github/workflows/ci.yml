@@ -7,6 +7,16 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  schedule:
+    # Nightly large engine-diff (WP-109) — 06:15 UTC
+    - cron: "15 6 * * *"
+  workflow_dispatch:
+    inputs:
+      run_nightly:
+        description: "Run WP-109 nightly large engine-diff job"
+        required: false
+        default: "false"
+        type: boolean
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -122,6 +132,78 @@ jobs:
       - name: Solidity protocol vectors
         working-directory: contracts
         run: forge test --match-contract ProtocolVectors -vv
+
+  engine-diff:
+    name: Engine diff + PokerKit (WP-109)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install pnpm deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.85.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates/poker-core
+            crates/poker-eval
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PokerKit oracle (required)
+        run: |
+          python3 -m venv tools/pokerkit-oracle/.venv
+          tools/pokerkit-oracle/.venv/bin/pip install -r tools/pokerkit-oracle/requirements.txt
+
+      - name: Engine diff (fixtures + random + required PokerKit)
+        run: pnpm test:engine-diff:full
+
+  engine-diff-nightly:
+    name: Engine diff nightly (large set)
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_nightly == true)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates/poker-core
+            crates/poker-eval
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PokerKit oracle (required)
+        run: |
+          python3 -m venv tools/pokerkit-oracle/.venv
+          tools/pokerkit-oracle/.venv/bin/pip install -r tools/pokerkit-oracle/requirements.txt
+      - name: Nightly large differential set
+        run: pnpm test:engine-diff:nightly
 
   migrations:
     name: Database migrations dry-run

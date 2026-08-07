@@ -24,14 +24,14 @@ mkdirSync(outDir, { recursive: true });
 const fixtures = FREEZE_FIXTURE_DEFS.map((fx) => fillFixtureHashes(fx));
 
 const manifest = {
-  workPacket: "WP-030",
+  workPacket: "WP-109",
   generatedAt: "frozen",
   stateDomain: TS_ENGINE_STATE_DOMAIN,
   tsEngineBuildId: TS_ENGINE_BUILD_ID,
   tsEngineBuildHash: tsEngineBuildHash(),
   protocolV3EngineHashPlaceholder: protocolV3EngineHashPlaceholder(),
   note:
-    "tsEngineBuildHash identifies this TS freeze. Protocol V3 engineHash remains the draft placeholder until Rust/TS promotion.",
+    "WP-109: uncalled-bet return + sit-out/timeout. GameTemplate.engineHash → mozetto-nlhe-rust-wp109; Protocol V3 event vectors keep draft placeholder (no /specs mutation).",
   fixtureCount: fixtures.length,
   fixtures: fixtures.map((f) => ({
     id: f.id,
@@ -42,14 +42,15 @@ const manifest = {
   sixMaxCoverageStatus: {
     blindsButtonUtg: "covered (sixmax_14)",
     foldToBb: "covered (sixmax_15)",
+    deepTree: "covered (sixmax_20_deep_raise_fold)",
     sidePotsNested: "covered (multi_11, multi_12)",
     incompleteAllIn: "covered (multi_10)",
     oddChip: "covered (multi_13); pure HU equal-contrib pot always even",
     showdownTies: "covered (hu_07, multi_13)",
-    rakeHooks: "covered (hu_08, hu_09); no no-flop-no-drop / rakeBps yet",
-    uncalledBetReturn: "NOT implemented — foldWin awards full pot including uncalled",
-    sitOutBlindPosts: "NOT covered / limited sitOut support",
-    timeoutFallback: "NOT in engine",
+    rakeHooks: "covered (hu_08, hu_09); Plan 11 noFlopNoDrop + uncalled exclusion",
+    uncalledBetReturn: "implemented (foldWin returns excess street bet)",
+    sitOutBlindPosts: "covered (setSitOut + wp109.test.ts)",
+    timeoutFallback: "covered (timeoutFallbackAction + wp109.test.ts)",
     duplicateCardRejection: "NOT in engine (deck assumed valid)",
   },
 };

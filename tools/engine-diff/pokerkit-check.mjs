@@ -1,19 +1,25 @@
 /**
- * Optional PokerKit oracle probe / scenario check (WP-034).
+ * PokerKit oracle probe / scenario check (WP-034; mandatory under WP-109 CI).
  *
  * PokerKit is a *reference* oracle for curated settlement/hand-eval scenarios in
- * tools/pokerkit-oracle/. It is NOT required for TS↔Rust fixture parity.
+ * tools/pokerkit-oracle/. Pass --require-pokerkit to fail when missing.
  */
 import { spawnSync, execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 function tryImportPokerKit(python) {
-  const r = spawnSync(python, ["-c", "import pokerkit; print(pokerkit.__version__)"], {
-    encoding: "utf8",
-  });
+  // PokerKit 0.7+ may not expose __version__; import success is enough.
+  const r = spawnSync(
+    python,
+    [
+      "-c",
+      "import pokerkit; print(getattr(pokerkit, '__version__', None) or getattr(pokerkit, 'VERSION', 'ok'))",
+    ],
+    { encoding: "utf8" },
+  );
   if (r.status === 0) {
-    return { ok: true, version: (r.stdout || "").trim(), python };
+    return { ok: true, version: (r.stdout || "").trim() || "ok", python };
   }
   return { ok: false, detail: (r.stderr || r.stdout || "").trim() };
 }
@@ -57,7 +63,7 @@ export function checkPokerKit(root, opts = {}) {
     return {
       status: "skipped",
       reason:
-        "PokerKit not installed (optional). Create tools/pokerkit-oracle/.venv and pip install pokerkit — see tools/pokerkit-oracle/README.md",
+        "PokerKit not installed. Create tools/pokerkit-oracle/.venv and pip install -r requirements.txt — see tools/pokerkit-oracle/README.md (WP-109: required in CI)",
     };
   }
 
@@ -126,7 +132,7 @@ export function checkPokerKit(root, opts = {}) {
       reason: "PokerKit live results diverge from tools/pokerkit-oracle/expected.json",
       detail: { version: py.version, divergences },
       knownMozettoPolicyGaps: [
-        "Mozetto fold-win awards full pot (no uncalled-bet return) — may differ from PokerKit chip-pulling",
+        "Mozetto fold-win returns uncalled street bets (WP-109) then awards eligible pot — PokerKit chip-pulling should agree on stacks for curated HU folds",
         "Mozetto rake is bps/cap room rule — PokerKit scenarios in this oracle run with no Mozetto rake",
         "Full fixture replay through PokerKit is out of scope; oracle covers curated settlement/hand-eval only",
       ],
@@ -142,7 +148,7 @@ export function checkPokerKit(root, opts = {}) {
       scenarioCount: live.filter((x) => x.stacks).length,
     },
     knownMozettoPolicyGaps: [
-      "Mozetto fold-win awards full pot (no uncalled-bet return) — may differ from PokerKit chip-pulling",
+      "Mozetto fold-win returns uncalled street bets (WP-109) then awards eligible pot — PokerKit chip-pulling should agree on stacks for curated HU folds",
       "Mozetto rake is bps/cap room rule — PokerKit scenarios in this oracle run with no Mozetto rake",
       "Full fixture replay through PokerKit is out of scope; oracle covers curated settlement/hand-eval only",
     ],

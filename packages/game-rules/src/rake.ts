@@ -14,7 +14,7 @@ export const RAKE_BPS_DENOMINATOR = 10_000 as const;
 export const SEASON1_RAKE_ELIGIBILITY = {
   /** No rake when the hand ends before a flop is dealt (fold-win preflop). */
   noFlopNoDrop: true,
-  /** Uncalled bets must not contribute to eligible pot (engine gap — see Plan 11 deferrals). */
+  /** Uncalled bets must not contribute to eligible pot (returned before rake). */
   excludeUncalledBets: true,
   /** Rake only from settled eligible pots at hand resolution. */
   settledPotsOnly: true,
@@ -24,14 +24,23 @@ export const SEASON1_RAKE_ELIGIBILITY = {
 } as const;
 
 export type ComputeRakeInput = {
-  /** Chips eligible for rake (settled pot pool; ideally after uncalled-bet return). */
+  /** Chips eligible for rake (settled pot pool after uncalled-bet return). */
   eligiblePot: number;
   /** Basis points (10000 = 100%). */
   rakeBps: number;
   /** Absolute chip cap; null/undefined = uncapped. */
   rakeCap?: number | null;
-  /** Non-folded seats with hole cards at resolution. ≤1 ⇒ no rake. */
+  /**
+   * Contending hands at resolution. Showdown uses ≥2.
+   * Postflop fold-win may pass 1 with `endedBeforeFlop: false`.
+   */
   liveHands: number;
+  /**
+   * Plan 11 noFlopNoDrop: when true, rake is always 0.
+   * Default: treat `liveHands ≤ 1` as preflop fold-win (rake 0) unless
+   * `endedBeforeFlop === false` (explicit postflop single-winner).
+   */
+  endedBeforeFlop?: boolean;
 };
 
 /**
@@ -39,8 +48,10 @@ export type ComputeRakeInput = {
  * `rake = min(floor(eligiblePot × rakeBps / 10_000), rakeCap)`.
  */
 export function computeRake(input: ComputeRakeInput): number {
-  const { eligiblePot, rakeBps, rakeCap = null, liveHands } = input;
-  if (liveHands <= 1 || rakeBps <= 0 || eligiblePot <= 0) return 0;
+  const { eligiblePot, rakeBps, rakeCap = null, liveHands, endedBeforeFlop } = input;
+  if (rakeBps <= 0 || eligiblePot <= 0) return 0;
+  if (endedBeforeFlop === true) return 0;
+  if (endedBeforeFlop !== false && liveHands <= 1) return 0;
   let rake = Math.floor((eligiblePot * rakeBps) / RAKE_BPS_DENOMINATOR);
   if (rakeCap != null) rake = Math.min(rake, rakeCap);
   if (rake < 0) return 0;
@@ -64,13 +75,34 @@ export function computeRakeFromPct(input: {
   rakePct: number;
   rakeCap?: number | null;
   liveHands: number;
+  endedBeforeFlop?: boolean;
 }): number {
   return computeRake({
     eligiblePot: input.eligiblePot,
     rakeBps: rakePctToBps(input.rakePct),
     rakeCap: input.rakeCap,
     liveHands: input.liveHands,
+    endedBeforeFlop: input.endedBeforeFlop,
   });
+}
+
+/**
+ * Uncalled portion of the sole survivor's street bet (TDA / Plan 11).
+ * Excess over the next-highest street bet among other seats is returned
+ * before rake and pot award.
+ */
+export function uncalledBetAmount(
+  seats: readonly { seatIndex: number; bet: number; folded: boolean }[],
+  winnerSeatIndex: number,
+): number {
+  const winner = seats.find((s) => s.seatIndex === winnerSeatIndex);
+  if (!winner || winner.bet <= 0) return 0;
+  let maxOther = 0;
+  for (const s of seats) {
+    if (s.seatIndex === winnerSeatIndex) continue;
+    if (s.bet > maxOther) maxOther = s.bet;
+  }
+  return Math.max(0, winner.bet - maxOther);
 }
 
 export type PotLayerAmount = { amount: number };

@@ -44,14 +44,14 @@
         "winners": [
           {
             "seatIndex": 1,
-            "amount": 150
+            "amount": 100
           }
         ],
         "stacks": [
           9950,
           10050
         ],
-        "stateHash": "0x9bc5b91a53df4bbd57dbc4fbb2469a1d6c9b723ecc0c98afc56338a960226b54"
+        "stateHash": "0xac0a7f6dbc3681eed64d62f463c303f400962d92709e713128f934c4c3939718"
       }
     }
   ]

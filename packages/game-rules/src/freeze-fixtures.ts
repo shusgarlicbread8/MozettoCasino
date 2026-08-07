@@ -77,9 +77,8 @@ export const FREEZE_FIXTURE_DEFS: EngineFixture[] = [
           street: "settlement",
           pot: 0,
           rake: 0,
-          // foldWin awards full pot (150) to BB; BB stack was 9900 after posting → 10050.
-          // Frozen: no uncalled-bet return (SB's 50 is the net transfer).
-          winners: [{ seatIndex: 1, amount: 150 }],
+          // WP-109: return uncalled 50 to BB; eligible pot 100 awarded; stacks unchanged vs net transfer.
+          winners: [{ seatIndex: 1, amount: 100 }],
           stacks: [9950, 10050],
         },
       },
@@ -616,9 +615,58 @@ export const FREEZE_FIXTURE_DEFS: EngineFixture[] = [
         expect: {
           street: "settlement",
           rake: 0,
-          winners: [{ seatIndex: 2, amount: 150 }],
-          // BB posted 100 (9900) then wins pot 150 → 10050
+          winners: [{ seatIndex: 2, amount: 100 }],
+          // WP-109: uncalled 50 returned; BB wins eligible 100 → 10050
           stacks: [10000, 9950, 10050, 10000, 10000, 10000],
+        },
+      },
+    ],
+  },
+
+  // ── Six-max deep tree: raise / call / fold to flop then fold-win ───
+  {
+    id: "sixmax_20_deep_raise_fold",
+    description: "6-max: multi-seat preflop tree to flop; aggressor wins uncalled bet return",
+    coverage: ["sixmax", "deep-tree", "uncalled-bet", "fold-win"],
+    format: "sixmax",
+    seatCount: 6,
+    config: SIX_CFG,
+    seats: [
+      { seatIndex: 0, stack: 10_000 },
+      { seatIndex: 1, stack: 10_000 },
+      { seatIndex: 2, stack: 10_000 },
+      { seatIndex: 3, stack: 10_000 },
+      { seatIndex: 4, stack: 10_000 },
+      { seatIndex: 5, stack: 10_000 },
+    ],
+    steps: [
+      { op: "startHand", serverSeed: "wp109-six-deep", handId: "hand-six-deep" },
+      // UTG 3 fold, HJ 4 fold, CO 5 raise to 300, BTN 0 fold, SB 1 fold, BB 2 call
+      { op: "action", action: "fold" },
+      { op: "action", action: "fold" },
+      { op: "action", action: "raise", amount: 300 },
+      { op: "action", action: "fold" },
+      { op: "action", action: "fold" },
+      { op: "action", action: "call", amount: 200 },
+      {
+        op: "expect",
+        expect: {
+          street: "flop",
+          pot: 650,
+          actingIndex: 2,
+        },
+      },
+      // BB checks, CO bets 400, BB folds → fold-win with uncalled return
+      { op: "action", action: "check" },
+      { op: "action", action: "bet", amount: 400 },
+      { op: "action", action: "fold" },
+      {
+        op: "expect",
+        expect: {
+          street: "settlement",
+          pot: 0,
+          rake: 0,
+          winners: [{ seatIndex: 5, amount: 650 }],
         },
       },
     ],

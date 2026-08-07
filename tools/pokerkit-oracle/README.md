@@ -1,16 +1,24 @@
-# PokerKit oracle (dev tooling)
+# PokerKit oracle (mandatory under WP-109)
 
-PokerKit is used as a **reference oracle** to derive expected settlement
-outcomes for curated Hold'em scenarios. Those expected values are baked into
-TypeScript tests under `packages/game-rules` — CI does **not** need Python.
+PokerKit is the **third differential oracle** for curated Hold'em settlement /
+hand-eval scenarios. TypeScript and Rust remain the production engines;
+PokerKit validates independent arithmetic.
 
-**WP-034:** Optional third oracle via `pnpm test:engine-diff:full` (or
-`node tools/engine-diff/run.mjs --pokerkit`). If this venv / `pokerkit` is
-missing, the differential harness skips PokerKit cleanly; TS↔Rust fixture
-parity still runs. See `docs/WP-034_DIFFERENTIAL_HARNESS.md`.
+**WP-109:** CI fails if PokerKit is missing when the engine-diff job runs
+(`--require-pokerkit`). Local quick TS↔Rust fixture parity still works without
+Python via `pnpm test:engine-diff`.
 
 ```bash
+cd tools/pokerkit-oracle
 python3 -m venv .venv
-.venv/bin/pip install pokerkit
+.venv/bin/pip install -r requirements.txt
 .venv/bin/python run_scenarios.py
+
+# From repo root — required path (fails if PokerKit missing):
+pnpm test:engine-diff:full
+
+# Nightly large generated set (thousands of states + required PokerKit):
+pnpm test:engine-diff:nightly
 ```
+
+See `docs/WP-109_POKER_RELEASE_HARDENING.md` and `docs/WP-034_DIFFERENTIAL_HARNESS.md`.

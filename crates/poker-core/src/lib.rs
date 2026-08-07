@@ -17,7 +17,8 @@ mod types;
 pub use deck::{commit_seed, shuffle_deck};
 pub use engine::{
     apply_action, build_pots, clear_seat, continue_runout, create_table, fold_seat, fold_win,
-    get_legal_actions, is_all_in_runout, seat_player, settle_showdown, start_hand,
+    get_legal_actions, is_all_in_runout, seat_player, set_sit_out, settle_showdown, start_hand,
+    timeout_fallback_action, uncalled_bet_amount,
 };
 pub use events::EngineEvent;
 pub use fixture::{
@@ -33,5 +34,6 @@ pub use types::{
     ActionKind, EngineError, HoldemState, SeatState, Street, TableConfig, Transition, WinnerPay,
 };
 
-/// Engine build id for future Protocol promotion (not the TS freeze oracle id).
-pub const RUST_ENGINE_BUILD_ID: &str = "mozetto-nlhe-rust-sixmax-wp032";
+/// Engine build id — WP-109 release hardening; GameTemplate.engineHash candidate.
+/// Protocol V3 event vectors still use the draft placeholder until a protocol freeze packet.
+pub const RUST_ENGINE_BUILD_ID: &str = "mozetto-nlhe-rust-wp109";

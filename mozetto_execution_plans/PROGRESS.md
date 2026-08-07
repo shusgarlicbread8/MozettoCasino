@@ -2,7 +2,7 @@
 
 **Authority:** Follows `00_READ_ME_FIRST.md`, `01_MASTER_EXECUTION_ROADMAP.md`, `16_AGENT_WORK_PACKETS.md`, `17_FINAL_DEFINITION_OF_DONE.md`.  
 **Rule:** Protocol V3 specs are **frozen** (WP-010–015). Implementations MUST match `/specs` and fail CI if vectors diverge. Do not invent new encodings.  
-**Last updated:** 2026-08-07 (WP-128 Verify UX DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
+**Last updated:** 2026-08-07 (WP-129 Watch / spectator DONE; WP-128 Verify UX DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
 
 ---
 
@@ -2120,6 +2120,32 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 
 ---
 
+### 2026-08-07 — WP-109 Poker release hardening (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- Uncalled-bet return on fold-win (TS + Rust); rake from eligible pot only; postflop fold-win can rake
+- `setSitOut` / `timeoutFallbackAction` (+ Rust mirrors); tests for sit-out blinds skip + fold-first timeout
+- Deeper 6-max fixture `sixmax_20_deep_raise_fold`; TS build id `mozetto-nlhe-ts-wp109`
+- PokerKit mandatory: `pnpm test:engine-diff:full` (`--require-pokerkit`); CI job installs venv; skip = fail
+- Nightly scaffolding: `pnpm test:engine-diff:nightly` + cron/`workflow_dispatch` (400 streams → thousands of states)
+- GameTemplate.engineHash → `mozetto-nlhe-rust-wp109` (DeployLocal/DeploySepolia); Protocol event draft untouched
+- Docs: `docs/WP-109_POKER_RELEASE_HARDENING.md`; Plan 11 uncalled deferral closed
+
+**Commands / evidence:**
+- `pnpm --filter @mozetto/game-rules test` — **100/100 pass**
+- `cargo test -p poker-core -p poker-eval` — pass
+- `pnpm test:engine-diff:full` — **20/20** fixtures, **25/25** random, PokerKit **ok**
+- Expanded random: **200/200** streams (~1519 snapshots) + PokerKit **ok**
+- `pnpm test:poker-replay` — pass (20 fixtures)
+
+**Out of scope:** `/specs` mutations; Protocol V3 event-vector draft hash rewrite; full PokerKit fixture-language replay.
+
+**Follow-up:** Protocol freeze to align event `engineHash` with Rust WP-109 id; wire table clock to `timeoutFallbackAction`.
+
+---
+
 ## Baseline inventory (post-WP-000)
 
 | Item | Current state |
@@ -2141,7 +2167,8 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 | Rust HU core (WP-031) | `crates/poker-core`, `crates/poker-eval` + `docs/WP-031_RUST_HU_PARITY.md` |
 | Rust six-max core (WP-032) | multi/sixmax fixture replay + `docs/WP-032_RUST_SIXMAX_PARITY.md` |
 | Hand evaluator (WP-033) | `crates/poker-eval/vectors/hand_eval_v1.json` + `docs/WP-033_HAND_EVALUATOR.md` |
-| Differential harness (WP-034) | `tools/engine-diff/` + `docs/WP-034_DIFFERENTIAL_HARNESS.md` (`pnpm test:engine-diff`) |
+| Differential harness (WP-034 / WP-109) | `tools/engine-diff/` + PokerKit-required CI + `docs/WP-034_DIFFERENTIAL_HARNESS.md` / `docs/WP-109_POKER_RELEASE_HARDENING.md` |
+| Poker release hardening (WP-109) | uncalled-bet return + sit-out/timeout + GameTemplate `mozetto-nlhe-rust-wp109` + nightly large set |
 | WASM verifier (WP-035) | `crates/poker-wasm` + `crates/poker-replay` + `docs/WP-035_WASM_VERIFIER.md` |
 | Ranked matchmaker (WP-040) | `packages/database/src/ranked-matchmaker.ts` + `docs/WP-040_RANKED_RANDOM_MATCHMAKER.md` |
 | Session seal coordinator (WP-041) | `packages/session-seal` + `docs/WP-041_SESSION_SEAL_COORDINATOR.md` |

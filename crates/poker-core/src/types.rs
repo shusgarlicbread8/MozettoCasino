@@ -70,9 +70,27 @@ pub struct TableConfig {
 
 impl TableConfig {
     /// Plan 11 integer rake: `min(floor(pot * rake_bps / 10000), rake_cap)`.
-    /// `live_hands <= 1` ⇒ 0 (fold-win / noFlopNoDrop path).
+    ///
+    /// - `ended_before_flop == Some(true)` ⇒ 0 (noFlopNoDrop)
+    /// - `ended_before_flop == None` and `live_hands <= 1` ⇒ 0 (legacy fold-win)
+    /// - `ended_before_flop == Some(false)` allows rake with a single live hand (postflop fold-win)
     pub fn compute_rake(&self, pot: Chips, live_hands: usize) -> Chips {
-        if live_hands <= 1 || self.rake_bps == 0 || pot <= 0 {
+        self.compute_rake_ex(pot, live_hands, None)
+    }
+
+    pub fn compute_rake_ex(
+        &self,
+        pot: Chips,
+        live_hands: usize,
+        ended_before_flop: Option<bool>,
+    ) -> Chips {
+        if self.rake_bps == 0 || pot <= 0 {
+            return 0;
+        }
+        if ended_before_flop == Some(true) {
+            return 0;
+        }
+        if ended_before_flop != Some(false) && live_hands <= 1 {
             return 0;
         }
         let mut rake = pot.saturating_mul(self.rake_bps as i64) / 10_000;

@@ -69,7 +69,7 @@ fn fold_win_stacks_and_winners() {
     assert_eq!(s.rake, 0);
     assert_eq!(s.winners.len(), 1);
     assert_eq!(s.winners[0].seat_index, 1);
-    assert_eq!(s.winners[0].amount, 150);
+    assert_eq!(s.winners[0].amount, 100); // WP-109: eligible pot after uncalled return
     let stacks: Vec<_> = {
         let mut p: Vec<_> = s.seats.iter().map(|x| (x.seat_index, x.stack)).collect();
         p.sort_by_key(|(i, _)| *i);

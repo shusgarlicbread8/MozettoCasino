@@ -9,6 +9,7 @@ import {
   rakeCapFromBb,
   rakePctToBps,
   SEASON1_RAKE_ELIGIBILITY,
+  uncalledBetAmount,
 } from "./rake.js";
 import {
   applyAction,
@@ -114,7 +115,7 @@ describe("Season 1 eligibility constants", () => {
 });
 
 describe("engine fold-win emits zero rake (noFlopNoDrop)", () => {
-  it("SB fold to BB → rake 0 and stack conservation", () => {
+  it("SB fold to BB → rake 0, uncalled return, stack conservation", () => {
     let state = createTable(
       { tableId: "t", smallBlind: 50, bigBlind: 100, rakePct: 0.05, rakeCap: null },
       2,
@@ -128,11 +129,62 @@ describe("engine fold-win emits zero rake (noFlopNoDrop)", () => {
     next = acted.state;
     assert.equal(next.street, "settlement");
     assert.equal(next.rake, 0);
+    assert.equal(next.winners[0]?.amount, 100); // eligible pot after uncalled 50
     const after = next.seats.map((s) => s.stack);
     assert.equal(
       checkHandConservation(before, after, next.rake),
       true,
       `before=${before} after=${after} rake=${next.rake}`,
+    );
+  });
+});
+
+describe("uncalledBetAmount", () => {
+  it("returns excess of winner street bet over next-highest", () => {
+    assert.equal(
+      uncalledBetAmount(
+        [
+          { seatIndex: 0, bet: 50, folded: true },
+          { seatIndex: 1, bet: 100, folded: false },
+        ],
+        1,
+      ),
+      50,
+    );
+    assert.equal(
+      uncalledBetAmount(
+        [
+          { seatIndex: 0, bet: 300, folded: false },
+          { seatIndex: 1, bet: 300, folded: true },
+        ],
+        0,
+      ),
+      0,
+    );
+  });
+});
+
+describe("postflop fold-win rake excludes uncalled", () => {
+  it("rakes eligible pot only when flop was dealt", () => {
+    assert.equal(
+      computeRake({
+        eligiblePot: 650,
+        rakeBps: 500,
+        rakeCap: null,
+        liveHands: 1,
+        endedBeforeFlop: false,
+      }),
+      32,
+    );
+    assert.equal(
+      computeRake({
+        eligiblePot: 650,
+        rakeBps: 500,
+        rakeCap: null,
+        liveHands: 1,
+        endedBeforeFlop: true,
+      }),
+      0,
     );
   });
 });

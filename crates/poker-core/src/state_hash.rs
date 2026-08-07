@@ -8,7 +8,7 @@ use poker_eval::card_key;
 use std::fmt::Write as _;
 
 pub const TS_ENGINE_STATE_DOMAIN: &str = "MOZETTO_TS_ENGINE_STATE_V1";
-pub const TS_ENGINE_BUILD_ID: &str = "mozetto-nlhe-ts-freeze-wp030";
+pub const TS_ENGINE_BUILD_ID: &str = "mozetto-nlhe-ts-wp109";
 
 /// Format rake_bps as the TS JSON number for `rakePct` (e.g. 500 → `0.05`, 0 → `0`).
 pub fn format_rake_pct(bps: u32) -> String {

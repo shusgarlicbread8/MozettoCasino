@@ -1,9 +1,11 @@
 {
-  "id": "sixmax_15_fold_to_bb",
-  "description": "6-max: everyone folds to BB; BB wins blinds without showdown",
+  "id": "sixmax_20_deep_raise_fold",
+  "description": "6-max: multi-seat preflop tree to flop; aggressor wins uncalled bet return",
   "coverage": [
-    "fold-win",
-    "sixmax"
+    "sixmax",
+    "deep-tree",
+    "uncalled-bet",
+    "fold-win"
   ],
   "format": "sixmax",
   "seatCount": 6,
@@ -43,8 +45,8 @@
   "steps": [
     {
       "op": "startHand",
-      "serverSeed": "wp030-six-foldbb",
-      "handId": "hand-six-foldbb"
+      "serverSeed": "wp109-six-deep",
+      "handId": "hand-six-deep"
     },
     {
       "op": "action",
@@ -56,11 +58,40 @@
     },
     {
       "op": "action",
+      "action": "raise",
+      "amount": 300
+    },
+    {
+      "op": "action",
       "action": "fold"
     },
     {
       "op": "action",
       "action": "fold"
+    },
+    {
+      "op": "action",
+      "action": "call",
+      "amount": 200
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "street": "flop",
+        "pot": 650,
+        "actingIndex": 2,
+        "stateHash": "0x320245f84a12b27d92e40a5dd248f7261e58d613780b068bb929c00dba0562d2",
+        "legalActionsHash": "0x1ac6d89f4cba58b9804579bf7bc0d1f85a4720753cca49a12482d56a447054ca"
+      }
+    },
+    {
+      "op": "action",
+      "action": "check"
+    },
+    {
+      "op": "action",
+      "action": "bet",
+      "amount": 400
     },
     {
       "op": "action",
@@ -70,22 +101,15 @@
       "op": "expect",
       "expect": {
         "street": "settlement",
+        "pot": 0,
         "rake": 0,
         "winners": [
           {
-            "seatIndex": 2,
-            "amount": 100
+            "seatIndex": 5,
+            "amount": 650
           }
         ],
-        "stacks": [
-          10000,
-          9950,
-          10050,
-          10000,
-          10000,
-          10000
-        ],
-        "stateHash": "0xb17954adc9055c60bc0aa5d9fc9d8023867db8e24b367d30f58e573e02944289"
+        "stateHash": "0x07fb58345edf7dec2a7245592a09c62d325eb1a5cd0aab70b64b79c66845b8c2"
       }
     }
   ]

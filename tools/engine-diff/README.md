@@ -1,14 +1,21 @@
-# Engine differential harness (WP-034)
+# Engine differential harness (WP-034 / WP-109)
 
-Compare TypeScript (`packages/game-rules`) vs Rust (`crates/poker-core`) NLHE
-outcomes and state hashes. PokerKit is an **optional** third oracle.
-
-See **`docs/WP-034_DIFFERENTIAL_HARNESS.md`**.
+Compares TypeScript NLHE (`packages/game-rules`) vs Rust `poker-core`
+outcomes and state hashes. PokerKit is a **mandatory** third oracle in CI
+(`--require-pokerkit`).
 
 ```bash
-# From repo root
+# Fixtures only (TS ↔ Rust)
 pnpm test:engine-diff
 
-# + random legal streams + PokerKit (if installed)
-node tools/engine-diff/run.mjs --random --pokerkit
+# + random streams (default 25)
+pnpm test:engine-diff:random
+
+# + PokerKit required (CI path)
+pnpm test:engine-diff:full
+
+# Nightly: ~400 streams × up to 60 actions → thousands of states + PokerKit
+pnpm test:engine-diff:nightly
 ```
+
+Install PokerKit: see `tools/pokerkit-oracle/README.md`.

@@ -63,7 +63,7 @@
             "maxAmount": 9900
           }
         ],
-        "stateHash": "0x3b36df8755e3f291fbdf47c2adac3c7ef6d18c792302399cda6874f91a68c309",
+        "stateHash": "0xd1880267d99c5337f7bece7ec9401b53a5aec1390051aa1b0477f9e3cd3d043b",
         "legalActionsHash": "0xa29e68f3e2e9b11ef1035f35ea9764e6d3543a677bc7877b0253ca804d98b6ee"
       }
     },
@@ -78,7 +78,7 @@
         "street": "flop",
         "pot": 600,
         "currentBet": 0,
-        "stateHash": "0xfd396a8e10df22b83dfbab3877aacbb01175d9c2e096a020a149439c5a628fdd",
+        "stateHash": "0xfe336f543b46789eca2cddb2530e5340c143847d4c4e75340fa519d00aca9e4d",
         "legalActionsHash": "0x1ac6d89f4cba58b9804579bf7bc0d1f85a4720753cca49a12482d56a447054ca"
       }
     }

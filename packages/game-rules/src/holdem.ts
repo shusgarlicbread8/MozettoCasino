@@ -1,7 +1,7 @@
 import type { Card, PokerAction } from "@mozetto/shared-types";
 import { commitSeed, shuffleDeck } from "./cards.js";
 import { bestHand, compareScores } from "./hand-rank.js";
-import { allocateSidePotRake, computeRakeFromPct } from "./rake.js";
+import { allocateSidePotRake, computeRakeFromPct, uncalledBetAmount } from "./rake.js";
 
 export type SeatState = {
   seatIndex: number;
@@ -189,6 +189,40 @@ export function foldSeat(state: HoldemState, seatIndex: number): HoldemState {
       s.seatIndex === seatIndex ? { ...s, folded: true, hole: undefined, allIn: false } : s,
     ),
   };
+}
+
+/**
+ * Mark a seat sitting out (or returning). Mid-hand sit-out also folds;
+ * between hands, `startHand` skips sit-out seats for blinds/dealing.
+ */
+export function setSitOut(state: HoldemState, seatIndex: number, sitOut: boolean): HoldemState {
+  return {
+    ...state,
+    seats: state.seats.map((s) => {
+      if (s.seatIndex !== seatIndex) return s;
+      if (sitOut) {
+        const midHand = Boolean(state.handId) && state.street !== "waiting" && state.street !== "settlement";
+        return {
+          ...s,
+          sitOut: true,
+          folded: midHand ? true : s.folded,
+          hole: midHand ? undefined : s.hole,
+          allIn: midHand ? false : s.allIn,
+        };
+      }
+      return { ...s, sitOut: false };
+    }),
+  };
+}
+
+/**
+ * Fold-first timeout policy for clock expiry / disconnect (Plan 06).
+ * Prefer fold, else check, else first legal action.
+ */
+export function timeoutFallbackAction(state: HoldemState): LegalAction | null {
+  const legal = getLegalActions(state);
+  if (!legal.length) return null;
+  return legal.find((l) => l.action === "fold") ?? legal.find((l) => l.action === "check") ?? legal[0]!;
 }
 
 export function startHand(state: HoldemState, serverSeed: string, handId: string): { state: HoldemState; events: EngineEvent[] } {
@@ -444,15 +478,33 @@ export function foldWin(state: HoldemState): { state: HoldemState; events: Engin
       events: [],
     };
   }
-  const seats = state.seats.map((s) =>
-    s.seatIndex === winner.seatIndex ? { ...s, stack: s.stack + state.pot, bet: 0 } : { ...s, bet: 0 },
-  );
-  const pays = [{ seatIndex: winner.seatIndex, amount: state.pot, label: "Won without showdown" }];
+
+  // Plan 11 / TDA: return uncalled portion before rake + pot award.
+  const uncalled = uncalledBetAmount(state.seats, winner.seatIndex);
+  const eligiblePot = Math.max(0, state.pot - uncalled);
+  const endedBeforeFlop = state.board.length === 0;
+  // Postflop fold-win: rake from eligible pot (uncalled excluded). Preflop: noFlopNoDrop.
+  const rake = computeRakeFromPct({
+    eligiblePot,
+    rakePct: state.config.rakePct,
+    rakeCap: state.config.rakeCap,
+    liveHands: 1,
+    endedBeforeFlop,
+  });
+  const award = Math.max(0, eligiblePot - rake);
+
+  const seats = state.seats.map((s) => {
+    if (s.seatIndex === winner.seatIndex) {
+      return { ...s, stack: s.stack + uncalled + award, bet: 0 };
+    }
+    return { ...s, bet: 0 };
+  });
+  const pays = [{ seatIndex: winner.seatIndex, amount: award, label: "Won without showdown" }];
   const next: HoldemState = {
     ...state,
     seats,
     pot: 0,
-    rake: 0,
+    rake,
     winners: pays,
     street: "settlement",
     actingIndex: null,
@@ -460,7 +512,7 @@ export function foldWin(state: HoldemState): { state: HoldemState; events: Engin
   return {
     state: next,
     events: [
-      { type: "HAND_SETTLED", winners: pays, rake: 0, seedReveal: state.serverSeed! },
+      { type: "HAND_SETTLED", winners: pays, rake, seedReveal: state.serverSeed! },
       { type: "STACKS_UPDATED", stacks: seats.map((s) => ({ seatIndex: s.seatIndex, stack: s.stack })) },
     ],
   };

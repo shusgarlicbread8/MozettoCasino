@@ -43,7 +43,7 @@
         "actingIndex": 1,
         "pot": 200,
         "currentBet": 100,
-        "stateHash": "0x2aaaa93a5b266a06e6f328fcfc83b1de57c711d21273b8aacc3b07c1ce7862c4",
+        "stateHash": "0xf1b2f29a242751de44c158cd39016179f40ecc10e8ffc0e9abaa2a0d491262e3",
         "legalActionsHash": "0x506895d0b5d7604270a232cc8e43c5e4ec4ce9d429ecce2db07e432d286423ca"
       }
     },
@@ -58,7 +58,7 @@
         "actingIndex": 1,
         "pot": 200,
         "currentBet": 0,
-        "stateHash": "0x0f539b769b6f96f293219e3fdab83fd749f27aad8d78f1daef7f39e54ae16367",
+        "stateHash": "0xdd2a7e79fd7ee66f973e3bc5c8d55afc0fa7bad912dfc2d7b4c61ea638e5b1af",
         "legalActionsHash": "0x506895d0b5d7604270a232cc8e43c5e4ec4ce9d429ecce2db07e432d286423ca"
       }
     },
@@ -74,7 +74,7 @@
       "op": "expect",
       "expect": {
         "street": "turn",
-        "stateHash": "0xf88ae5d708fe6c9eb6f05be24d36d34e8364ed965d1422d4ad1affae7b23a21b",
+        "stateHash": "0xcbbc9cc606dea21ec410bc4f6e41e82cbfcec3d99cd3eea1f3937aa8ca1e65f1",
         "legalActionsHash": "0x506895d0b5d7604270a232cc8e43c5e4ec4ce9d429ecce2db07e432d286423ca"
       }
     },
@@ -90,7 +90,7 @@
       "op": "expect",
       "expect": {
         "street": "river",
-        "stateHash": "0xeb811b9108ccab188195fc32978f6bc8277cf997f7cf2de09a19bf29a47bce6e",
+        "stateHash": "0x02908fc0605074af7f3a594cb252e9a6b7fade783c60323145703ced5967b597",
         "legalActionsHash": "0x506895d0b5d7604270a232cc8e43c5e4ec4ce9d429ecce2db07e432d286423ca"
       }
     },
@@ -107,7 +107,7 @@
       "expect": {
         "street": "settlement",
         "pot": 0,
-        "stateHash": "0xe35d06e421994880b1ccd8c924a63475b5a65ee8883f178a9193b6705ce122fc"
+        "stateHash": "0x20daf9bc2a0aeea7606a7cd2b3ddd2c66ffd8205621cc3dbb35def923d980c12"
       }
     }
   ]

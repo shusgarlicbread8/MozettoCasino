@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /**
- * WP-034 differential oracle harness orchestrator.
+ * WP-034 / WP-109 differential oracle harness orchestrator.
  *
  * Default: TS ↔ Rust golden fixture parity.
  * Optional: --random --seed N --count N
- * Optional: --pokerkit (skipped cleanly if Python/PokerKit missing)
+ * PokerKit: pass --pokerkit (WP-109: --require-pokerkit fails CI if missing/skipped)
  *
- * Exit 0 iff TS↔Rust has zero mismatches (PokerKit skip is not a failure).
+ * Exit 0 iff TS↔Rust has zero mismatches and PokerKit is not fail
+ * (and not skipped when --require-pokerkit).
  */
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
@@ -49,6 +50,8 @@ function parseArgs(argv) {
     count: 25,
     maxActions: 40,
     pokerkit: false,
+    requirePokerkit: false,
+    nightly: false,
     fixturesDir: FIXTURES,
     writeReport: true,
   };
@@ -59,17 +62,30 @@ function parseArgs(argv) {
     else if (a === "--count") out.count = Number(argv[++i]);
     else if (a === "--max-actions") out.maxActions = Number(argv[++i]);
     else if (a === "--pokerkit") out.pokerkit = true;
-    else if (a === "--fixtures") out.fixturesDir = resolve(argv[++i]);
+    else if (a === "--require-pokerkit") {
+      out.pokerkit = true;
+      out.requirePokerkit = true;
+    } else if (a === "--nightly") {
+      // Practical nightly: hundreds of streams → thousands of state snapshots.
+      out.random = true;
+      out.pokerkit = true;
+      out.requirePokerkit = true;
+      out.nightly = true;
+      out.count = Math.max(out.count, 400);
+      out.maxActions = Math.max(out.maxActions, 60);
+    } else if (a === "--fixtures") out.fixturesDir = resolve(argv[++i]);
     else if (a === "--no-write") out.writeReport = false;
     else if (a === "--help" || a === "-h") {
       console.log(`Usage: node tools/engine-diff/run.mjs [options]
-  --fixtures DIR     WP-030 fixtures (default: packages/game-rules/fixtures)
-  --random           Also compare generated legal action streams
-  --seed N           Random seed (default 42)
-  --count N          Random stream count (default 25)
-  --max-actions N    Cap per stream (default 40)
-  --pokerkit         Attempt PokerKit oracle self-check (optional)
-  --no-write         Do not write tools/engine-diff/out/*.json`);
+  --fixtures DIR       WP-030/109 fixtures (default: packages/game-rules/fixtures)
+  --random             Also compare generated legal action streams
+  --seed N             Random seed (default 42)
+  --count N            Random stream count (default 25; nightly default 400)
+  --max-actions N      Cap per stream (default 40; nightly default 60)
+  --pokerkit           Run PokerKit oracle scenarios
+  --require-pokerkit   Fail if PokerKit missing/skipped (WP-109 CI)
+  --nightly            Large random set + required PokerKit (thousands of states)
+  --no-write           Do not write tools/engine-diff/out/*.json`);
       process.exit(0);
     }
   }
@@ -131,7 +147,7 @@ function dumpRustStream(streamPath) {
 }
 
 function generateStreams(opts) {
-  const outPath = join(tmpdir(), `mozetto-wp034-streams-${opts.seed}.json`);
+  const outPath = join(tmpdir(), `mozetto-wp109-streams-${opts.seed}.json`);
   const r = runTsx([
     DUMP_TS,
     "generate-streams",
@@ -151,15 +167,20 @@ function generateStreams(opts) {
   return outPath;
 }
 
+function countSnapshots(bundle) {
+  if (!bundle?.fixtures) return 0;
+  return bundle.fixtures.reduce((n, f) => n + (f.snapshots?.length ?? 0), 0);
+}
+
 function main() {
   const opts = parseArgs(process.argv.slice(2));
   mkdirSync(OUT_DIR, { recursive: true });
 
-  console.log("WP-034 engine-diff: dumping TS fixtures…");
+  console.log("WP-109 engine-diff: dumping TS fixtures…");
   const tsFixtures = dumpTsFixtures(opts.fixturesDir);
   console.log(`  TS fixtures: ${tsFixtures.fixtureCount}`);
 
-  console.log("WP-034 engine-diff: dumping Rust fixtures…");
+  console.log("WP-109 engine-diff: dumping Rust fixtures…");
   const rustFixtures = dumpRustFixtures(opts.fixturesDir);
   console.log(`  Rust fixtures: ${rustFixtures.fixtureCount}`);
 
@@ -170,27 +191,29 @@ function main() {
   );
 
   let randomCmp = null;
+  let snapshotCount = countSnapshots(tsFixtures);
   if (opts.random) {
     console.log(
-      `WP-034 engine-diff: generating ${opts.count} random streams (seed=${opts.seed})…`,
+      `WP-109 engine-diff: generating ${opts.count} random streams (seed=${opts.seed}, maxActions=${opts.maxActions})…`,
     );
     const streamPath = generateStreams(opts);
     const tsRand = dumpTsStream(streamPath);
     const rustRand = dumpRustStream(streamPath);
     randomCmp = compareBundles(tsRand, rustRand, { mode: "random" });
+    snapshotCount += countSnapshots(tsRand);
     console.log(
       `  Random parity: ${randomCmp.report.summary.matched}/${randomCmp.report.summary.fixtureCount} matched` +
         (randomCmp.ok ? " ✓" : ` — ${randomCmp.report.summary.mismatchCount} mismatches`),
     );
+    console.log(`  State snapshots compared (fixtures+random): ${snapshotCount}`);
   }
 
-  let pokerkit = { status: "skipped", reason: "not requested (pass --pokerkit)" };
+  let pokerkit = { status: "skipped", reason: "not requested (pass --pokerkit / --require-pokerkit)" };
   if (opts.pokerkit) {
-    console.log("WP-034 engine-diff: PokerKit check…");
+    console.log("WP-109 engine-diff: PokerKit check (mandatory when --require-pokerkit)…");
     pokerkit = checkPokerKit(ROOT);
     console.log(`  PokerKit: ${pokerkit.status}${pokerkit.reason ? ` — ${pokerkit.reason}` : ""}`);
   } else {
-    // Always probe availability for the report (non-fatal).
     const probe = checkPokerKit(ROOT, { dry: true });
     pokerkit = {
       status: probe.status === "ok" ? "available_not_run" : probe.status,
@@ -202,18 +225,25 @@ function main() {
     };
   }
 
+  const pokerkitBlocking =
+    pokerkit.status === "fail" ||
+    (opts.requirePokerkit && pokerkit.status !== "ok");
+
   const overallOk =
-    fixtureCmp.ok && (randomCmp == null || randomCmp.ok) && pokerkit.status !== "fail";
+    fixtureCmp.ok && (randomCmp == null || randomCmp.ok) && !pokerkitBlocking;
 
   const report = {
-    workPacket: "WP-034",
+    workPacket: "WP-109",
     generatedAt: new Date().toISOString(),
     ok: overallOk,
     tsRustFixtures: fixtureCmp.report,
     tsRustRandom: randomCmp ? randomCmp.report : null,
+    snapshotCount,
+    nightly: opts.nightly,
     pokerkit,
-    wave3GateNote:
-      "Wave 3 exit requires zero unexplained TS↔Rust mismatches. PokerKit is optional and may document known policy divergences.",
+    requirePokerkit: opts.requirePokerkit,
+    gateNote:
+      "WP-109: zero unexplained TS↔Rust mismatches; PokerKit mandatory when --require-pokerkit / --nightly / CI engine-diff job.",
   };
 
   if (opts.writeReport) {
@@ -244,11 +274,21 @@ function main() {
       console.error(JSON.stringify(m));
     }
   }
+  if (pokerkitBlocking) {
+    console.error(
+      `\nPokerKit required but status=${pokerkit.status}: ${pokerkit.reason ?? ""}`,
+    );
+    console.error(
+      "Install: cd tools/pokerkit-oracle && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt",
+    );
+  }
 
   if (!overallOk) {
     process.exit(1);
   }
-  console.log("\nWP-034 engine-diff: PASS (TS ↔ Rust)");
+  console.log(
+    `\nWP-109 engine-diff: PASS (TS ↔ Rust${opts.pokerkit ? " ↔ PokerKit" : ""}; snapshots≈${snapshotCount})`,
+  );
 }
 
 main();

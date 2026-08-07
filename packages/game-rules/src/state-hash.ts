@@ -12,13 +12,19 @@ import type { HoldemState, LegalAction, SeatState } from "./holdem.js";
 export const TS_ENGINE_STATE_DOMAIN = "MOZETTO_TS_ENGINE_STATE_V1" as const;
 
 /**
- * Build identity for the frozen TypeScript engine (WP-030).
+ * Build identity for the TypeScript NLHE engine (WP-109 hardening supersedes WP-030 freeze id).
  * Distinct from Protocol V3 placeholder `mozetto-nlhe-engine-v3-draft`.
  */
-export const TS_ENGINE_BUILD_ID = "mozetto-nlhe-ts-freeze-wp030" as const;
+export const TS_ENGINE_BUILD_ID = "mozetto-nlhe-ts-wp109" as const;
 
-/** Protocol V3 Season 1 draft placeholder (specs/MOZETTO_POKER_EVENT_V1.md §9). */
+/** Protocol V3 Season 1 draft placeholder (specs/MOZETTO_POKER_EVENT_V1.md §9 — frozen). */
 export const PROTOCOL_V3_ENGINE_HASH_PLACEHOLDER_ID = "mozetto-nlhe-engine-v3-draft" as const;
+
+/**
+ * GameTemplate.engineHash promotion target (WP-109): Rust canonical core build id.
+ * Event-hash chains may still use the Protocol V3 draft placeholder until a protocol freeze.
+ */
+export const GAME_TEMPLATE_ENGINE_BUILD_ID = "mozetto-nlhe-rust-wp109" as const;
 
 export function tsEngineBuildHash(): Hex {
   return keccak256(toBytes(TS_ENGINE_BUILD_ID));
@@ -26,6 +32,10 @@ export function tsEngineBuildHash(): Hex {
 
 export function protocolV3EngineHashPlaceholder(): Hex {
   return keccak256(toBytes(PROTOCOL_V3_ENGINE_HASH_PLACEHOLDER_ID));
+}
+
+export function gameTemplateEngineHash(): Hex {
+  return keccak256(toBytes(GAME_TEMPLATE_ENGINE_BUILD_ID));
 }
 
 export type ConsensusSeat = {

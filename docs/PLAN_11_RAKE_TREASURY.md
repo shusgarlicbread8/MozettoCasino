@@ -22,13 +22,13 @@ Season 1 user-visible fee: **poker rake only**. Mozetto pays AI inference, relay
 | Rake formula `min(eligiblePot × rakeBps / 10_000, rakeCap)` | `packages/game-rules/src/rake.ts` `computeRake`; Rust `TableConfig::compute_rake`; TS engine via `computeRakeFromPct` in `holdem.ts` | Rounding: **floor** on non-negative chips |
 | Engine emits rake; settlement does not invent | `HAND_SETTLED.rake` / state `rake`; Hub V3 `totalRake` from proposals (`root-builder`, attestors) | Settlement conservation rejects broken totals |
 | `noFlopNoDrop` | Fold-win path hard-codes `rake: 0`; `liveHands ≤ 1` ⇒ 0 in `computeRake` | Documented in `SEASON1_RAKE_ELIGIBILITY` |
-| No rake from uncalled bets | **DEFERRED** — engine still awards full pot on fold-win including uncalled (fixture manifest) | Must land before mainnet fee freeze |
+| No rake from uncalled bets | **DONE (WP-109)** — `foldWin` returns uncalled street bet; rake uses eligible pot only | Preflop still noFlopNoDrop (rake 0) |
 | Side-pot rake method | `allocateSidePotRake` — proportional floor, remainder last layer | Matches prior TS/Rust engine behavior |
 | Provisional league schedule | `@mozetto/unit-economics` `SEASON1_RAKE_SCHEDULE` | Status **`hypothesis`** — not auto-mainnet |
 | Hand conservation | `checkHandConservation` + engine fixtures / tests | `sum(before) == sum(after) + handRake` |
 | Session conservation | `checkSessionConservation`; `root-builder` `checkConservation`; attestors refuse broken digests | `opening == payouts + totalRake` |
 | No AI fee in conservation | Settlement identity has only `totalRake` | Energy is compute budget, not USDC |
-| Internal COGS / contribution | `computeContribution` / `buildRevenueTransparencyReport` | AI/chain/infra COGS nullable until instrumented |
+| Internal COGS / contribution | `computeContribution` / `buildRevenueTransparencyReport` + WP-111 ledger | Live Groq tokens + placeholders; see `docs/WP-111_ECONOMICS_INSTRUMENTATION.md` |
 | 100 Energy cost guard | Energy ledger WP-074 + `SEASON1_AI_COST_BANDS_USD_MICRO` | Hypotheses; never silent mid-season Energy cut |
 | Context optimization | AgentState store WP-072, cognition WP-073, cadence WP-075 | Structured deltas / bounds — not a fee |
 | ProtocolFeeVault accrues only rake | `contracts/src/ProtocolFeeVault.sol` + WP-024 | Authorized depositors only |
@@ -90,7 +90,7 @@ Player payouts always go to sealed ArenaAccounts. Fee-path failure cannot revert
 ## Deferred (honest)
 
 1. **Uncalled-bet return** before rake eligibility (engine gap).
-2. **Full COGS instrumentation** (AI tokens, gas amortization, infra) from Anvil→Sepolia.
+2. **Calibrated COGS** from Anvil→Sepolia invoices/traces (WP-111 hooks exist; rates still hypotheses).
 3. **Worker auto-`ProtocolFeeVault.sweep`** (owner/Safe ops; deposit hop exists).
 4. **Per-league unit-economic acceptance report** (hands/hour, contribution margin, break-even concurrency) before mainnet fee freeze.
 5. **High-stakes gate** evidence pack (p99 latency, attestors, insurance/exposure).

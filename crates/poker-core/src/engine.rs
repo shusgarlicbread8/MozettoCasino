@@ -134,6 +134,63 @@ pub fn fold_seat(mut state: HoldemState, seat_index: u8) -> HoldemState {
     state
 }
 
+/// Mark sit-out (or return). Mid-hand sit-out also folds the seat.
+pub fn set_sit_out(mut state: HoldemState, seat_index: u8, sit_out: bool) -> HoldemState {
+    let mid_hand = state.hand_id.is_some()
+        && !matches!(state.street, Street::Waiting | Street::Settlement);
+    for s in &mut state.seats {
+        if s.seat_index == seat_index {
+            s.sit_out = sit_out;
+            if sit_out && mid_hand {
+                s.folded = true;
+                s.hole = None;
+                s.all_in = false;
+            }
+            break;
+        }
+    }
+    state
+}
+
+/// Fold-first timeout policy (Plan 06 / WP-109).
+pub fn timeout_fallback_action(state: &HoldemState) -> Option<crate::legal::LegalAction> {
+    let legal = get_legal_actions(state);
+    if legal.is_empty() {
+        return None;
+    }
+    legal
+        .iter()
+        .find(|l| l.action == ActionKind::Fold)
+        .cloned()
+        .or_else(|| {
+            legal
+                .iter()
+                .find(|l| l.action == ActionKind::Check)
+                .cloned()
+        })
+        .or_else(|| legal.first().cloned())
+}
+
+/// Uncalled street-bet excess over next-highest bet (Plan 11 / TDA).
+pub fn uncalled_bet_amount(seats: &[SeatState], winner_seat: u8) -> Chips {
+    let Some(winner) = seats.iter().find(|s| s.seat_index == winner_seat) else {
+        return 0;
+    };
+    if winner.bet <= 0 {
+        return 0;
+    }
+    let mut max_other: Chips = 0;
+    for s in seats {
+        if s.seat_index == winner_seat {
+            continue;
+        }
+        if s.bet > max_other {
+            max_other = s.bet;
+        }
+    }
+    (winner.bet - max_other).max(0)
+}
+
 pub fn start_hand(
     state: HoldemState,
     server_seed: impl Into<String>,
@@ -453,14 +510,20 @@ pub fn fold_win(state: HoldemState) -> Transition {
         ));
     };
     let win_idx = winner.seat_index;
-    let pot = state.pot;
+    let uncalled = uncalled_bet_amount(&state.seats, win_idx);
+    let eligible_pot = (state.pot - uncalled).max(0);
+    let ended_before_flop = state.board.is_empty();
+    let rake = state
+        .config
+        .compute_rake_ex(eligible_pot, 1, Some(ended_before_flop));
+    let award = (eligible_pot - rake).max(0);
     let seats: Vec<SeatState> = state
         .seats
         .iter()
         .map(|s| {
             let mut s = s.clone();
             if s.seat_index == win_idx {
-                s.stack += pot;
+                s.stack += uncalled + award;
             }
             s.bet = 0;
             s
@@ -468,13 +531,13 @@ pub fn fold_win(state: HoldemState) -> Transition {
         .collect();
     let pays = vec![WinnerPay {
         seat_index: win_idx,
-        amount: pot,
+        amount: award,
         label: "Won without showdown".into(),
     }];
     let next = HoldemState {
         seats: seats.clone(),
         pot: 0,
-        rake: 0,
+        rake,
         winners: pays.clone(),
         street: Street::Settlement,
         acting_index: None,
@@ -489,7 +552,7 @@ pub fn fold_win(state: HoldemState) -> Transition {
                     .iter()
                     .map(|p| (p.seat_index, p.amount, p.label.clone()))
                     .collect(),
-                rake: 0,
+                rake,
                 seed_reveal,
             },
             EngineEvent::StacksUpdated {

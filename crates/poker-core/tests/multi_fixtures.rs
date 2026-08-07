@@ -18,8 +18,8 @@ fn all_multi_and_sixmax_fixtures_pass() {
     let reports = run_multi_fixtures_dir(&dir).expect("load fixtures");
     assert_eq!(
         reports.len(),
-        7,
-        "expected 7 multi/sixmax fixtures, found {}",
+        8,
+        "expected 8 multi/sixmax fixtures, found {}",
         reports.len()
     );
 
@@ -93,5 +93,49 @@ fn sixmax_fold_to_bb() {
     assert_eq!(s.street, poker_core::Street::Settlement);
     assert_eq!(s.winners.len(), 1);
     assert_eq!(s.winners[0].seat_index, 2);
-    assert_eq!(s.winners[0].amount, 150);
+    assert_eq!(s.winners[0].amount, 100); // WP-109: eligible pot after uncalled return
+}
+
+#[test]
+fn sit_out_skips_blinds_and_utg() {
+    use poker_core::{create_table, seat_player, set_sit_out, start_hand, TableConfig};
+
+    let cfg = TableConfig {
+        table_id: "t".into(),
+        small_blind: 50,
+        big_blind: 100,
+        rake_bps: 0,
+        rake_cap: None,
+    };
+    let mut s = create_table(cfg, 6);
+    for i in 0..6u8 {
+        s = seat_player(s, i, format!("p{i}"), format!("a{i}"), 10_000);
+    }
+    s = set_sit_out(s, 3, true);
+    let (s, _) = start_hand(s, "seed", "hand-1").unwrap();
+    assert!(s.seats[3].folded);
+    assert!(s.seats[3].hole.is_none());
+    assert_eq!(s.pot, 150);
+    assert_eq!(s.acting_index, Some(4));
+}
+
+#[test]
+fn timeout_fallback_prefers_fold() {
+    use poker_core::{
+        create_table, seat_player, start_hand, timeout_fallback_action, ActionKind, TableConfig,
+    };
+
+    let cfg = TableConfig {
+        table_id: "t".into(),
+        small_blind: 50,
+        big_blind: 100,
+        rake_bps: 0,
+        rake_cap: None,
+    };
+    let mut s = create_table(cfg, 2);
+    s = seat_player(s, 0, "p0", "a0", 1000);
+    s = seat_player(s, 1, "p1", "a1", 1000);
+    let (s, _) = start_hand(s, "seed", "hand-1").unwrap();
+    let fb = timeout_fallback_action(&s).expect("timeout action");
+    assert_eq!(fb.action, ActionKind::Fold);
 }

@@ -98,7 +98,7 @@ assert!(report.ok);
 |---|---|---|
 | `verify_fixture(json)` | single fixture JSON string | `FixtureReport` JSON |
 | `verify_fixtures(arrayJson)` | JSON array of fixtures | batch summary JSON |
-| `engine_build_id()` | — | `mozetto-nlhe-rust-sixmax-wp032` |
+| `engine_build_id()` | — | `mozetto-nlhe-rust-wp109` (WP-109) |
 | `verifier_build_id()` | — | `mozetto-poker-wasm-wp035` |
 
 Report fields (camelCase): `id`, `ok`, `checks[]`, `error?`, `finalStacks?`, `finalStateHash?`.

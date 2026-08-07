@@ -14,9 +14,9 @@ Detect **unexplained** differential mismatches between:
 
 1. TypeScript NLHE freeze (`packages/game-rules`, WP-030)
 2. Rust `poker-core` (WP-031 / WP-032)
-3. PokerKit reference oracle (`tools/pokerkit-oracle/`) — **optional**
+3. PokerKit reference oracle (`tools/pokerkit-oracle/`) — **mandatory in CI (WP-109)**
 
-Wave 3 exit gate (Plan 06 / WP packet list): zero unexplained TS↔Rust mismatches. PokerKit may remain skipped or document known policy gaps without blocking the harness.
+Wave 3 exit gate (Plan 06 / WP packet list): zero unexplained TS↔Rust mismatches. **WP-109:** `pnpm test:engine-diff:full` / CI fail if PokerKit is missing (`--require-pokerkit`). See `docs/WP-109_POKER_RELEASE_HARDENING.md`.
 
 ## How to run
 

@@ -231,7 +231,8 @@ contract DeploySepolia is Script {
             bigBlind: 1e6,
             minBuyIn: 100e6,
             maxBuyIn: 200e6,
-            engineHash: keccak256("mozetto-nlhe-engine-v3-draft"),
+            // WP-109: GameTemplate.engineHash → Rust canonical core (event vectors keep draft).
+            engineHash: keccak256("mozetto-nlhe-rust-wp109"),
             rulesHash: keccak256("nlhe-rules-v2"),
             randomnessPolicyId: keccak256("randomness-policy-v2"),
             settlementPolicyId: keccak256("settlement-policy-v3"),
@@ -258,7 +259,7 @@ contract DeploySepolia is Script {
             bigBlind: 1e6,
             minBuyIn: 100e6,
             maxBuyIn: 200e6,
-            engineHash: keccak256("mozetto-nlhe-engine-v3-draft"),
+            engineHash: keccak256("mozetto-nlhe-rust-wp109"),
             rulesHash: keccak256("nlhe-rules-v2"),
             randomnessPolicyId: keccak256("randomness-policy-v2"),
             settlementPolicyId: keccak256("settlement-policy-v3"),

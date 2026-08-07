@@ -1,12 +1,12 @@
 {
-  "workPacket": "WP-030",
+  "workPacket": "WP-109",
   "generatedAt": "frozen",
   "stateDomain": "MOZETTO_TS_ENGINE_STATE_V1",
-  "tsEngineBuildId": "mozetto-nlhe-ts-freeze-wp030",
-  "tsEngineBuildHash": "0x361eeea0a9280d50bc1d32edeb5f4cf950c2ee6e60f3afe4b7c1b56f5ab9808b",
+  "tsEngineBuildId": "mozetto-nlhe-ts-wp109",
+  "tsEngineBuildHash": "0x0d5304b59412a9eeea2634f49b317282f6036d6412e74da13bb38387ca3984ba",
   "protocolV3EngineHashPlaceholder": "0xfbaa172ca206187431a693cc6e030f2a05b550eaf7a54f3e62a3f86072b4d232",
-  "note": "tsEngineBuildHash identifies this TS freeze. Protocol V3 engineHash remains the draft placeholder until Rust/TS promotion.",
-  "fixtureCount": 19,
+  "note": "WP-109: uncalled-bet return + sit-out/timeout. GameTemplate.engineHash → mozetto-nlhe-rust-wp109; Protocol V3 event vectors keep draft placeholder (no /specs mutation).",
+  "fixtureCount": 20,
   "fixtures": [
     {
       "id": "hu_01_blinds_button_preflop",
@@ -160,6 +160,17 @@
       ]
     },
     {
+      "id": "sixmax_20_deep_raise_fold",
+      "file": "sixmax_20_deep_raise_fold.json",
+      "format": "sixmax",
+      "coverage": [
+        "sixmax",
+        "deep-tree",
+        "uncalled-bet",
+        "fold-win"
+      ]
+    },
+    {
       "id": "multi_16_folded_chips_in_pot",
       "file": "multi_16_folded_chips_in_pot.json",
       "format": "multi",
@@ -202,14 +213,15 @@
   "sixMaxCoverageStatus": {
     "blindsButtonUtg": "covered (sixmax_14)",
     "foldToBb": "covered (sixmax_15)",
+    "deepTree": "covered (sixmax_20_deep_raise_fold)",
     "sidePotsNested": "covered (multi_11, multi_12)",
     "incompleteAllIn": "covered (multi_10)",
     "oddChip": "covered (multi_13); pure HU equal-contrib pot always even",
     "showdownTies": "covered (hu_07, multi_13)",
-    "rakeHooks": "covered (hu_08, hu_09); Plan 11 computeRake bps+floor+cap + noFlopNoDrop fold-win; uncalled-bet exclusion DEFERRED",
-    "uncalledBetReturn": "NOT implemented — foldWin awards full pot including uncalled",
-    "sitOutBlindPosts": "NOT covered / limited sitOut support",
-    "timeoutFallback": "NOT in engine",
+    "rakeHooks": "covered (hu_08, hu_09); Plan 11 noFlopNoDrop + uncalled exclusion",
+    "uncalledBetReturn": "implemented (foldWin returns excess street bet)",
+    "sitOutBlindPosts": "covered (setSitOut + wp109.test.ts)",
+    "timeoutFallback": "covered (timeoutFallbackAction + wp109.test.ts)",
     "duplicateCardRejection": "NOT in engine (deck assumed valid)"
   }
 }
