@@ -27,6 +27,7 @@ import {
   http,
   parseAbi,
   parseUnits,
+  parseEther,
   formatUnits,
   keccak256,
   toBytes,
@@ -101,13 +102,27 @@ const AGENT = (env.AGENT_RUNTIME_URL || "http://localhost:4002").replace(/\/$/, 
 const PK_RELAYER = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 const PK_ATTESTOR2 = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 const PK_SESSION = "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a";
-const PK_ALICE = "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6";
-const PK_BOB = "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a";
-
 const TEMPLATE = NLHE_HU_STANDARD_V2_TEMPLATE_ID;
 const BUY_IN = parseUnits("100", 6);
 const RAKE = parseUnits("2", 6);
 const RUN_ID = `wp106-${Date.now()}`;
+
+/**
+ * Players get a fresh wallet per run. WP-043 anti-pairing caps a given pair at
+ * MAX_PAIR_MATCHES_PER_DAY (5) rated meetings per 24h, so two fixed wallets
+ * make the golden path unrunnable after the fifth run of the day — the suite
+ * would fail on a rule that is behaving correctly. Fresh wallets keep the run
+ * repeatable without weakening the collusion cap.
+ *
+ * Pass --reuse-wallets to pin the historical Anvil #6 / #7 players instead.
+ */
+const REUSE_WALLETS = argv.includes("--reuse-wallets");
+const PK_ALICE = REUSE_WALLETS
+  ? "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6"
+  : keccak256(toBytes(`${RUN_ID}-wallet-alice`));
+const PK_BOB = REUSE_WALLETS
+  ? "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a"
+  : keccak256(toBytes(`${RUN_ID}-wallet-bob`));
 
 const erc20Abi = parseAbi([
   "function faucet(uint256 amount)",
@@ -561,6 +576,18 @@ async function main() {
 
   let aliceAccount;
   let bobAccount;
+
+  // Fresh per-run players start with zero ETH — stake them for gas.
+  if (!REUSE_WALLETS) {
+    for (const player of [alice, bob]) {
+      const hash = await relayerWallet.sendTransaction({
+        to: player.address,
+        value: parseEther("10"),
+      });
+      await publicClient.waitForTransactionReceipt({ hash });
+    }
+    console.log(`  fresh players: alice=${alice.address.slice(0, 10)}… bob=${bob.address.slice(0, 10)}…`);
+  }
 
   // Mint / accounts / fund / permission
   try {

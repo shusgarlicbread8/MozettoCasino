@@ -17,6 +17,13 @@ import type { ArenaMode } from "./arena-mode.js";
 
 const USDC_DECIMALS = 6;
 
+/**
+ * How long a custody session may sit without ever dealing a hand before it is
+ * treated as stranded rather than merely waiting. Matches the lobby's idle
+ * table window so a table and its seats age out together.
+ */
+const STRANDED_MINUTES = 10;
+
 export function leagueBuyInRaw(leagueId: string): bigint {
   const league = ARENA_LEAGUES.find((l) => l.id === leagueId);
   if (!league) throw new Error("League not available");
@@ -790,9 +797,19 @@ export async function getActiveOnchainTableForProfile(
            and done.owner_id = osp.profile_id
            and done.status = 'completed'
        )
+       -- Never hand back a stranded table. A player left alone on a session
+       -- that never dealt is otherwise pinned to it forever: every Find Match
+       -- returns this row, they open a table that cannot start, and they have
+       -- no way back into matchmaking.
+       and not (
+         os.created_at < now() - make_interval(mins => $5::int)
+         and not exists (select 1 from hands h where h.table_id = os.table_id)
+         and (select count(distinct ts2.seat_index) from table_sessions ts2
+               where ts2.table_id = os.table_id and ts2.status = 'active') < 2
+       )
      order by os.created_at desc
      limit 1`,
-    [profileId, chainId, cfg.maxSeats, cfg.variantId],
+    [profileId, chainId, cfg.maxSeats, cfg.variantId, STRANDED_MINUTES],
   );
   return res.rows[0] ?? null;
 }
@@ -948,6 +965,94 @@ export async function markOnchainSessionReadyForSettlement(sessionId: string) {
        )`,
     [sessionId],
   );
+}
+
+export type OrphanOnchainTable = {
+  sessionId: string;
+  tableId: string;
+  status: string;
+  players: number;
+  ageMinutes: number;
+};
+
+/**
+ * Find custody sessions that can never start a hand: fewer than two seated
+ * players, no hand ever dealt, and old enough that nobody is still joining.
+ *
+ * These accumulate whenever a match is opened before an opponent exists (the
+ * pre-WP-106 seat-first default) or when Anvil is reset under a live DB. They
+ * are not merely cosmetic — matchmaking treats `opened` sessions as joinable,
+ * so a stale one can capture a real player into a table that never deals.
+ */
+export async function findOrphanOnchainTables(opts: {
+  chainId: number;
+  olderThanMinutes?: number;
+}): Promise<OrphanOnchainTable[]> {
+  const minAge = Math.max(0, opts.olderThanMinutes ?? 10);
+  const res = await query<{
+    session_id: string;
+    table_id: string;
+    status: string;
+    players: string;
+    age_minutes: string;
+  }>(
+    `select os.session_id,
+            os.table_id,
+            os.status,
+            (select count(*)::text from onchain_session_players osp
+              where osp.session_id = os.session_id) as players,
+            (extract(epoch from (now() - os.created_at)) / 60)::int::text as age_minutes
+     from onchain_sessions os
+     where os.chain_id = $1
+       and os.status in ('pending', 'opened')
+       and os.created_at < now() - make_interval(mins => $2::int)
+       and not exists (select 1 from hands h where h.table_id = os.table_id)
+       and (
+         -- Never enough players to deal (seat-first one-player table), or
+         -- custody sealed for a pair but only one side ever took its seat.
+         (select count(*) from onchain_session_players osp
+           where osp.session_id = os.session_id) < 2
+         -- Distinct seats, not row count: a pre-mutex double-join could put two
+         -- active sessions on the same seat_index, which looks fully seated but
+         -- leaves the table with one occupied seat and no way to deal.
+         or (select count(distinct ts.seat_index) from table_sessions ts
+              where ts.table_id = os.table_id and ts.status = 'active') < 2
+       )
+     order by os.created_at`,
+    [opts.chainId, minAge],
+  );
+  return res.rows.map((r) => ({
+    sessionId: r.session_id,
+    tableId: r.table_id,
+    status: r.status,
+    players: Number(r.players),
+    ageMinutes: Number(r.age_minutes),
+  }));
+}
+
+/**
+ * Retire the orphans found by {@link findOrphanOnchainTables}. Each seated
+ * player is abandoned through the ordinary unseat path, so exposure
+ * reservations are released and seat tickets are failed rather than left
+ * pinning the owner's at-risk budget.
+ */
+export async function reapOrphanOnchainTables(opts: {
+  chainId: number;
+  olderThanMinutes?: number;
+}): Promise<OrphanOnchainTable[]> {
+  const orphans = await findOrphanOnchainTables(opts);
+  for (const orphan of orphans) {
+    const players = await query<{ profile_id: string }>(
+      `select profile_id::text from onchain_session_players where session_id = $1`,
+      [orphan.sessionId],
+    );
+    for (const p of players.rows) {
+      await abandonUnseatedOnchainPlayer({ profileId: p.profile_id, tableId: orphan.tableId });
+    }
+    // No players to abandon (or abandon left the row): block it directly.
+    await blockFailedOnchainSession(orphan.sessionId);
+  }
+  return orphans;
 }
 
 export function assertLeague(leagueId: string) {

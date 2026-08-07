@@ -44,6 +44,8 @@
 
     "build": "pnpm -r run build",
     "db:migrate": "pnpm --filter @mozetto/database migrate",
+    "db:reap-orphans": "pnpm --filter @mozetto/database reap:orphans",
+    "sparring": "node ./scripts/anvil-sparring-agent.mjs",
     "typecheck": "pnpm -r run typecheck",
     "smoke:custody": "node ./scripts/anvil-custody-smoke.mjs",
     "smoke:custody:run": "node ./scripts/anvil-custody-smoke.mjs --run",

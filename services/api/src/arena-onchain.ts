@@ -45,6 +45,7 @@ import {
   insertOnchainSessionPlayers,
   insertSeatTicket,
   invalidateQueuedTicketsForProfile,
+  reapOrphanOnchainTables,
   isFeatureEnabled,
   leagueBuyInRaw,
   linkTicketsToBatch,
@@ -147,9 +148,17 @@ function rpcForChain(chainId: number) {
 }
 
 /**
- * Seat-first matchmaking is the product default: join an existing compatible
- * custody session or open a one-player table immediately. Atomic V3 pair
- * sealing remains an explicit ops mode for protocol/golden verification.
+ * Seat-first is the product default for both formats: Find Match either fills
+ * an open seat on a compatible custody session or opens a table immediately,
+ * so a player always lands somewhere real instead of sitting in a queue.
+ *
+ * This only works because seating is serialized and follows the seat the
+ * pairer assigned (see TableRuntime.join) — without that, the second player
+ * collides with the first on seat 0 and the table never reaches two stacks.
+ *
+ * SEAL_AND_FUND_V3=1 selects the atomic HU pair-seal path instead
+ * (SeatTicketV3 → sealAndFundSession). WP-106's golden suite sets it, because
+ * that is the protocol path it exists to verify.
  */
 function useSealAndFundV3(format: ArenaFormat = "hu"): boolean {
   if (format !== "hu") return false;
@@ -999,6 +1008,13 @@ export async function handleOnchainFindMatch(
   }
   session.arenaAccountAddress = arena;
 
+  // Housekeeping before matchmaking: retire sessions that can never deal so
+  // their exposure reservations and seat tickets are released instead of
+  // silently pinning this player's at-risk budget on a dead table.
+  await reapOrphanOnchainTables({ chainId }).catch((err) =>
+    req.log.warn({ err }, "reapOrphanOnchainTables failed"),
+  );
+
   const existing = await getActiveOnchainTableForProfile(session.profileId, chainId, format);
   if (existing?.table_id) {
     // Attach custody session id when available so clients/E2E can verify sealAndFund.
@@ -1138,8 +1154,9 @@ export async function handleOnchainFindMatch(
     }
   }
 
-  // Product default: claim the fullest compatible open session, otherwise
-  // create a table immediately. Protocol V3 pair-seal is explicit opt-in.
+  // Non-V3 formats (Classic 6-max, LEGACY_OPEN_TOPUP=1): claim the fullest
+  // compatible open session, otherwise open a table and fill it progressively.
+  // Ranked HU never lands here — it pair-seals below (WP-106).
   if (!useSealAndFundV3(format) && process.env.LEGACY_PAIR_MATCHMAKING !== "1") {
     return openOrJoinImmediateTable({
       req,

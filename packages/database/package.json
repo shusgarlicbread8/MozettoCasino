@@ -9,6 +9,7 @@
   },
   "scripts": {
     "migrate": "node ./scripts/migrate.mjs",
+    "reap:orphans": "node --import tsx ./scripts/reap-orphan-tables.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test src/**/*.test.ts"
   },

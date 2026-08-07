@@ -58,7 +58,13 @@ registerVerifyRoutes(app);
 registerPlan19Routes(app);
 registerDebugRoutes(app);
 
-app.get("/health", async () => ({ ok: true }));
+app.get("/health", async () => ({
+  ok: true,
+  // Matchmaking mode is process-level env, so tooling (WP-106) can detect a
+  // stale API still running the other path instead of failing deep in a run.
+  sealAndFundV3: process.env.SEAL_AND_FUND_V3 === "1",
+  legacyOpenTopUp: process.env.LEGACY_OPEN_TOPUP === "1",
+}));
 
 app.get("/v1/stats", async (req) => {
   // Scope live counts to the caller's world (demo vs on-chain). Never mix the two.

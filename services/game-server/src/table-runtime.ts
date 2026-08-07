@@ -180,6 +180,26 @@ export class TableRuntime {
   spectatorDelayMs = SPECTATOR_DELAY_MS;
   spectatorBuffer = new SpectatorDelayBuffer({ delayMs: SPECTATOR_DELAY_MS });
   spectatorFlushTimer: NodeJS.Timeout | null = null;
+  /**
+   * Serializes join/leave. Seat selection is a check-then-act across several
+   * awaits (buy-in lock, session insert, seat update); without this, two
+   * players who find the same match within the same tick both read the same
+   * empty seat and the second overwrites the first — the table then reports
+   * one seated player forever and the engine loop never reaches its
+   * two-player start condition.
+   */
+  private seatMutex: Promise<unknown> = Promise.resolve();
+
+  /** Run `fn` with exclusive access to seat assignment for this table. */
+  private withSeatLock<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.seatMutex.then(fn, fn);
+    // Keep the chain alive regardless of individual failures.
+    this.seatMutex = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
 
   constructor(
     tableId: string,
@@ -352,8 +372,10 @@ export class TableRuntime {
     if (!rotated) return;
 
     const { plan } = rotated;
+    // Unlocked variants: applyEpochBoundary is reached from paths that may
+    // already hold the seat lock, and re-entering it would deadlock.
     for (const leave of plan.leaves) {
-      await this.leave(leave.ownerId, { forceImmediate: true });
+      await this.leaveUnlocked(leave.ownerId, { forceImmediate: true });
     }
     for (const top of plan.topUps) {
       const amount = Number(top.amount ?? 0);
@@ -369,7 +391,7 @@ export class TableRuntime {
         continue;
       }
       const payload = join.payload ?? {};
-      await this.join({
+      await this.joinUnlocked({
         userId: join.ownerId,
         agentId: join.agentId,
         agentConfigId,
@@ -1064,7 +1086,16 @@ export class TableRuntime {
     }
   }
 
-  async join(opts: {
+  /**
+   * Seat a player. Externally reachable (HTTP / WS), so it takes the seat lock;
+   * table-loop callers use {@link joinUnlocked} because they already run inside
+   * the single-threaded loop.
+   */
+  async join(opts: Parameters<TableRuntime["joinUnlocked"]>[0]) {
+    return this.withSeatLock(() => this.joinUnlocked(opts));
+  }
+
+  async joinUnlocked(opts: {
     userId: string;
     agentId: string;
     agentConfigId: string;
@@ -1156,11 +1187,35 @@ export class TableRuntime {
       };
     }
 
+    // On-chain, the seat is not ours to choose: matchmaking committed a
+    // randomized seat order (WP-040) into onchain_session_players before
+    // custody was sealed, and settlement maps payouts back through it. Taking
+    // the first free seat instead would silently disagree with the sealed
+    // session whenever two players seat in an order the pairer did not pick.
+    let assignedSeat = opts.seatIndex ?? null;
+    if (assignedSeat == null && this.arenaMode === "onchain") {
+      if (!this.onchainSessionId) await this.loadOnchainSession();
+      if (this.onchainSessionId) {
+        const row = await query<{ seat: number | null }>(
+          `select seat from onchain_session_players where session_id = $1 and profile_id = $2 limit 1`,
+          [this.onchainSessionId, opts.userId],
+        ).catch(() => ({ rows: [] as { seat: number | null }[] }));
+        const seat = row.rows[0]?.seat;
+        if (seat != null) assignedSeat = Number(seat);
+      }
+    }
+
     // Only truly empty seats. Never steal another player's sit-out / busted seat.
     const empty = this.state.seats.find(
-      (s) => (opts.seatIndex == null || s.seatIndex === opts.seatIndex) && !s.playerId,
+      (s) => (assignedSeat == null || s.seatIndex === assignedSeat) && !s.playerId,
     );
-    if (!empty) throw new Error("No open seat");
+    if (!empty) {
+      throw new Error(
+        assignedSeat == null
+          ? "No open seat"
+          : `Seat ${assignedSeat} is not available on this table`,
+      );
+    }
     const sessionId = randomUUID();
     await lockBuyIn(opts.userId, opts.buyIn, sessionId, this.arenaMode);
     await query(
@@ -1251,7 +1306,12 @@ export class TableRuntime {
     return true;
   }
 
+  /** External unseat path — see {@link join} for why this is serialized. */
   async leave(userId: string, opts?: { forceImmediate?: boolean }) {
+    return this.withSeatLock(() => this.leaveUnlocked(userId, opts));
+  }
+
+  async leaveUnlocked(userId: string, opts?: { forceImmediate?: boolean }) {
     const seat = this.state.seats.find((s) => s.playerId === userId);
     if (!seat || !seat.playerId) {
       // Still close any orphaned DB session so the lobby doesn't think we're seated.
@@ -1639,11 +1699,15 @@ export class TableRuntime {
           await sleep(3200);
           // Anyone still at $0 vacates: open seat, not a dimmed ghost card.
           const broke = this.state.seats.filter((s) => s.playerId && s.stack <= 0).map((s) => s.playerId!);
-          for (const uid of broke) {
-            await this.leave(uid, { forceImmediate: true });
-          }
-          // WP-042: apply queued join/leave/top-up before the next hand.
-          await this.applyEpochBoundary();
+          // Hold the seat lock across the whole boundary so an inbound join
+          // cannot land between vacating busted seats and the epoch flush.
+          await this.withSeatLock(async () => {
+            for (const uid of broke) {
+              await this.leaveUnlocked(uid, { forceImmediate: true });
+            }
+            // WP-042: apply queued join/leave/top-up before the next hand.
+            await this.applyEpochBoundary();
+          });
         }
       } catch (err) {
         console.error("table loop error", this.tableId, err);
@@ -1668,7 +1732,7 @@ export class TableRuntime {
     if (seated.length < 2) return;
 
     // WP-042 safety net: flush pending queue only (avoid double epoch rotate).
-    await this.applyEpochBoundary({ onlyIfPending: true });
+    await this.withSeatLock(() => this.applyEpochBoundary({ onlyIfPending: true }));
 
     const seatedAfter = this.state.seats.filter((s) => !s.sitOut && s.playerId && s.stack > 0);
     if (seatedAfter.length < 2) return;

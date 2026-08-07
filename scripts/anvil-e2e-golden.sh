@@ -26,6 +26,9 @@ export MOZETTO_GOLDEN=1
 export REQUIRE_REAL_ROOTS=1
 export CANONICAL_SCHEMA_KIND="${CANONICAL_SCHEMA_KIND:-poker_event_v1}"
 export HUMAN_PLAY="${HUMAN_PLAY:-0}"
+# WP-106 verifies the atomic SeatTicketV3 → sealAndFundSession path. The product
+# default is seat-first (open/topUp), so the golden run must opt in explicitly.
+export SEAL_AND_FUND_V3="${SEAL_AND_FUND_V3:-1}"
 export AGENT_RUNTIME_MODE="${AGENT_RUNTIME_MODE:-mock}"
 export AI_CONTROLLER="${AI_CONTROLLER:-agent-runtime}"
 
@@ -100,6 +103,34 @@ ensure_service "api" "$API_URL" "@mozetto/api" "/tmp/mozetto-api-wp106.log"
 ensure_service "game-server" "$GAME_URL" "@mozetto/game-server" "/tmp/mozetto-game-wp106.log"
 ensure_service "agent-runtime" "$AGENT_URL" "@mozetto/agent-runtime" "/tmp/mozetto-agent-wp106.log"
 
+# The product default is seat-first; WP-106 needs the V3 pair-seal path. A
+# reused API process carries whatever mode it booted with, so check and restart.
+API_HEALTH="$(curl -sf "$API_URL/health" || true)"
+API_MODE_SWAPPED=0
+if ! echo "$API_HEALTH" | grep -q '"sealAndFundV3":true'; then
+  echo "WARN: api running without SEAL_AND_FUND_V3=1 - restarting for the golden path..."
+  pkill -f 'services/api.*tsx.*src/index' 2>/dev/null || true
+  sleep 0.8
+  nohup env SEAL_AND_FUND_V3=1 pnpm --filter @mozetto/api start:local \
+    >/tmp/mozetto-api-wp106.log 2>&1 &
+  wait_http "$API_URL" "api" 50 || exit 1
+  API_MODE_SWAPPED=1
+fi
+
+# Put the dev stack back the way we found it. Leaving the API in pair-seal mode
+# would silently change what Find Match does in the browser after a golden run.
+restore_api_mode() {
+  [ "$API_MODE_SWAPPED" = "1" ] || return 0
+  echo "Restoring api to the seat-first product default..."
+  pkill -f 'services/api.*tsx.*src/index' 2>/dev/null || true
+  sleep 0.8
+  # -u: this script exports SEAL_AND_FUND_V3=1, and the child would inherit it.
+  nohup env -u SEAL_AND_FUND_V3 pnpm --filter @mozetto/api start:local \
+    >/tmp/mozetto-api-restore.log 2>&1 &
+  wait_http "$API_URL" "api" 50 || true
+}
+trap restore_api_mode EXIT
+
 # Confirm golden schema flags on game-server (restart if stale process).
 GAME_HEALTH="$(curl -sf "$GAME_URL/health" || true)"
 if ! echo "$GAME_HEALTH" | grep -q 'poker_event_v1'; then
@@ -114,4 +145,5 @@ if ! echo "$GAME_HEALTH" | grep -q 'poker_event_v1'; then
 fi
 
 echo "Golden stack ready (MOZETTO_GOLDEN=1 REQUIRE_REAL_ROOTS=1 CANONICAL_SCHEMA_KIND=$CANONICAL_SCHEMA_KIND)"
-exec node --import tsx "$ROOT/scripts/anvil-e2e-golden.mjs" "$@"
+# Not exec: the EXIT trap must still run to restore the API's matchmaking mode.
+node --import tsx "$ROOT/scripts/anvil-e2e-golden.mjs" "$@"
