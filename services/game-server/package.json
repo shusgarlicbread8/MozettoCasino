@@ -8,7 +8,7 @@
     "start": "tsx src/index.ts",
     "start:local": "tsx --env-file=../../.env.local src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/lease/**/*.test.ts src/outbox/**/*.test.ts"
+    "test": "node --import tsx --test src/lease/**/*.test.ts src/outbox/**/*.test.ts src/ws-protocol.test.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

@@ -241,7 +241,7 @@
 | WP-121 | Home (Play Now first) | `DONE` |
 | WP-122 | Play / Find Match | `IN_PROGRESS` |
 | WP-123 | Strategy setup (profiles + tuning) | `IN_PROGRESS` |
-| WP-124 | Wallet / onboarding (ArenaAccount) | `NOT_STARTED` |
+| WP-124 | Wallet / onboarding (ArenaAccount) | `IN_PROGRESS` |
 | WP-125 | Live table 2D premium | `NOT_STARTED` |
 | WP-126 | AI cognition presentation | `NOT_STARTED` |
 | WP-127 | Result / replay | `NOT_STARTED` |
@@ -1917,6 +1917,30 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 
 ---
 
+### 2026-08-07 — WP-110 Hosted DB + WS cutover (DONE)
+
+**Status:** `DONE` (with documented ops follow-ups)
+
+**Verified:** `schema_migrations` held **017–029** on configured `DATABASE_URL` before this packet; **030** applied in-packet.
+
+**Delivered:**
+- Migration `030_service_role_grants.sql` — `mozetto_*` NOLOGIN roles + least-privilege GRANTs + `BYPASSRLS`; `service_role` table grants when present
+- Scheduler persist hooks: `energyStore` on `ContinuousCognitionScheduler`; `createCognitionScheduler` factory; `LiveSessionManager` wires energy store
+- WS v2 dual-accept inbound (`packages/shared-types/src/ws-protocol.ts`); outbound opt-in via `GAME_WS_EMIT_V2`
+- Docs: `docs/WP-110_HOSTED_DB_WS.md`; Plan 19 deferral update; `.env.example`
+
+**Commands / evidence:**
+- `pnpm --filter @mozetto/database migrate` — `030` applied
+- `pnpm --filter @mozetto/agent-runtime test` — **132/132 pass**
+- `pnpm --filter @mozetto/game-server test` — **27/27 pass**
+- `pnpm --filter @mozetto/{shared-types,agent-runtime,game-server} typecheck` — pass
+
+**Deferred:** Dedicated per-service DSNs / `SET ROLE`; web clients reading v2 emit by default; additive lifecycle/energy/verify WS frames.
+
+**Out of scope:** `/specs` mutations; destructive prod resets; committing secrets.
+
+---
+
 ## Baseline inventory (post-WP-000)
 
 | Item | Current state |
@@ -1928,7 +1952,7 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 | Local boot | `pnpm bootstrap` → readiness; also `scripts/start-local.sh` |
 | Reset | `pnpm reset:local` (+ `--db`) |
 | E2E scripts | `pnpm e2e:arena-account`, `e2e:instant`, `e2e:mock-vrf`, `e2e:proof-batch`, `e2e:protocol-v3`, `smoke:custody` |
-| Migrations | `packages/database/migrations/001`–`029` (+ CI dry-run) |
+| Migrations | `packages/database/migrations/001`–`030` (+ CI dry-run) |
 | Architecture prose | `docs/PLATFORM_ARCHITECTURE.md` |
 | Machine-readable manifest | `docs/architecture-manifest.v2.json` (+ `.md`; `pnpm manifest:architecture`) |
 | Tool versions doc | `docs/TOOL_VERSIONS.md` |

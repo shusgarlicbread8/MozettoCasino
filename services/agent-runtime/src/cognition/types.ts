@@ -8,6 +8,7 @@
 import type { Hex } from "viem";
 import type { EnergyLedger } from "../energy/types.js";
 import type { EnergyOperationTypeCode } from "../energy/costs.js";
+import type { EnergyLedgerStore } from "../energy/store.js";
 import type { ProfileAxes } from "../policy/axes.js";
 import type { ProfileConfigV1 } from "../policy/profile.js";
 import type { PresetKey } from "../policy/presets.js";
@@ -154,6 +155,11 @@ export interface FinalActionResult {
 export interface ContinuousCognitionSchedulerOptions {
   provider: PokerModelProvider;
   store: AgentStateStore;
+  /**
+   * Optional Energy ledger store (WP-110). When set, ledger snapshots are
+   * persisted after each successful mutation alongside AgentState.
+   */
+  energyStore?: EnergyLedgerStore;
   sessionId: string;
   handId: string;
   seat: number;

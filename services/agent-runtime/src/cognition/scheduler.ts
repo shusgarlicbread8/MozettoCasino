@@ -15,6 +15,7 @@ import {
   spendableBackground,
   combinedFinalDebit,
   type EnergyLedger,
+  type EnergyLedgerStore,
 } from "../energy/index.js";
 import type {
   BackgroundCognitionKind,
@@ -76,6 +77,7 @@ export class ContinuousCognitionScheduler {
 
   private readonly provider: PokerModelProvider;
   private readonly store: AgentStateStore;
+  private readonly energyStore: EnergyLedgerStore | null;
   private readonly profileHash: string;
   private readonly axes: ContinuousCognitionSchedulerOptions["axes"];
   private readonly profile: ContinuousCognitionSchedulerOptions["profile"];
@@ -99,6 +101,7 @@ export class ContinuousCognitionScheduler {
   constructor(opts: ContinuousCognitionSchedulerOptions) {
     this.provider = opts.provider;
     this.store = opts.store;
+    this.energyStore = opts.energyStore ?? null;
     this.sessionId = opts.sessionId;
     this.handId = opts.handId;
     this.seat = opts.seat;
@@ -135,6 +138,14 @@ export class ContinuousCognitionScheduler {
         profileHash: opts.profileHash,
         energyRemaining: this.ledger.remainingEnergy,
       });
+  }
+
+  /** Persist AgentState + optional Energy ledger (WP-110 scheduler hooks). */
+  private async persistStores(): Promise<void> {
+    await this.store.put(this.state);
+    if (this.energyStore) {
+      await this.energyStore.put(this.ledger);
+    }
   }
 
   getLedger(): EnergyLedger {
@@ -201,7 +212,7 @@ export class ContinuousCognitionScheduler {
         this.ledger = ingest.ledger;
         this.state = setEnergyRemaining(this.state, this.ledger.remainingEnergy);
       }
-      await this.store.put(this.state);
+      await this.persistStores();
     }
 
     const selection = selectSchedulerMode({
@@ -369,12 +380,12 @@ export class ContinuousCognitionScheduler {
         if (!debit.ok) {
           job.status = "skipped";
           job.note = `debit_rejected:${debit.reason}`;
-          await this.store.put(this.state);
+          await this.persistStores();
           return "skipped";
         }
         this.ledger = debit.ledger;
         this.state = setEnergyRemaining(this.state, this.ledger.remainingEnergy);
-        await this.store.put(this.state);
+        await this.persistStores();
         job.status = "completed";
         job.note = bg.note || "applied";
         return "completed";
@@ -483,7 +494,7 @@ export class ContinuousCognitionScheduler {
         this.ledger = debit.ledger;
         energyDebited = debit.op.energyDebit;
         this.state = setEnergyRemaining(this.state, this.ledger.remainingEnergy);
-        await this.store.put(this.state);
+        await this.persistStores();
       }
     }
 

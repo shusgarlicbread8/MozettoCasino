@@ -59,39 +59,6 @@ export const AgentResponseSchema = z.object({
 });
 export type AgentResponse = z.infer<typeof AgentResponseSchema>;
 
-export const WsClientMessageSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("auth"), token: z.string() }),
-  z.object({ type: z.literal("subscribe_table"), tableId: z.string(), role: z.enum(["player", "spectator"]) }),
-  z.object({
-    type: z.literal("join_table"),
-    tableId: z.string(),
-    buyIn: z.number(),
-    agentConfigId: z.string(),
-    seatIndex: z.number().optional(),
-    stopLoss: z.number().optional(),
-    profitTarget: z.number().optional(),
-    maxDurationMinutes: z.number().optional(),
-    autoRebuy: z.boolean().optional(),
-  }),
-  z.object({ type: z.literal("leave_table"), tableId: z.string() }),
-  z.object({
-    type: z.literal("player_action"),
-    tableId: z.string(),
-    action: PokerActionSchema,
-    amount: z.number().optional(),
-  }),
-  z.object({
-    type: z.literal("owner_command"),
-    tableId: z.string(),
-    command: z.enum(["sit_out", "resume", "top_up", "leave", "set_coaching_note"]),
-    amount: z.number().optional(),
-    note: z.string().optional(),
-  }),
-  z.object({ type: z.literal("replay_from"), tableId: z.string(), afterSequence: z.number() }),
-  z.object({ type: z.literal("ping") }),
-]);
-export type WsClientMessage = z.infer<typeof WsClientMessageSchema>;
-
 export const LEAGUES = [
   { id: "bronze", name: "Bronze", color: "#B87333", minBuyIn: 10 },
   { id: "silver", name: "Silver", color: "#B8C0C8", minBuyIn: 50 },
@@ -102,6 +69,10 @@ export const LEAGUES = [
 ] as const;
 
 export * from "./seat-ticket";
+export * from "./ws-protocol";
+/** Canonical client schema: accepts legacy + Plan 19 v2 aliases (WP-110). */
+export { WsClientMessageV2AcceptSchema as WsClientMessageSchema } from "./ws-protocol.js";
+export type { WsClientMessageNormalized as WsClientMessage } from "./ws-protocol.js";
 
 export const AI_PROFILES = [
   { key: "shark", label: "The Shark", blurb: "Aggressive opens and pressure on weaker ranges." },

@@ -11,15 +11,15 @@
 | Requirement | Status | Notes |
 |---|---|---|
 | DB is projection/coordination; no ambiguous money/cards/poker ownership | **Met (posture)** | Indexer / table actor / settlement writers documented; public clients read-only for authoritative paths |
-| Migrations forward-only | **Met** | `001`–`029`; no destructive renames of live tables |
+| Migrations forward-only | **Met** | `001`–`030`; no destructive renames of live tables |
 | Canonical poker events V1 columns | **Met** | Migration `019` + companions in `025` |
 | Session lifecycle V2 projection | **Partial → Met (scaffold)** | `025` lifecycle_state + transition log; on-chain remains authoritative |
 | Agent Brain / Energy tables | **Met (schema)** | `026`; in-memory runtime still default writer |
 | Public verification packages | **Met (schema + API)** | `028` + Plan 19 verify aliases |
 | Identity clusters | **Met (schema + lookup)** | `027` + `DbLinkedAccountStore` |
 | Empty + upgrade migrations pass | **Ops** | Apply via `pnpm --filter @mozetto/database migrate` against empty/copy DBs |
-| Separate DB roles per service | **Deferred** | RLS deny-by-default on new tables; role grants = ops |
-| Full WS v2 message cutover | **Deferred** | Legacy frames + outbox remain; version names documented |
+| Separate DB roles per service | **Partial (WP-110)** | Migration `030` creates `mozetto_*` roles + GRANTs; dedicated DSNs = ops |
+| Full WS v2 message cutover | **Partial (WP-110)** | Dual-accept inbound; `GAME_WS_EMIT_V2` for outbound; clients still legacy-default |
 | Full index/replay/reconciliation rebuild | **Prior WPs** | WP-082/083/064; not re-proven in this closure |
 
 ---
@@ -200,29 +200,29 @@ Plan 19 proposed filenames `017`–`026` after existing `016`. The repo instead 
 
 ### WebSocket
 
-Versioned message names (`auth_v2`, `snapshot_v2`, `canonical_event_v1`, …) remain a **cutover deferral**. Persist-before-broadcast outbox (`020`) carries `schema_kind`; live game-server still speaks current frames.
+Versioned message names (`auth_v2`, `snapshot_v2`, `canonical_event_v1`, …) are dual-accepted inbound (WP-110). Outbound remains legacy unless `GAME_WS_EMIT_V2=1`. Persist-before-broadcast outbox (`020`) carries `schema_kind`.
 
 ---
 
 ## Ordered remaining migrations (if any)
 
-After `029`, **no further Plan 19 schema migrations are required** for exit-gate closure.
+After `029`, **no further Plan 19 schema tables are required** for exit-gate closure. WP-110 adds ops migration `030` (role GRANTs only).
 
 Optional follow-ups (not blocking Plan 19 DONE):
 
 1. Compensating migration to set real `energy_policy_hash` / protocol artifact rows from frozen vectors.
 2. `protocol_fee_sweeps` + `relayer_transactions` if ops wants dedicated tables.
 3. `safe_proposals` DB mirror of `packages/governance`.
-4. Postgres role grants per service (beyond RLS).
-5. ~~Wire `DbAgentStateStore` writer + Energy ledger persistence~~ — **done** in `@mozetto/agent-runtime` (`AGENT_STATE_STORE` / `ENERGY_LEDGER_STORE`; default still `memory`). Hosted migrate apply remains an ops step.
+4. ~~Postgres role grants per service~~ — **done** in migration `030` (`mozetto_*` NOLOGIN + GRANTs); dedicated DSNs still ops.
+5. ~~Wire `DbAgentStateStore` writer + Energy ledger persistence~~ — **done** (`AGENT_STATE_STORE` / `ENERGY_LEDGER_STORE`; scheduler persist hooks in WP-110).
 
 ---
 
 ## Deferred (honest)
 
-1. **Per-service Postgres roles / GRANTs** — RLS deny-by-default only.
-2. **Full WS v2 protocol cutover** — names documented; frames not globally renamed.
-3. **Hosted migrate apply for AgentState/Energy tables** — writers exist; operators must apply `026`+ on target `DATABASE_URL` (not claimed applied here).
+1. **Dedicated per-service DSNs / SET ROLE** — roles+GRANTs exist (`030`); apps still use single `DATABASE_URL`.
+2. **WS v2 emit as default for all clients** — dual-accept shipped; emit remains opt-in (`GAME_WS_EMIT_V2`).
+3. ~~**Hosted migrate apply for AgentState/Energy tables**~~ — `017`–`029` applied 2026-08-07; `030` via WP-110.
 4. **ML collusion detector + auto-punish** — forbidden by Plan 12; signal tables only.
 5. **Invented VRF/proof roots for legacy sessions** — explicitly refused; `attestation_class=legacy_attested`.
 6. **Breaking table renames** to Plan 19 names — synonym views only where safe (`vrf_*`, `broadcast_outbox`).

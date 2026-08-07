@@ -16,10 +16,13 @@ import type {
 } from "../provider/types.js";
 import { SEASON1_PRESETS } from "../policy/presets.js";
 import { MANDATORY_RESERVE, ENERGY_PER_HAND } from "../energy/costs.js";
+import { InMemoryEnergyLedgerStore } from "../energy/memory-store.js";
+import { energyLedgerStoreKeyOf } from "../energy/store.js";
 import { InMemoryAgentStateStore } from "../state/memory-store.js";
 import type { PublicTableEvent } from "../state/types.js";
 import {
   ContinuousCognitionScheduler,
+  createCognitionScheduler,
   CognitionPriorityQueue,
   selectSchedulerMode,
   SCHEDULER_POLICY_COMMITMENT_LABEL,
@@ -529,5 +532,87 @@ describe("Groq updateState (mocked HTTP)", () => {
     });
     assert.equal(result.applied, false);
     assert.equal(result.cancelled, true);
+  });
+});
+
+describe("WP-110 scheduler store persist hooks", () => {
+  it("persists Energy ledger when energyStore is wired", async () => {
+    const provider = new MockBackgroundProvider();
+    const store = new InMemoryAgentStateStore();
+    const energyStore = new InMemoryEnergyLedgerStore();
+    const sched = new ContinuousCognitionScheduler({
+      provider,
+      store,
+      energyStore,
+      sessionId: "s-persist",
+      handId: "h-persist",
+      seat: 0,
+      profileHash: "0xprofile",
+      axes: SEASON1_PRESETS.fox.axes,
+      autoDrain: false,
+    });
+
+    await sched.onPublicEvent(
+      evt({
+        cursor: 0,
+        kind: "action",
+        actorSeat: 1,
+        actionType: 13,
+        street: "preflop",
+        pot: "100",
+        activeSeats: [0, 1],
+      }),
+    );
+
+    const key = energyLedgerStoreKeyOf(sched.getLedger());
+    const loaded = await energyStore.get(key);
+    assert.ok(loaded);
+    assert.equal(loaded!.remainingEnergy, sched.getLedger().remainingEnergy);
+    const state = await store.get({ sessionId: "s-persist", handId: "h-persist", seat: 0 });
+    assert.ok(state);
+  });
+
+  it("createCognitionScheduler hydrates from stores", async () => {
+    const provider = new MockBackgroundProvider();
+    const store = new InMemoryAgentStateStore();
+    const energyStore = new InMemoryEnergyLedgerStore();
+
+    const first = await createCognitionScheduler({
+      provider,
+      store,
+      energyStore,
+      sessionId: "s-hydrate",
+      handId: "h-hydrate",
+      seat: 1,
+      profileHash: "0xprofile",
+      axes: SEASON1_PRESETS.machine.axes,
+      env: { AGENT_STATE_STORE: "memory", ENERGY_LEDGER_STORE: "memory" },
+      autoDrain: false,
+    });
+    await first.onPublicEvent(
+      evt({
+        cursor: 0,
+        kind: "board",
+        street: "flop",
+        boardCardCount: 3,
+        pot: "40",
+      }),
+    );
+    const energyAfter = first.getLedger().remainingEnergy;
+
+    const second = await createCognitionScheduler({
+      provider,
+      store,
+      energyStore,
+      sessionId: "s-hydrate",
+      handId: "h-hydrate",
+      seat: 1,
+      profileHash: "0xprofile",
+      axes: SEASON1_PRESETS.machine.axes,
+      env: { AGENT_STATE_STORE: "memory", ENERGY_LEDGER_STORE: "memory" },
+      autoDrain: false,
+    });
+    assert.equal(second.getLedger().remainingEnergy, energyAfter);
+    assert.equal(second.getState().publicEventCursor, first.getState().publicEventCursor);
   });
 });

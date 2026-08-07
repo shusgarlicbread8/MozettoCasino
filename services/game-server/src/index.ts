@@ -7,6 +7,7 @@ import { corsOriginCheck } from "@mozetto/server-env";
 import { TableRuntime } from "./table-runtime.js";
 import { resolvePlayer, resolvePlayerFromToken } from "./auth.js";
 import { defaultLeaseWaitMs, getLeaseManager } from "./lease/index.js";
+import { createWsSender, gameWsEmitMode } from "./ws-protocol.js";
 
 const app = Fastify({ logger: true });
 // Allow empty JSON bodies (leave/action clients often send Content-Type without payload).
@@ -243,13 +244,15 @@ app.get("/ws", { websocket: true }, (socket, req) => {
   let current: { rt: TableRuntime; client: Parameters<TableRuntime["subscribe"]>[0] } | null = null;
   let queue: Promise<void> = Promise.resolve();
 
-  const send = (data: unknown) => {
+  const send = createWsSender((data: unknown) => {
     try {
       socket.send(JSON.stringify(data));
     } catch {
       /* closed */
     }
-  };
+  });
+
+  const helloProtocolVersion = gameWsEmitMode === "v2" ? 2 : 1;
 
   // Try cookie auth on upgrade, then announce identity so clients can attach seat views.
   void resolvePlayer(req).then((p) => {
@@ -258,13 +261,13 @@ app.get("/ws", { websocket: true }, (socket, req) => {
     send({
       type: "hello",
       serverTime: new Date().toISOString(),
-      protocolVersion: 1,
+      protocolVersion: helloProtocolVersion,
       userId: p.profileId,
       agentHandle: p.agentHandle,
     });
   });
 
-  send({ type: "hello", serverTime: new Date().toISOString(), protocolVersion: 1 });
+  send({ type: "hello", serverTime: new Date().toISOString(), protocolVersion: helloProtocolVersion });
 
   async function handleMessage(raw: unknown) {
     let msg: unknown;
@@ -298,7 +301,7 @@ app.get("/ws", { websocket: true }, (socket, req) => {
         return send({
           type: "hello",
           serverTime: new Date().toISOString(),
-          protocolVersion: 1,
+          protocolVersion: helloProtocolVersion,
           userId: identity.profileId,
           agentHandle: identity.agentHandle,
         });
