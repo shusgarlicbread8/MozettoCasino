@@ -2,7 +2,7 @@
 
 **Authority:** Follows `00_READ_ME_FIRST.md`, `01_MASTER_EXECUTION_ROADMAP.md`, `16_AGENT_WORK_PACKETS.md`, `17_FINAL_DEFINITION_OF_DONE.md`.  
 **Rule:** Protocol V3 specs are **frozen** (WP-010–015). Implementations MUST match `/specs` and fail CI if vectors diverge. Do not invent new encodings.  
-**Last updated:** 2026-08-07 (WP-121 Home Play Now first DONE; WP-120 DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
+**Last updated:** 2026-08-07 (WP-123 Strategy setup DONE; WP-121 + WP-120 DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
 
 ---
 
@@ -21,7 +21,7 @@
 | Field | Value |
 |---|---|
 | **Active wave** | **Wave 11 Production Integration** + **Wave 12 Consumer UX** (parallel) |
-| **Active packets** | WP-106–113 (Track A/C), WP-122–132 (Track B; WP-120–121 DONE); Sepolia Stage A blocked until WP-106–112 green |
+| **Active packets** | WP-106–113 (Track A/C), WP-122 / WP-124–132 (Track B; WP-120–121 + WP-123 DONE); Sepolia Stage A blocked until WP-106–112 green |
 | **Architecture status** | Protocol architecture largely built (~component-complete). Remaining work is integration, productization, hosted staging — **not** “ops only.” |
 | **Blocked until (Sepolia Stage A)** | WP-106–112 green on Anvil release candidate; then funded Sepolia deploy |
 | **Hard stop** | No new architecture invention; live AWS Nitro during Stage A; Plan 15 expansion stays deferred |
@@ -31,7 +31,7 @@
 | **Plan 11 note** | Rake/treasury code DONE; Season 1 schedule = hypotheses until WP-111 empirical COGS |
 | **Plan 12 note** | Ratings / anti-cheat DONE — ML collusion deferred |
 | **Plan 19 note** | Schema map DONE; hosted cutover **WP-110 DONE** (GRANTs `030`, scheduler persist, WS dual-accept) |
-| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120–121 DONE → WP-122+); Plan 20B cinematic 3D remains DEFERRED |
+| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120–121 + WP-123 DONE → WP-122+); Plan 20B cinematic 3D remains DEFERRED |
 | **Anvil release candidate** | Normal user can Find Match → Groq AI session → verify → withdraw with **zero GAPs** (WP-106–112) |
 
 ---
@@ -223,10 +223,10 @@
 | WP-106 | True full Anvil match lifecycle | `IN_PROGRESS` | Browser/API → match → SeatTicket V3 → `sealAndFundSession` → real game → settle → withdraw; **zero GAPs** |
 | WP-107 | Live Groq AI table integration | `DONE` | Game-server runs Groq seats + cognition + Energy + cadence for complete sessions |
 | WP-108 | Real canonical roots | `IN_PROGRESS` | AI gameplay produces real eventRoot/handRoot/balanceRoot (no stub settlement roots) |
-| WP-109 | Poker release hardening | `NOT_STARTED` | Uncalled bets, deep 6-max, sit-out/timeout; PokerKit mandatory oracle; large generated set |
+| WP-109 | Poker release hardening | `IN_PROGRESS` | Uncalled bets, deep 6-max, sit-out/timeout; PokerKit mandatory oracle; large generated set |
 | WP-110 | Hosted DB + WS cutover | `DONE` | Migrations 017–030; GRANTs; scheduler DB persist; WS v2 dual-accept |
-| WP-111 | Economics instrumentation | `NOT_STARTED` | Actual Groq/chain/VRF/relayer/cloud COGS + rake contribution per hand |
-| WP-112 | Hosted proof pipeline | `NOT_STARTED` | Continuous CheckpointSource → publisher → SQL proofs → Verify page |
+| WP-111 | Economics instrumentation | `IN_PROGRESS` | Actual Groq/chain/VRF/relayer/cloud COGS + rake contribution per hand |
+| WP-112 | Hosted proof pipeline | `IN_PROGRESS` | Continuous CheckpointSource → publisher → SQL proofs → Verify page |
 | WP-113 | Live chaos completeness | `NOT_STARTED` | Multi-container Redis/RPC/VRF/dealer/worker/settlement failure drills |
 
 **Wave 11 gate:** WP-106–112 green ⇒ Anvil release candidate. Do **not** open Sepolia Stage A before this gate.
@@ -239,8 +239,8 @@
 |---|---|---|
 | WP-120 | Product IA / design system | `DONE` |
 | WP-121 | Home (Play Now first) | `DONE` |
-| WP-122 | Play / Find Match | `IN_PROGRESS` |
-| WP-123 | Strategy setup (profiles + tuning) | `IN_PROGRESS` |
+| WP-122 | Play / Find Match | `DONE` |
+| WP-123 | Strategy setup (profiles + tuning) | `DONE` |
 | WP-124 | Wallet / onboarding (ArenaAccount) | `IN_PROGRESS` |
 | WP-125 | Live table 2D premium | `NOT_STARTED` |
 | WP-126 | AI cognition presentation | `NOT_STARTED` |
@@ -260,6 +260,24 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 ---
 
 ## Session log
+
+### 2026-08-07 — WP-123 Strategy setup (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- Strategy UI on `/my-ai` (+ `/my-ai/setup`): Shark / Fox / Professor / Machine, six bounded traits, behavioral preview (no ROI promises)
+- Preset + matchmaking hash helpers wired to WP-071 / `agent_profile_versions` seed hashes
+- Find Match reads preferred `profileKey`, shows `profileConfigHash` lock, links Tune → `/my-ai`
+- Removed free-text coaching / CoT editor from AI Strategy surface
+- Docs: `docs/WP-123_STRATEGY_SETUP.md`
+
+**Commands / evidence:**
+- `pnpm --filter @mozetto/web typecheck` — pass
+
+**Out of scope:** Spec mutations; API axis-envelope accept path (runtime ready); guaranteed-return copy.
+
+**Follow-up:** WP-122 Play polish; promote full PROFILE_V1 hashes when find-match accepts typed axes.
 
 ### 2026-08-07 — WP-121 Home (Play Now first) (DONE)
 

@@ -98,7 +98,7 @@ Composition: **Mozetto** (hero brand) → one headline → one supporting line �
 - Plan 20B cinematic 3D art
 - Full Home content rewrite (WP-121)
 - Find Match overlay completeness (WP-122)
-- Strategy sliders (WP-123)
+- Strategy sliders (WP-123 — see `docs/WP-123_STRATEGY_SETUP.md`)
 - Live table premium polish (WP-125+)
 
 ---

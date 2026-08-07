@@ -47,7 +47,7 @@ export const leagueLabels: Record<LeagueId, string> = {
   sovereign: "Sovereign",
 };
 
-/** Strategy profile identities (WP-123 will wire controls). */
+/** Strategy profile identities (WP-123 Strategy setup). */
 export const profileColors = {
   shark: "#3DDC8A",
   fox: "#E8A06A",
