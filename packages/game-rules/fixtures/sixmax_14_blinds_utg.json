@@ -1,0 +1,69 @@
+{
+  "id": "sixmax_14_blinds_utg",
+  "description": "6-max: button→SB→BB→UTG first to act; blinds posted",
+  "coverage": [
+    "blinds",
+    "button",
+    "sixmax"
+  ],
+  "format": "sixmax",
+  "seatCount": 6,
+  "config": {
+    "tableId": "freeze-sixmax",
+    "smallBlind": 50,
+    "bigBlind": 100,
+    "rakePct": 0,
+    "rakeCap": null
+  },
+  "seats": [
+    {
+      "seatIndex": 0,
+      "stack": 10000
+    },
+    {
+      "seatIndex": 1,
+      "stack": 10000
+    },
+    {
+      "seatIndex": 2,
+      "stack": 10000
+    },
+    {
+      "seatIndex": 3,
+      "stack": 10000
+    },
+    {
+      "seatIndex": 4,
+      "stack": 10000
+    },
+    {
+      "seatIndex": 5,
+      "stack": 10000
+    }
+  ],
+  "steps": [
+    {
+      "op": "startHand",
+      "serverSeed": "wp030-six-blinds",
+      "handId": "hand-six-blinds"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "button": 0,
+        "actingIndex": 3,
+        "pot": 150,
+        "stacks": [
+          10000,
+          9950,
+          9900,
+          10000,
+          10000,
+          10000
+        ],
+        "stateHash": "0x3da8fcce56586e0fd0e72b0abb6a33476d0b0595feaf97b52b72f374adc9ac9d",
+        "legalActionsHash": "0x531b6d088688b9efcf471b1aead0462435957b97afadaa30526471f909385647"
+      }
+    }
+  ]
+}

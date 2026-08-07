@@ -1,0 +1,92 @@
+{
+  "id": "sixmax_15_fold_to_bb",
+  "description": "6-max: everyone folds to BB; BB wins blinds without showdown",
+  "coverage": [
+    "fold-win",
+    "sixmax"
+  ],
+  "format": "sixmax",
+  "seatCount": 6,
+  "config": {
+    "tableId": "freeze-sixmax",
+    "smallBlind": 50,
+    "bigBlind": 100,
+    "rakePct": 0,
+    "rakeCap": null
+  },
+  "seats": [
+    {
+      "seatIndex": 0,
+      "stack": 10000
+    },
+    {
+      "seatIndex": 1,
+      "stack": 10000
+    },
+    {
+      "seatIndex": 2,
+      "stack": 10000
+    },
+    {
+      "seatIndex": 3,
+      "stack": 10000
+    },
+    {
+      "seatIndex": 4,
+      "stack": 10000
+    },
+    {
+      "seatIndex": 5,
+      "stack": 10000
+    }
+  ],
+  "steps": [
+    {
+      "op": "startHand",
+      "serverSeed": "wp030-six-foldbb",
+      "handId": "hand-six-foldbb"
+    },
+    {
+      "op": "action",
+      "action": "fold"
+    },
+    {
+      "op": "action",
+      "action": "fold"
+    },
+    {
+      "op": "action",
+      "action": "fold"
+    },
+    {
+      "op": "action",
+      "action": "fold"
+    },
+    {
+      "op": "action",
+      "action": "fold"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "street": "settlement",
+        "rake": 0,
+        "winners": [
+          {
+            "seatIndex": 2,
+            "amount": 150
+          }
+        ],
+        "stacks": [
+          10000,
+          9950,
+          10050,
+          10000,
+          10000,
+          10000
+        ],
+        "stateHash": "0x7a6e268c4fc5131f588f28e7a1c830e68eb8f755a6b2593b9af4c0939b4734a6"
+      }
+    }
+  ]
+}

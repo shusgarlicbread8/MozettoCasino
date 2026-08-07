@@ -1,0 +1,134 @@
+{
+  "id": "multi_12_nested_side_pots",
+  "description": "Four-way contributions 100/100/50/20 → layers 80/90/100; AA scoops",
+  "coverage": [
+    "side-pots",
+    "nested",
+    "sixmax"
+  ],
+  "format": "multi",
+  "seatCount": 4,
+  "config": {
+    "tableId": "freeze-sixmax",
+    "smallBlind": 50,
+    "bigBlind": 100,
+    "rakePct": 0,
+    "rakeCap": null
+  },
+  "seats": [
+    {
+      "seatIndex": 0,
+      "stack": 0
+    },
+    {
+      "seatIndex": 1,
+      "stack": 0
+    },
+    {
+      "seatIndex": 2,
+      "stack": 0
+    },
+    {
+      "seatIndex": 3,
+      "stack": 0
+    }
+  ],
+  "steps": [
+    {
+      "op": "injectShowdown",
+      "button": 3,
+      "board": [
+        "2c",
+        "3d",
+        "4h",
+        "5s",
+        "7c"
+      ],
+      "seats": [
+        {
+          "seatIndex": 0,
+          "stack": 0,
+          "totalBet": 100,
+          "hole": [
+            "Ac",
+            "Ad"
+          ]
+        },
+        {
+          "seatIndex": 1,
+          "stack": 0,
+          "totalBet": 100,
+          "hole": [
+            "Kh",
+            "Kd"
+          ]
+        },
+        {
+          "seatIndex": 2,
+          "stack": 0,
+          "totalBet": 50,
+          "hole": [
+            "Qh",
+            "Qd"
+          ]
+        },
+        {
+          "seatIndex": 3,
+          "stack": 0,
+          "totalBet": 20,
+          "hole": [
+            "Jh",
+            "Jd"
+          ]
+        }
+      ]
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "potLayers": [
+          {
+            "amount": 80,
+            "eligible": [
+              0,
+              1,
+              2,
+              3
+            ]
+          },
+          {
+            "amount": 90,
+            "eligible": [
+              0,
+              1,
+              2
+            ]
+          },
+          {
+            "amount": 100,
+            "eligible": [
+              0,
+              1
+            ]
+          }
+        ],
+        "stateHash": "0xc756baee3f967aa9c2d9f5926fe719f037a49fadb0338f5a39bc50746128e8de"
+      }
+    },
+    {
+      "op": "settleShowdown"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "stacks": [
+          270,
+          0,
+          0,
+          0
+        ],
+        "stateHash": "0xdaed6b80c7ffa5b30a8528890d72e69132fdbd29846eb3da2c1495714219c82e"
+      }
+    }
+  ]
+}

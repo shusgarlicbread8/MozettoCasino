@@ -1,0 +1,215 @@
+{
+  "workPacket": "WP-030",
+  "generatedAt": "frozen",
+  "stateDomain": "MOZETTO_TS_ENGINE_STATE_V1",
+  "tsEngineBuildId": "mozetto-nlhe-ts-freeze-wp030",
+  "tsEngineBuildHash": "0x361eeea0a9280d50bc1d32edeb5f4cf950c2ee6e60f3afe4b7c1b56f5ab9808b",
+  "protocolV3EngineHashPlaceholder": "0xfbaa172ca206187431a693cc6e030f2a05b550eaf7a54f3e62a3f86072b4d232",
+  "note": "tsEngineBuildHash identifies this TS freeze. Protocol V3 engineHash remains the draft placeholder until Rust/TS promotion.",
+  "fixtureCount": 19,
+  "fixtures": [
+    {
+      "id": "hu_01_blinds_button_preflop",
+      "file": "hu_01_blinds_button_preflop.json",
+      "format": "hu",
+      "coverage": [
+        "blinds",
+        "button",
+        "legal-actions",
+        "hu"
+      ]
+    },
+    {
+      "id": "hu_02_sb_folds_to_bb",
+      "file": "hu_02_sb_folds_to_bb.json",
+      "format": "hu",
+      "coverage": [
+        "fold-win",
+        "blinds",
+        "hu"
+      ]
+    },
+    {
+      "id": "hu_03_limp_checkdown_chop",
+      "file": "hu_03_limp_checkdown_chop.json",
+      "format": "hu",
+      "coverage": [
+        "legal-actions",
+        "streets",
+        "hu"
+      ]
+    },
+    {
+      "id": "hu_04_short_stack_blind_allin",
+      "file": "hu_04_short_stack_blind_allin.json",
+      "format": "hu",
+      "coverage": [
+        "blinds",
+        "all-in",
+        "short-stack",
+        "hu"
+      ]
+    },
+    {
+      "id": "hu_05_both_allin_preflop",
+      "file": "hu_05_both_allin_preflop.json",
+      "format": "hu",
+      "coverage": [
+        "all-in",
+        "runout",
+        "showdown",
+        "hu"
+      ]
+    },
+    {
+      "id": "hu_06_raise_to_3bb_call",
+      "file": "hu_06_raise_to_3bb_call.json",
+      "format": "hu",
+      "coverage": [
+        "legal-actions",
+        "raise",
+        "hu"
+      ]
+    },
+    {
+      "id": "hu_07_showdown_tie_even",
+      "file": "hu_07_showdown_tie_even.json",
+      "format": "hu",
+      "coverage": [
+        "showdown-tie",
+        "hu"
+      ]
+    },
+    {
+      "id": "hu_08_rake_showdown",
+      "file": "hu_08_rake_showdown.json",
+      "format": "hu",
+      "coverage": [
+        "rake",
+        "showdown",
+        "hu"
+      ]
+    },
+    {
+      "id": "hu_09_rake_cap",
+      "file": "hu_09_rake_cap.json",
+      "format": "hu",
+      "coverage": [
+        "rake",
+        "rake-cap",
+        "hu"
+      ]
+    },
+    {
+      "id": "multi_10_incomplete_allin_no_reopen",
+      "file": "multi_10_incomplete_allin_no_reopen.json",
+      "format": "multi",
+      "coverage": [
+        "incomplete-all-in",
+        "legal-actions",
+        "sixmax"
+      ]
+    },
+    {
+      "id": "multi_11_three_way_side_pots",
+      "file": "multi_11_three_way_side_pots.json",
+      "format": "multi",
+      "coverage": [
+        "side-pots",
+        "showdown",
+        "sixmax"
+      ]
+    },
+    {
+      "id": "multi_12_nested_side_pots",
+      "file": "multi_12_nested_side_pots.json",
+      "format": "multi",
+      "coverage": [
+        "side-pots",
+        "nested",
+        "sixmax"
+      ]
+    },
+    {
+      "id": "multi_13_odd_chip_after_button",
+      "file": "multi_13_odd_chip_after_button.json",
+      "format": "multi",
+      "coverage": [
+        "odd-chip",
+        "showdown-tie",
+        "sixmax"
+      ]
+    },
+    {
+      "id": "sixmax_14_blinds_utg",
+      "file": "sixmax_14_blinds_utg.json",
+      "format": "sixmax",
+      "coverage": [
+        "blinds",
+        "button",
+        "sixmax"
+      ]
+    },
+    {
+      "id": "sixmax_15_fold_to_bb",
+      "file": "sixmax_15_fold_to_bb.json",
+      "format": "sixmax",
+      "coverage": [
+        "fold-win",
+        "sixmax"
+      ]
+    },
+    {
+      "id": "multi_16_folded_chips_in_pot",
+      "file": "multi_16_folded_chips_in_pot.json",
+      "format": "multi",
+      "coverage": [
+        "side-pots",
+        "fold",
+        "sixmax"
+      ]
+    },
+    {
+      "id": "hu_17_exact_call_allin",
+      "file": "hu_17_exact_call_allin.json",
+      "format": "hu",
+      "coverage": [
+        "all-in",
+        "legal-actions",
+        "hu"
+      ]
+    },
+    {
+      "id": "hu_18_min_raise_bounds",
+      "file": "hu_18_min_raise_bounds.json",
+      "format": "hu",
+      "coverage": [
+        "legal-actions",
+        "raise",
+        "hu"
+      ]
+    },
+    {
+      "id": "hu_19_button_rotates",
+      "file": "hu_19_button_rotates.json",
+      "format": "hu",
+      "coverage": [
+        "button",
+        "hu"
+      ]
+    }
+  ],
+  "sixMaxCoverageStatus": {
+    "blindsButtonUtg": "covered (sixmax_14)",
+    "foldToBb": "covered (sixmax_15)",
+    "sidePotsNested": "covered (multi_11, multi_12)",
+    "incompleteAllIn": "covered (multi_10)",
+    "oddChip": "covered (multi_13); pure HU equal-contrib pot always even",
+    "showdownTies": "covered (hu_07, multi_13)",
+    "rakeHooks": "covered (hu_08, hu_09); Plan 11 computeRake bps+floor+cap + noFlopNoDrop fold-win; uncalled-bet exclusion DEFERRED",
+    "uncalledBetReturn": "NOT implemented — foldWin awards full pot including uncalled",
+    "sitOutBlindPosts": "NOT covered / limited sitOut support",
+    "timeoutFallback": "NOT in engine",
+    "duplicateCardRejection": "NOT in engine (deck assumed valid)"
+  }
+}

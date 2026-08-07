@@ -58,7 +58,11 @@ function isStraight(vals: number[]): number | null {
   return null;
 }
 
-function rankFive(cards: Card[]): RankedHand {
+/** Rank exactly five cards. */
+export function rankFive(cards: Card[]): RankedHand {
+  if (cards.length !== 5) {
+    throw new Error(`rankFive requires exactly 5 cards, got ${cards.length}`);
+  }
   const vals = cards.map((c) => rankValue(c.rank)).sort((a, b) => b - a);
   const suits = cards.map((c) => c.suit);
   const flush = suits.every((s) => s === suits[0]);

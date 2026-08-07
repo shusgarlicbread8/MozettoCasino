@@ -1,0 +1,85 @@
+{
+  "id": "hu_07_showdown_tie_even",
+  "description": "HU showdown identical hands, equal totalBet → even chop (odd-chip needs ≥3 contributors; see multi_13)",
+  "coverage": [
+    "showdown-tie",
+    "hu"
+  ],
+  "format": "hu",
+  "seatCount": 2,
+  "config": {
+    "tableId": "freeze-hu-tie",
+    "smallBlind": 50,
+    "bigBlind": 100,
+    "rakePct": 0,
+    "rakeCap": null
+  },
+  "seats": [
+    {
+      "seatIndex": 0,
+      "stack": 0
+    },
+    {
+      "seatIndex": 1,
+      "stack": 0
+    }
+  ],
+  "steps": [
+    {
+      "op": "injectShowdown",
+      "button": 0,
+      "board": [
+        "2c",
+        "3d",
+        "4h",
+        "5s",
+        "7c"
+      ],
+      "seats": [
+        {
+          "seatIndex": 0,
+          "stack": 0,
+          "totalBet": 500000,
+          "hole": [
+            "As",
+            "Kh"
+          ]
+        },
+        {
+          "seatIndex": 1,
+          "stack": 0,
+          "totalBet": 500000,
+          "hole": [
+            "Ad",
+            "Kc"
+          ]
+        }
+      ]
+    },
+    {
+      "op": "settleShowdown"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "street": "settlement",
+        "winners": [
+          {
+            "seatIndex": 0,
+            "amount": 500000
+          },
+          {
+            "seatIndex": 1,
+            "amount": 500000
+          }
+        ],
+        "stacks": [
+          500000,
+          500000
+        ],
+        "rake": 0,
+        "stateHash": "0x963bc411e21424d36d23fc158f65932ce62790c9b1fae9390c53f74495cf915b"
+      }
+    }
+  ]
+}

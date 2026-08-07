@@ -1,0 +1,112 @@
+{
+  "id": "multi_11_three_way_side_pots",
+  "description": "Contributions 100/100/20: AA short wins main; KK wins side → stacks [260,100,60]",
+  "coverage": [
+    "side-pots",
+    "showdown",
+    "sixmax"
+  ],
+  "format": "multi",
+  "seatCount": 3,
+  "config": {
+    "tableId": "freeze-sixmax",
+    "smallBlind": 50,
+    "bigBlind": 100,
+    "rakePct": 0,
+    "rakeCap": null
+  },
+  "seats": [
+    {
+      "seatIndex": 0,
+      "stack": 100
+    },
+    {
+      "seatIndex": 1,
+      "stack": 100
+    },
+    {
+      "seatIndex": 2,
+      "stack": 0
+    }
+  ],
+  "steps": [
+    {
+      "op": "injectShowdown",
+      "button": 2,
+      "board": [
+        "2c",
+        "3d",
+        "4h",
+        "5s",
+        "7c"
+      ],
+      "seats": [
+        {
+          "seatIndex": 0,
+          "stack": 100,
+          "totalBet": 100,
+          "hole": [
+            "Kh",
+            "Kd"
+          ]
+        },
+        {
+          "seatIndex": 1,
+          "stack": 100,
+          "totalBet": 100,
+          "hole": [
+            "Qh",
+            "Qd"
+          ]
+        },
+        {
+          "seatIndex": 2,
+          "stack": 0,
+          "totalBet": 20,
+          "hole": [
+            "Ac",
+            "Ad"
+          ]
+        }
+      ]
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "potLayers": [
+          {
+            "amount": 60,
+            "eligible": [
+              0,
+              1,
+              2
+            ]
+          },
+          {
+            "amount": 160,
+            "eligible": [
+              0,
+              1
+            ]
+          }
+        ],
+        "stateHash": "0x5c4e9303c9a3b9b10356cd48682d690189a62c58de32918f444e60536df72df5"
+      }
+    },
+    {
+      "op": "settleShowdown"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "stacks": [
+          260,
+          100,
+          60
+        ],
+        "rake": 0,
+        "stateHash": "0xf34e3a2f0f32abb6ec7881d1673375c22d526611cb8788560a57d2a214987626"
+      }
+    }
+  ]
+}

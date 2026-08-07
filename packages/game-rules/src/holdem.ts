@@ -1,6 +1,7 @@
 import type { Card, PokerAction } from "@mozetto/shared-types";
 import { commitSeed, shuffleDeck } from "./cards.js";
 import { bestHand, compareScores } from "./hand-rank.js";
+import { allocateSidePotRake, computeRakeFromPct } from "./rake.js";
 
 export type SeatState = {
   seatIndex: number;
@@ -368,23 +369,21 @@ export function settleShowdown(state: HoldemState): { state: HoldemState; events
   const layers = buildPots(state.seats);
   const totalPot = layers.reduce((n, p) => n + p.amount, 0);
   // Prefer layered sum; fall back to state.pot for safety.
-  let potPool = totalPot > 0 ? totalPot : state.pot;
-  let rake = live.length > 1 ? Math.floor(potPool * state.config.rakePct) : 0;
-  if (state.config.rakeCap != null) rake = Math.min(rake, state.config.rakeCap);
-
-  // Distribute rake proportionally across layers (floor), remainder from last layer.
-  let rakeLeft = rake;
-  const netLayers = layers.map((layer, i) => {
-    let layerRake = 0;
-    if (rake > 0 && potPool > 0) {
-      if (i === layers.length - 1) layerRake = rakeLeft;
-      else {
-        layerRake = Math.floor((layer.amount / potPool) * rake);
-        rakeLeft -= layerRake;
-      }
-    }
-    return { ...layer, amount: layer.amount - layerRake };
+  const potPool = totalPot > 0 ? totalPot : state.pot;
+  // Plan 11: floor(eligiblePot × bps / 10_000), then cap. Engine config keeps rakePct for fixtures.
+  const rake = computeRakeFromPct({
+    eligiblePot: potPool,
+    rakePct: state.config.rakePct,
+    rakeCap: state.config.rakeCap,
+    liveHands: live.length,
   });
+
+  // Side-pot allocation: proportional floor; remainder on last layer (SEASON1_RAKE_ELIGIBILITY).
+  const layerRakes = allocateSidePotRake(layers, rake);
+  const netLayers = layers.map((layer, i) => ({
+    ...layer,
+    amount: layer.amount - layerRakes[i]!,
+  }));
 
   const seats = state.seats.map((s) => ({ ...s }));
   const won = new Map<number, { amount: number; label: string }>();

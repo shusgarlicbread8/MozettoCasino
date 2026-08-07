@@ -1,0 +1,25 @@
+{
+  "name": "@mozetto/reconciliation",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts"
+  },
+  "dependencies": {
+    "@mozetto/database": "workspace:*",
+    "viem": "^2.55.11"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/pg": "^8.15.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}

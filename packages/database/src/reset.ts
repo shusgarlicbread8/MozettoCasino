@@ -19,6 +19,10 @@ export async function resetAccountsToFresh(opts?: { startingBalance?: number }) 
   await query(`delete from agent_decisions`);
   await query(`delete from game_snapshots`).catch(() => null);
   await query(`delete from hand_events`);
+  await query(`delete from event_persistence_outbox`).catch(() => null);
+  await query(`delete from public_event_payloads`).catch(() => null);
+  await query(`delete from private_payload_ciphertexts`).catch(() => null);
+  await query(`delete from canonical_game_events`).catch(() => null);
   await query(`delete from hands`);
   await query(`delete from escrow_sessions`).catch(() => null);
   await query(`delete from settlements`).catch(() => null);
@@ -41,7 +45,9 @@ export async function resetAccountsToFresh(opts?: { startingBalance?: number }) 
   // 4. Retire every live table so matchmaking starts clean.
   await query(`update tables set is_active=false where is_active=true`);
 
-  // 5. Clear notifications for a fresh inbox.
+  await query(`delete from matchmaking_allocation_log`).catch(() => null);
+  await query(`delete from queued_seat_changes`).catch(() => null);
+  await query(`delete from table_epochs`).catch(() => null);
   await query(`delete from notifications`).catch(() => null);
 
   // 6. Reset every non-system profile: bronze league + $starting wallet.

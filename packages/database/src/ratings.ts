@@ -3,10 +3,13 @@ import {
   confidenceLabel,
   defaultPlayer,
   emptyCounts,
+  evaluateRatingUpdateGate,
   mergeCounts,
   profileKeyBaseline,
   rateHeadsUpMatch,
+  repeatedOpponentRatingWeight,
   type GlickoPlayer,
+  type RatingMatchClass,
 } from "@mozetto/ratings";
 import { query } from "./client.js";
 
@@ -42,7 +45,7 @@ function asPlayer(row: { rating: string | number; rd: string | number; volatilit
   };
 }
 
-/** Weight for repeated opponents in the last 24h (full → half → zero). */
+/** Weight for repeated opponents in the last 24h (full → half → zero). WP-043 / Plan 12. */
 export async function repeatedOpponentWeight(ownerA: string, ownerB: string): Promise<number> {
   const res = await query(
     `select count(*)::int as n from rated_matches
@@ -50,15 +53,29 @@ export async function repeatedOpponentWeight(ownerA: string, ownerB: string): Pr
        and ((owner_a=$1 and owner_b=$2) or (owner_a=$2 and owner_b=$1))`,
     [ownerA, ownerB],
   );
-  const n = Number(res.rows[0]?.n ?? 0);
-  if (n < 5) return 1;
-  if (n < 10) return 0.5;
-  return 0;
+  return repeatedOpponentRatingWeight(Number(res.rows[0]?.n ?? 0));
 }
+
+export type SettleRatedMatchGate = {
+  matchClass?: RatingMatchClass;
+  settlementConfirmed?: boolean;
+  replayOrEventVerified?: boolean;
+  providerIncidentVoid?: boolean;
+  integrityHold?: boolean;
+  pairIdentityOk?: boolean;
+  /** On-chain / demo session id referenced by the rating update. */
+  sessionId?: string | null;
+  /**
+   * Demo / backfill soft path: allow missing proof root.
+   * On-chain settlement-worker should leave this false/undefined.
+   */
+  allowMissingProofRoot?: boolean;
+};
 
 /**
  * Settle a standardised HU match into Glicko-2 for both accounts.
  * scoreA: 1 win / 0.5 draw / 0 loss from owner A's perspective.
+ * Stake is recorded for analytics only — it never scales Glicko deltas (Plan 12).
  */
 export async function settleRatedMatch(opts: {
   poolId: string;
@@ -72,14 +89,41 @@ export async function settleRatedMatch(opts: {
   stake?: number | null;
   eventLogRoot?: string | null;
   reason?: string;
+  /** Plan 12 rating update gate inputs (optional; sensible defaults for legacy callers). */
+  gate?: SettleRatedMatchGate;
 }) {
   if (opts.ownerA === opts.ownerB) throw new Error("Cannot rate an account against itself");
   const weight = await repeatedOpponentWeight(opts.ownerA, opts.ownerB);
-  if (weight <= 0) {
+
+  const g = opts.gate ?? {};
+  const matchClass = g.matchClass ?? "ranked_public";
+  const format = opts.poolId.startsWith("nlhe_6max") || opts.poolId.includes("6max") ? "sixmax" : "hu";
+  const allowMissingProofRoot =
+    g.allowMissingProofRoot ??
+    (matchClass === "ranked_public" && !opts.eventLogRoot);
+  const gateResult = evaluateRatingUpdateGate({
+    matchClass,
+    format,
+    settlementConfirmed: g.settlementConfirmed ?? true,
+    replayOrEventVerified:
+      g.replayOrEventVerified ?? (Boolean(opts.eventLogRoot) || allowMissingProofRoot),
+    providerIncidentVoid: g.providerIncidentVoid ?? false,
+    integrityHold: g.integrityHold ?? false,
+    pairIdentityOk: g.pairIdentityOk ?? true,
+    ratingWeight: weight,
+    poolId: opts.poolId,
+    sessionId: g.sessionId ?? opts.tableId ?? null,
+    settlementOrProofRoot: opts.eventLogRoot ?? null,
+    allowMissingProofRoot,
+  });
+
+  if (gateResult.allow === false) {
+    const skipReason =
+      gateResult.reason === "zero_pair_weight" ? "repeated_opponent_cap" : gateResult.reason;
     await query(
       `insert into rated_matches
         (pool_id, table_id, owner_a, owner_b, agent_a, agent_b, score_a, weight, hands, stake, status, reason, event_log_root)
-       values ($1,$2,$3,$4,$5,$6,$7,0,$8,$9,'settled','repeated_opponent_cap',$10)`,
+       values ($1,$2,$3,$4,$5,$6,$7,0,$8,$9,'settled',$10,$11)`,
       [
         opts.poolId,
         opts.tableId ?? null,
@@ -90,11 +134,14 @@ export async function settleRatedMatch(opts: {
         opts.scoreA,
         opts.hands ?? 0,
         opts.stake ?? null,
+        skipReason,
         opts.eventLogRoot ?? null,
       ],
     );
-    return { skipped: true as const, reason: "repeated_opponent_cap" };
+    return { skipped: true as const, reason: skipReason };
   }
+
+  const appliedWeight = gateResult.weight;
 
   await ensureAccountRatings(opts.ownerA);
   await ensureAccountRatings(opts.ownerB);
@@ -102,7 +149,7 @@ export async function settleRatedMatch(opts: {
   const rowB = await getAccountRating(opts.ownerB, opts.poolId);
   const beforeA = asPlayer(rowA);
   const beforeB = asPlayer(rowB);
-  const { a: nextA, b: nextB } = rateHeadsUpMatch(beforeA, beforeB, opts.scoreA, weight);
+  const { a: nextA, b: nextB } = rateHeadsUpMatch(beforeA, beforeB, opts.scoreA, appliedWeight);
 
   const match = await query(
     `insert into rated_matches
@@ -117,7 +164,7 @@ export async function settleRatedMatch(opts: {
       opts.agentA ?? null,
       opts.agentB ?? null,
       opts.scoreA,
-      weight,
+      appliedWeight,
       opts.hands ?? 0,
       opts.stake ?? null,
       opts.reason ?? "hu_match",
@@ -183,7 +230,7 @@ export async function settleRatedMatch(opts: {
   await writeSide(opts.ownerA, opts.agentA, beforeA, nextA, opts.scoreA);
   await writeSide(opts.ownerB, opts.agentB, beforeB, nextB, 1 - opts.scoreA);
 
-  return { skipped: false as const, matchId, a: nextA, b: nextB, weight };
+  return { skipped: false as const, matchId, a: nextA, b: nextB, weight: appliedWeight };
 }
 
 export async function refreshAggressionFromActions(ownerId: string, poolId = "hu_holdem_standard") {

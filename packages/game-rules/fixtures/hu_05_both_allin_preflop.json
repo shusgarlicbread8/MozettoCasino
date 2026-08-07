@@ -1,0 +1,83 @@
+{
+  "id": "hu_05_both_allin_preflop",
+  "description": "HU: SB shoves, BB calls all-in; runout then settlement",
+  "coverage": [
+    "all-in",
+    "runout",
+    "showdown",
+    "hu"
+  ],
+  "format": "hu",
+  "seatCount": 2,
+  "config": {
+    "tableId": "freeze-hu",
+    "smallBlind": 50,
+    "bigBlind": 100,
+    "rakePct": 0,
+    "rakeCap": null
+  },
+  "seats": [
+    {
+      "seatIndex": 0,
+      "stack": 500
+    },
+    {
+      "seatIndex": 1,
+      "stack": 500
+    }
+  ],
+  "steps": [
+    {
+      "op": "startHand",
+      "serverSeed": "wp030-hu-ai",
+      "handId": "hand-hu-ai"
+    },
+    {
+      "op": "action",
+      "action": "all_in"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "street": "preflop",
+        "pot": 600,
+        "actingIndex": 1,
+        "stateHash": "0xa932ff17ba2ac6c57970605c64922b8a0514e12083eeb3eb506d502e9387681e",
+        "legalActionsHash": "0xf2edf41744e51ace09a8463dcbff96f806b013bba37fbfd6d5e4aa6211f72f63"
+      }
+    },
+    {
+      "op": "action",
+      "action": "all_in"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "actingIndex": null,
+        "pot": 1000,
+        "stateHash": "0x72d8f4c281f4db7ef21206db8d5361fa0dc5536b0b7f04dacb2bbf832f4c022e"
+      }
+    },
+    {
+      "op": "continueRunout"
+    },
+    {
+      "op": "continueRunout"
+    },
+    {
+      "op": "continueRunout"
+    },
+    {
+      "op": "continueRunout"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "street": "settlement",
+        "pot": 0,
+        "rake": 0,
+        "stateHash": "0xe44530ef6e47912165dc1ec3884116b62ccded64aab011945d1e2d9e054b549a"
+      }
+    }
+  ]
+}

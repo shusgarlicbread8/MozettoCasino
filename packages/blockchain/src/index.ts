@@ -383,6 +383,37 @@ export const SEAT_TICKET_V2_TYPES = {
   ],
 } as const;
 
+/** Plan 03 / WP-021 SeatTicketV3 — EIP-712 primaryType `SeatTicketV3`. */
+export const SEAT_TICKET_V3_TYPES = {
+  SeatTicketV3: [
+    { name: "arenaAccount", type: "address" },
+    { name: "gameTemplateId", type: "bytes32" },
+    { name: "matchmakingPool", type: "bytes32" },
+    { name: "buyIn", type: "uint256" },
+    { name: "controllerHash", type: "bytes32" },
+    { name: "profileConfigHash", type: "bytes32" },
+    { name: "modelPolicyHash", type: "bytes32" },
+    { name: "leagueBit", type: "uint8" },
+    { name: "rated", type: "bool" },
+    { name: "expiresAt", type: "uint64" },
+    { name: "nonce", type: "uint256" },
+  ],
+} as const;
+
+export type SeatTicketV3Message = {
+  arenaAccount: `0x${string}`;
+  gameTemplateId: `0x${string}`;
+  matchmakingPool: `0x${string}`;
+  buyIn: bigint;
+  controllerHash: `0x${string}`;
+  profileConfigHash: `0x${string}`;
+  modelPolicyHash: `0x${string}`;
+  leagueBit: number;
+  rated: boolean;
+  expiresAt: bigint | number;
+  nonce: bigint;
+};
+
 /** @deprecated V1 domain */
 export function seatTicketDomain(chainId: number, verifyingContract: `0x${string}`) {
   return {
@@ -400,6 +431,11 @@ export function seatTicketV2Domain(chainId: number, verifyingContract: `0x${stri
     chainId,
     verifyingContract,
   } as const;
+}
+
+/** SeatTicketV3 shares ArenaVault EIP-712 domain name/version `"2"`. */
+export function seatTicketV3Domain(chainId: number, verifyingContract: `0x${string}`) {
+  return seatTicketV2Domain(chainId, verifyingContract);
 }
 
 /** @deprecated InstantPermission — use GAME_PERMISSION_TYPES on ArenaAccount */
@@ -588,8 +624,131 @@ export const arenaAccountAbi = [
   },
 ] as const;
 
+/** SeatTicketV3 + SessionDescriptor for ArenaVaultV2.sealAndFundSession (WP-021 / WP-041). */
+export const SEAL_AND_FUND_SESSION_ABI = [
+  {
+    type: "function",
+    name: "sealAndFundSession",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "descriptor",
+        type: "tuple",
+        components: [
+          { name: "chainId", type: "uint256" },
+          { name: "protocolVersion", type: "uint16" },
+          { name: "sessionId", type: "bytes32" },
+          { name: "gameTemplateId", type: "bytes32" },
+          { name: "participantRoot", type: "bytes32" },
+          { name: "openingBalanceRoot", type: "bytes32" },
+          { name: "controllerRoot", type: "bytes32" },
+          { name: "profileRoot", type: "bytes32" },
+          { name: "dealerSecretRoot", type: "bytes32" },
+          { name: "randomnessPolicyId", type: "bytes32" },
+          { name: "settlementPolicyId", type: "bytes32" },
+          { name: "createdAt", type: "uint64" },
+          { name: "sealDeadline", type: "uint64" },
+          { name: "sessionNonce", type: "bytes32" },
+        ],
+      },
+      {
+        name: "tickets",
+        type: "tuple[]",
+        components: [
+          { name: "arenaAccount", type: "address" },
+          { name: "gameTemplateId", type: "bytes32" },
+          { name: "matchmakingPool", type: "bytes32" },
+          { name: "buyIn", type: "uint256" },
+          { name: "controllerHash", type: "bytes32" },
+          { name: "profileConfigHash", type: "bytes32" },
+          { name: "modelPolicyHash", type: "bytes32" },
+          { name: "leagueBit", type: "uint8" },
+          { name: "rated", type: "bool" },
+          { name: "expiresAt", type: "uint64" },
+          { name: "nonce", type: "uint256" },
+        ],
+      },
+      { name: "signatures", type: "bytes[]" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+/** WP-066 SETTLEMENT_V3 balance-leaf emergency exit (ArenaVaultV2). */
+const EMERGENCY_EXIT_V3_ABI = [
+  {
+    type: "function",
+    name: "emergencyExitWithBalanceLeaf",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "sessionId", type: "bytes32" },
+      {
+        name: "claim",
+        type: "tuple",
+        components: [
+          { name: "sessionId", type: "bytes32" },
+          { name: "epoch", type: "uint64" },
+          { name: "arenaAccount", type: "address" },
+          { name: "seat", type: "uint8" },
+          { name: "openingBalance", type: "uint256" },
+          { name: "currentBalance", type: "uint256" },
+          { name: "cumulativeRake", type: "uint256" },
+          { name: "lastSequence", type: "uint64" },
+        ],
+      },
+      { name: "proof", type: "bytes32[]" },
+      { name: "siblingIsLeft", type: "bool[]" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "hashBalanceLeaf",
+    stateMutability: "pure",
+    inputs: [
+      {
+        name: "claim",
+        type: "tuple",
+        components: [
+          { name: "sessionId", type: "bytes32" },
+          { name: "epoch", type: "uint64" },
+          { name: "arenaAccount", type: "address" },
+          { name: "seat", type: "uint8" },
+          { name: "openingBalance", type: "uint256" },
+          { name: "currentBalance", type: "uint256" },
+          { name: "cumulativeRake", type: "uint256" },
+          { name: "lastSequence", type: "uint64" },
+        ],
+      },
+    ],
+    outputs: [{ type: "bytes32" }],
+  },
+  {
+    type: "function",
+    name: "emergencyExitClaimed",
+    stateMutability: "view",
+    inputs: [
+      { name: "sessionId", type: "bytes32" },
+      { name: "player", type: "address" },
+    ],
+    outputs: [{ type: "bool" }],
+  },
+  {
+    type: "event",
+    name: "EmergencyExit",
+    inputs: [
+      { name: "sessionId", type: "bytes32", indexed: true },
+      { name: "player", type: "address", indexed: true },
+      { name: "tableBalance", type: "uint256", indexed: false },
+      { name: "lastSequence", type: "uint64", indexed: false },
+    ],
+  },
+] as const;
+
 /** ArenaVaultV2 ABI (primary custody vault). */
 export const arenaVaultV2Abi = [
+  ...SEAL_AND_FUND_SESSION_ABI,
+  ...EMERGENCY_EXIT_V3_ABI,
   {
     type: "function",
     name: "openSession",

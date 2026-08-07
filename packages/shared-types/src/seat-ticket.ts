@@ -16,6 +16,7 @@ export const CONTROLLER_HASH =
 const hex32 = z.string().regex(/^0x[a-fA-F0-9]{64}$/);
 const address = z.string().regex(/^0x[a-fA-F0-9]{40}$/i);
 
+/** @deprecated V1/V2 wire shape — prefer SeatTicketV3MessageSchema for new ranked seals. */
 export const SeatTicketMessageSchema = z.object({
   player: address,
   gameTemplateId: hex32,
@@ -34,6 +35,47 @@ export const SubmitSeatTicketSchema = SeatTicketMessageSchema.extend({
 });
 export type SubmitSeatTicket = z.infer<typeof SubmitSeatTicketSchema>;
 
+/** Plan 03 SeatTicketV3 — matches ArenaVaultV2.SeatTicketV3 / SEAT_TICKET_V3_TYPES. */
+export const SeatTicketV3MessageSchema = z.object({
+  arenaAccount: address,
+  gameTemplateId: hex32,
+  matchmakingPool: hex32,
+  buyIn: z.union([z.string(), z.number(), z.bigint()]),
+  controllerHash: hex32,
+  profileConfigHash: hex32,
+  modelPolicyHash: hex32,
+  leagueBit: z.number().int().min(1).max(255),
+  rated: z.boolean(),
+  expiresAt: z.union([z.number().int().positive(), z.string(), z.bigint()]),
+  nonce: z.union([z.string(), z.number(), z.bigint()]),
+});
+export type SeatTicketV3Message = z.infer<typeof SeatTicketV3MessageSchema>;
+
+export const SubmitSeatTicketV3Schema = SeatTicketV3MessageSchema.extend({
+  signature: z.string().regex(/^0x[a-fA-F0-9]+$/),
+  /** Optional seat hint; on-chain seal uses tickets array index as seat. */
+  seat: z.number().int().min(0).max(255).optional(),
+});
+export type SubmitSeatTicketV3 = z.infer<typeof SubmitSeatTicketV3Schema>;
+
+export const SessionDescriptorV2Schema = z.object({
+  chainId: z.union([z.number().int().positive(), z.string(), z.bigint()]),
+  protocolVersion: z.literal(3),
+  sessionId: hex32,
+  gameTemplateId: hex32,
+  participantRoot: hex32,
+  openingBalanceRoot: hex32,
+  controllerRoot: hex32,
+  profileRoot: hex32,
+  dealerSecretRoot: hex32,
+  randomnessPolicyId: hex32,
+  settlementPolicyId: hex32,
+  createdAt: z.union([z.number().int().nonnegative(), z.string(), z.bigint()]),
+  sealDeadline: z.union([z.number().int().positive(), z.string(), z.bigint()]),
+  sessionNonce: hex32,
+});
+export type SessionDescriptorV2 = z.infer<typeof SessionDescriptorV2Schema>;
+
 export const TicketParamsQuerySchema = z.object({
   leagueId: z.string().min(1),
   profileKey: z.enum(["shark", "professor", "fox", "machine"]).optional(),
@@ -42,7 +84,14 @@ export type TicketParamsQuery = z.infer<typeof TicketParamsQuerySchema>;
 
 export const SeatTicketDomainSchema = z.object({
   name: z.literal("MozettoArenaVault"),
-  version: z.literal("1"),
+  version: z.union([z.literal("1"), z.literal("2")]),
+  chainId: z.number().int().positive(),
+  verifyingContract: address,
+});
+
+export const SeatTicketV3DomainSchema = z.object({
+  name: z.literal("MozettoArenaVault"),
+  version: z.literal("2"),
   chainId: z.number().int().positive(),
   verifyingContract: address,
 });

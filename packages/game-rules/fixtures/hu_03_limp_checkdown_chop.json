@@ -1,0 +1,114 @@
+{
+  "id": "hu_03_limp_checkdown_chop",
+  "description": "HU: SB completes, BB checks; check down; inject identical hands → even chop",
+  "coverage": [
+    "legal-actions",
+    "streets",
+    "hu"
+  ],
+  "format": "hu",
+  "seatCount": 2,
+  "config": {
+    "tableId": "freeze-hu",
+    "smallBlind": 50,
+    "bigBlind": 100,
+    "rakePct": 0,
+    "rakeCap": null
+  },
+  "seats": [
+    {
+      "seatIndex": 0,
+      "stack": 10000
+    },
+    {
+      "seatIndex": 1,
+      "stack": 10000
+    }
+  ],
+  "steps": [
+    {
+      "op": "startHand",
+      "serverSeed": "wp030-hu-limp",
+      "handId": "hand-hu-limp"
+    },
+    {
+      "op": "action",
+      "action": "call",
+      "amount": 50
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "street": "preflop",
+        "actingIndex": 1,
+        "pot": 200,
+        "currentBet": 100,
+        "stateHash": "0x2aaaa93a5b266a06e6f328fcfc83b1de57c711d21273b8aacc3b07c1ce7862c4",
+        "legalActionsHash": "0x506895d0b5d7604270a232cc8e43c5e4ec4ce9d429ecce2db07e432d286423ca"
+      }
+    },
+    {
+      "op": "action",
+      "action": "check"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "street": "flop",
+        "actingIndex": 1,
+        "pot": 200,
+        "currentBet": 0,
+        "stateHash": "0x0f539b769b6f96f293219e3fdab83fd749f27aad8d78f1daef7f39e54ae16367",
+        "legalActionsHash": "0x506895d0b5d7604270a232cc8e43c5e4ec4ce9d429ecce2db07e432d286423ca"
+      }
+    },
+    {
+      "op": "action",
+      "action": "check"
+    },
+    {
+      "op": "action",
+      "action": "check"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "street": "turn",
+        "stateHash": "0xf88ae5d708fe6c9eb6f05be24d36d34e8364ed965d1422d4ad1affae7b23a21b",
+        "legalActionsHash": "0x506895d0b5d7604270a232cc8e43c5e4ec4ce9d429ecce2db07e432d286423ca"
+      }
+    },
+    {
+      "op": "action",
+      "action": "check"
+    },
+    {
+      "op": "action",
+      "action": "check"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "street": "river",
+        "stateHash": "0xeb811b9108ccab188195fc32978f6bc8277cf997f7cf2de09a19bf29a47bce6e",
+        "legalActionsHash": "0x506895d0b5d7604270a232cc8e43c5e4ec4ce9d429ecce2db07e432d286423ca"
+      }
+    },
+    {
+      "op": "action",
+      "action": "check"
+    },
+    {
+      "op": "action",
+      "action": "check"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "street": "settlement",
+        "pot": 0,
+        "stateHash": "0xe35d06e421994880b1ccd8c924a63475b5a65ee8883f178a9193b6705ce122fc"
+      }
+    }
+  ]
+}

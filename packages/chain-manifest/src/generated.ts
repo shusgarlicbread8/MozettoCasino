@@ -19,10 +19,26 @@ export type ChainManifestEntry = {
   arenaAccountFactory: HexAddress | null;
   arenaAccountImplementation: HexAddress | null;
   tableRegistry: HexAddress | null;
+  gameRegistry: HexAddress | null;
+  sessionLifecycle: HexAddress | null;
+  protocolFeeVault: HexAddress | null;
   settlementHub: HexAddress | null;
   settlementHubV1: HexAddress | null;
+  /** Explicit V2 hub when settlementHub points at V3 (or null until deploy) */
+  settlementHubV2: HexAddress | null;
+  /** WP-063 FinalSettlementV3 hub (null until deploy) */
+  settlementHubV3: HexAddress | null;
+  /** WP-063 VerifierRouter */
+  verifierRouter: HexAddress | null;
+  /** WP-063 SignatureQuorumVerifier */
+  signatureQuorumVerifier: HexAddress | null;
   checkpointRegistry: HexAddress | null;
   randomnessCoordinator: HexAddress | null;
+  randomnessBeacon: HexAddress | null;
+  /** WP-053 Chainlink VRF v2.5 adapter (null until Sepolia deploy) */
+  chainlinkVrfAdapter: HexAddress | null;
+  /** WP-062 global proof-batch registry (null until deploy) */
+  proofBatchRegistry: HexAddress | null;
   feeTreasury: HexAddress | null;
   deploymentBlock: bigint;
   protocolVersion: string;
@@ -34,22 +50,32 @@ export type ChainManifestEntry = {
 export const chainManifest = {
   anvil: {
     chainId: 31337,
-    usdc: "0xCdCBFF2C6f683C0b1abB4926d6B2c1d1e61c0957" as HexAddress,
+    usdc: "0x5FbDB2315678afecb367f032d93F642f64180aa3" as HexAddress,
     symbol: "mUSDC",
     decimals: 6,
     isTestAsset: true,
     faucetEnabled: true,
-    arenaVault: "0xcBB68c20A78161F2C36e933fAC3E423e3fB1Acd3" as HexAddress,
-    arenaVaultV1: "0x5714006E0EC833FF343d12DA5B2a3e45353c3A16" as HexAddress,
-    arenaAccountFactory: "0xF2e0C0bEb91aD58de1bb043F3bC7fe0186cC0C6A" as HexAddress,
-    arenaAccountImplementation: "0x536A0B4d69378223aBF8EB3549eA6677B2aBD67f" as HexAddress,
-    tableRegistry: "0x51b48084Ebe0229B053916E46631Eff428D4d6a9" as HexAddress,
-    settlementHub: "0x9F1d9FfbeF0DF39055Fb269f5e3724520Cc96EeA" as HexAddress,
-    settlementHubV1: "0x2Be4A6Ea1639e9dDD8343069FA94dbdbd7fEC548" as HexAddress,
-    checkpointRegistry: "0xFbcB595923306ea343A4E72C427F849b644B951a" as HexAddress,
-    randomnessCoordinator: "0xE1763d472a5E4797C3add16F372A8f2465E3Ae7c" as HexAddress,
+    arenaVault: "0x610178dA211FEF7D417bC0e6FeD39F05609AD788" as HexAddress,
+    arenaVaultV1: "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9" as HexAddress,
+    arenaAccountFactory: "0x8A791620dd6260079BF849Dc5567aDC3F2FdC318" as HexAddress,
+    arenaAccountImplementation: "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6" as HexAddress,
+    tableRegistry: "0xc6e7DF5E7b4f2A278906862b61205850344D4e7d" as HexAddress,
+    gameRegistry: "0x59b670e9fA9D0A427751Af201D676719a970857b" as HexAddress,
+    sessionLifecycle: "0x4ed7c70F96B99c776995fB64377f0d4aB3B0e1C1" as HexAddress,
+    protocolFeeVault: "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853" as HexAddress,
+    settlementHub: "0x0B306BF915C4d645ff596e518fAf3F9669b97016" as HexAddress,
+    settlementHubV1: "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9" as HexAddress,
+    settlementHubV2: "0xA51c1fc2f0D1a1b8494Ed1FE312d7C3a78Ed91C0" as HexAddress,
+    settlementHubV3: "0x0B306BF915C4d645ff596e518fAf3F9669b97016" as HexAddress,
+    verifierRouter: "0x9A676e781A523b5d0C0e43731313A708CB607508" as HexAddress,
+    signatureQuorumVerifier: "0x0DCd1Bf9A1b36cE34237eEaFef220932846BCD82" as HexAddress,
+    checkpointRegistry: "0x322813Fd9A801c5507c9de605d63CEA4f2CE6c44" as HexAddress,
+    randomnessCoordinator: "0xa85233C63b9Ee964Add6F2cffe00Fd84eb32338f" as HexAddress,
+    randomnessBeacon: "0x4A679253410272dd5232B3Ff7cF5dbB88f295319" as HexAddress,
+    chainlinkVrfAdapter: null,
+    proofBatchRegistry: "0x09635F643e140090A9A8Dcd712eD6285858ceBef" as HexAddress,
     feeTreasury: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" as HexAddress,
-    deploymentBlock: BigInt(48528),
+    deploymentBlock: BigInt(0),
     protocolVersion: "2.0.0-anvil",
     vrfCoordinator: null,
     vrfKeyHash: null,
@@ -66,15 +92,25 @@ export const chainManifest = {
     arenaAccountFactory: null,
     arenaAccountImplementation: null,
     tableRegistry: null,
+    gameRegistry: null,
+    sessionLifecycle: null,
+    protocolFeeVault: null,
     settlementHub: null,
     settlementHubV1: null,
+    settlementHubV2: null,
+    settlementHubV3: null,
+    verifierRouter: null,
+    signatureQuorumVerifier: null,
     checkpointRegistry: null,
     randomnessCoordinator: null,
+    randomnessBeacon: null,
+    chainlinkVrfAdapter: null,
+    proofBatchRegistry: null,
     feeTreasury: null,
     deploymentBlock: BigInt(0),
-    protocolVersion: "1.0.0-sepolia",
-    vrfCoordinator: "0x5C210eF41CD1a72a13DcB20c28948D40729fEFFb" as HexAddress,
-    vrfKeyHash: "0x9e1344a1247c8a1785d0a4681a27152bffdb43666ae28ee20d8c6dff7f9c1a30" as `0x${string}`,
+    protocolVersion: "2.0.0-sepolia",
+    vrfCoordinator: "0x5C210eF41CD1a72de73bF76eC39637bB0d3d7BEE" as HexAddress,
+    vrfKeyHash: "0x9e1344a1247c8a1785d0a4681a27152bffdb43666ae5bf7d14d24a5efd44bf71" as `0x${string}`,
   },
   base: {
     chainId: 8453,
@@ -88,14 +124,24 @@ export const chainManifest = {
     arenaAccountFactory: null,
     arenaAccountImplementation: null,
     tableRegistry: null,
+    gameRegistry: null,
+    sessionLifecycle: null,
+    protocolFeeVault: null,
     settlementHub: null,
     settlementHubV1: null,
+    settlementHubV2: null,
+    settlementHubV3: null,
+    verifierRouter: null,
+    signatureQuorumVerifier: null,
     checkpointRegistry: null,
     randomnessCoordinator: null,
+    randomnessBeacon: null,
+    chainlinkVrfAdapter: null,
+    proofBatchRegistry: null,
     feeTreasury: null,
     deploymentBlock: BigInt(0),
-    protocolVersion: "1.0.0",
+    protocolVersion: "2.0.0-mainnet-restricted",
     vrfCoordinator: "0xd5D517aBE5cF79B7e95eC98dB0f0277788aFF634" as HexAddress,
-    vrfKeyHash: null,
+    vrfKeyHash: "0x00b81b5a830cb0a4009fbd8904de511e28631e62ce5ad231373d3cdad373ccab" as `0x${string}`,
   },
 } as const satisfies Record<NetworkKey, ChainManifestEntry>;

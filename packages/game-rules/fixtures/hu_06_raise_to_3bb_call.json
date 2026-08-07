@@ -1,0 +1,86 @@
+{
+  "id": "hu_06_raise_to_3bb_call",
+  "description": "HU: SB raises (chips-added 250 → total bet 300 = 3bb), BB calls",
+  "coverage": [
+    "legal-actions",
+    "raise",
+    "hu"
+  ],
+  "format": "hu",
+  "seatCount": 2,
+  "config": {
+    "tableId": "freeze-hu",
+    "smallBlind": 50,
+    "bigBlind": 100,
+    "rakePct": 0,
+    "rakeCap": null
+  },
+  "seats": [
+    {
+      "seatIndex": 0,
+      "stack": 10000
+    },
+    {
+      "seatIndex": 1,
+      "stack": 10000
+    }
+  ],
+  "steps": [
+    {
+      "op": "startHand",
+      "serverSeed": "wp030-hu-raise",
+      "handId": "hand-hu-raise"
+    },
+    {
+      "op": "action",
+      "action": "raise",
+      "amount": 250
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "street": "preflop",
+        "pot": 400,
+        "currentBet": 300,
+        "actingIndex": 1,
+        "legalActions": [
+          {
+            "action": "fold"
+          },
+          {
+            "action": "call",
+            "minAmount": 200,
+            "maxAmount": 200
+          },
+          {
+            "action": "raise",
+            "minAmount": 400,
+            "maxAmount": 9900
+          },
+          {
+            "action": "all_in",
+            "minAmount": 9900,
+            "maxAmount": 9900
+          }
+        ],
+        "stateHash": "0x3b36df8755e3f291fbdf47c2adac3c7ef6d18c792302399cda6874f91a68c309",
+        "legalActionsHash": "0xa29e68f3e2e9b11ef1035f35ea9764e6d3543a677bc7877b0253ca804d98b6ee"
+      }
+    },
+    {
+      "op": "action",
+      "action": "call",
+      "amount": 200
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "street": "flop",
+        "pot": 600,
+        "currentBet": 0,
+        "stateHash": "0xfd396a8e10df22b83dfbab3877aacbb01175d9c2e096a020a149439c5a628fdd",
+        "legalActionsHash": "0x1ac6d89f4cba58b9804579bf7bc0d1f85a4720753cca49a12482d56a447054ca"
+      }
+    }
+  ]
+}

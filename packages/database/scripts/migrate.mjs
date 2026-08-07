@@ -13,10 +13,28 @@ if (!url) {
   process.exit(1);
 }
 
+function sslConfig(connectionString) {
+  // Local docker / localhost usually has no TLS. Supabase pooler needs SSL.
+  const lower = connectionString.toLowerCase();
+  if (
+    process.env.DATABASE_SSL === "0" ||
+    process.env.DATABASE_SSL === "false" ||
+    /[?&]sslmode=disable\b/.test(lower) ||
+    /@(localhost|127\.0\.0\.1)(:|\/)/.test(connectionString)
+  ) {
+    return false;
+  }
+  if (process.env.DATABASE_SSL === "1" || process.env.DATABASE_SSL === "true") {
+    return { rejectUnauthorized: false };
+  }
+  // Default: enable SSL for remote hosts (Supabase).
+  return { rejectUnauthorized: false };
+}
+
 async function main() {
   const client = new Client({
     connectionString: url,
-    ssl: { rejectUnauthorized: false },
+    ssl: sslConfig(url),
   });
   await client.connect();
 

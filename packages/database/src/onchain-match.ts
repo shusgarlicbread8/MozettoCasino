@@ -3,6 +3,12 @@ import { getPool, query } from "./client.js";
 import {
   ARENA_LEAGUES,
   arenaFormatConfig,
+  evaluateOpponentIntegrity,
+  getLinkedAccountLookup,
+  pairCappedToday,
+  rankedPoolKey,
+  randomSeatOrder,
+  recordAllocationDecision,
   stakesForBuyIn,
   type ArenaFormat,
   type ArenaLeagueId,
@@ -185,6 +191,7 @@ export async function claimTicketPair(opts: {
       return null;
     }
 
+    // WP-040/043: random candidates within pool; filter self / linked / pair-cap in app.
     const oppRes = await client.query(
       `select id::text, profile_id::text, wallet_address, buy_in::text, controller_hash, agent_profile_hash,
               expires_at, nonce::text, matchmaking_pool, signature, game_template_id,
@@ -192,12 +199,39 @@ export async function claimTicketPair(opts: {
        from seat_tickets
        where status = 'queued' and chain_id = $1 and matchmaking_pool = $2
          and buy_in = $3 and profile_id <> $4 and expires_at > now()
-       order by created_at asc
-       limit 1
+       order by random()
+       limit 24
        for update skip locked`,
       [opts.chainId, opts.matchmakingPool, opts.buyInUsdc, opts.profileId],
     );
-    const opponent = oppRes.rows[0] as SeatTicketRow | undefined;
+    const candidates = oppRes.rows as SeatTicketRow[];
+    if (candidates.length === 0) {
+      await client.query("rollback");
+      return null;
+    }
+
+    const excludedPeers = await Promise.resolve(
+      getLinkedAccountLookup().getExcludedPeers(opts.profileId),
+    );
+    const pairCache = new Map<string, boolean>();
+    let opponent: SeatTicketRow | undefined;
+    for (const cand of candidates) {
+      const oppId = cand.profile_id;
+      if (!pairCache.has(oppId)) {
+        pairCache.set(oppId, await pairCappedToday(opts.profileId, oppId));
+      }
+      const integrity = evaluateOpponentIntegrity({
+        userId: opts.profileId,
+        opponentId: oppId,
+        format: "hu",
+        pairCapped: (id) => pairCache.get(id) === true,
+        linkedToUser: (id) => excludedPeers.has(id),
+      });
+      if (integrity.ok) {
+        opponent = cand;
+        break;
+      }
+    }
     if (!opponent) {
       await client.query("rollback");
       return null;
@@ -218,9 +252,9 @@ export async function claimTicketPair(opts: {
 }
 
 /**
- * Atomically reserve the fullest compatible open on-chain table for one queued
- * ticket. The player row is inserted in the same transaction, so concurrent
- * find-match requests cannot overfill a heads-up table.
+ * Atomically reserve a random compatible open on-chain table for one queued
+ * ticket (WP-040 ranked random — not fullest-first / user-picked). The player
+ * row is inserted in the same transaction so concurrent find-match cannot overfill.
  */
 export async function claimOpenOnchainSession(opts: {
   selfTicketId: string;
@@ -239,7 +273,8 @@ export async function claimOpenOnchainSession(opts: {
     }
   | null
 > {
-  const cfg = arenaFormatConfig(opts.format ?? "hu");
+  const format = opts.format ?? "hu";
+  const cfg = arenaFormatConfig(format);
   const client = await getPool().connect();
   try {
     await client.query("begin");
@@ -263,12 +298,17 @@ export async function claimOpenOnchainSession(opts: {
               array(
                 select osp.seat from onchain_session_players osp
                 where osp.session_id = os.session_id and osp.seat is not null
-              ) as used_seats
+              ) as used_seats,
+              array(
+                select osp.profile_id::text from onchain_session_players osp
+                where osp.session_id = os.session_id
+              ) as seated_profiles
        from onchain_sessions os
        join tables t on t.id = os.table_id
        where os.chain_id = $1
          and os.status = 'opened'
          and t.is_active = true
+         and t.privacy = 'public'
          and t.arena_mode = 'onchain'
          and t.league_id = $2
          and t.min_buy_in = $3
@@ -283,24 +323,67 @@ export async function claimOpenOnchainSession(opts: {
            where done.table_id = os.table_id and done.status = 'completed'
          )
          and (select count(*) from onchain_session_players osp where osp.session_id = os.session_id) < $5
-       order by (
-         select count(*) from onchain_session_players osp where osp.session_id = os.session_id
-       ) desc, os.created_at asc
-       limit 1
+       order by random()
+       limit 12
        for update of os skip locked`,
       [opts.chainId, opts.leagueId, opts.buyInUsdc, opts.profileId, cfg.maxSeats, cfg.variantId],
     );
-    const candidate = candidateRes.rows[0] as
-      | { session_id: string; table_id: string; table_name: string; max_seats: number; used_seats: number[] }
+    const candidates = candidateRes.rows as Array<{
+      session_id: string;
+      table_id: string;
+      table_name: string;
+      max_seats: number;
+      used_seats: number[];
+      seated_profiles: string[];
+    }>;
+
+    const excludedPeers = await Promise.resolve(
+      getLinkedAccountLookup().getExcludedPeers(opts.profileId),
+    );
+    const pairCache = new Map<string, boolean>();
+    let candidate:
+      | {
+          session_id: string;
+          table_id: string;
+          table_name: string;
+          max_seats: number;
+          used_seats: number[];
+          seated_profiles: string[];
+        }
       | undefined;
+
+    for (const row of candidates) {
+      let blocked = false;
+      for (const oppId of row.seated_profiles ?? []) {
+        if (format === "hu" && !pairCache.has(oppId)) {
+          pairCache.set(oppId, await pairCappedToday(opts.profileId, oppId));
+        }
+        const integrity = evaluateOpponentIntegrity({
+          userId: opts.profileId,
+          opponentId: oppId,
+          format,
+          pairCapped: (id) => pairCache.get(id) === true,
+          linkedToUser: (id) => excludedPeers.has(id),
+        });
+        if (!integrity.ok) {
+          blocked = true;
+          break;
+        }
+      }
+      if (!blocked) {
+        candidate = row;
+        break;
+      }
+    }
     if (!candidate) {
       await client.query("rollback");
       return null;
     }
 
     const used = new Set((candidate.used_seats ?? []).map(Number));
+    const seatOrder = randomSeatOrder(cfg.maxSeats);
     let seat = -1;
-    for (let i = 0; i < cfg.maxSeats; i++) {
+    for (const i of seatOrder) {
       if (!used.has(i)) {
         seat = i;
         break;
@@ -336,6 +419,34 @@ export async function claimOpenOnchainSession(opts: {
       [ticket.id, candidate.session_id],
     );
     await client.query("commit");
+
+    const poolKey = rankedPoolKey({
+      leagueId: opts.leagueId,
+      format,
+      arenaMode: "onchain",
+      chainId: opts.chainId,
+      buyIn: opts.buyInUsdc,
+    });
+    void recordAllocationDecision({
+      profileId: opts.profileId,
+      leagueId: opts.leagueId,
+      format,
+      arenaMode: "onchain",
+      chainId: opts.chainId,
+      poolKey,
+      decision: "join_existing",
+      tableId: candidate.table_id,
+      reasonCode: "onchain_random_within_pool",
+      candidateCount: 1,
+      eligibleCount: 1,
+      seatOrder,
+      trace: {
+        sessionId: candidate.session_id,
+        seat,
+        path: "claimOpenOnchainSession",
+      },
+    });
+
     return {
       ticket,
       sessionId: candidate.session_id,

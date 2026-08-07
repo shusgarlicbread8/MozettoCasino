@@ -1,0 +1,67 @@
+{
+  "id": "hu_19_button_rotates",
+  "description": "HU: after fold-win settlement, next hand button moves to other seat",
+  "coverage": [
+    "button",
+    "hu"
+  ],
+  "format": "hu",
+  "seatCount": 2,
+  "config": {
+    "tableId": "freeze-hu",
+    "smallBlind": 50,
+    "bigBlind": 100,
+    "rakePct": 0,
+    "rakeCap": null
+  },
+  "seats": [
+    {
+      "seatIndex": 0,
+      "stack": 10000
+    },
+    {
+      "seatIndex": 1,
+      "stack": 10000
+    }
+  ],
+  "steps": [
+    {
+      "op": "startHand",
+      "serverSeed": "wp030-hu-btn1",
+      "handId": "hand-hu-btn1"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "button": 0,
+        "stateHash": "0x6aab733acc2aee422defb9a64486f28e82c180db2410c87f21064c72e75c6b09",
+        "legalActionsHash": "0xe23059d7c82b33890c649386b32e5cdec0af40f361addf0c6580521b8377dc11"
+      }
+    },
+    {
+      "op": "action",
+      "action": "fold"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "street": "settlement",
+        "stateHash": "0xc1883929c62a770502b00a77e2623bf8f020d788589ae00b285d65aeb3e34791"
+      }
+    },
+    {
+      "op": "startHand",
+      "serverSeed": "wp030-hu-btn2",
+      "handId": "hand-hu-btn2"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "button": 1,
+        "actingIndex": 1,
+        "stateHash": "0x84112283bbca0e6430c302425bcd505f63663186a02ba3499b6ba5bcc192f75b",
+        "legalActionsHash": "0x1943660b21690a0181550591635f619982b8911e66a4e5a4f7306bd0e81765bb"
+      }
+    }
+  ]
+}

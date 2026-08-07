@@ -1,0 +1,68 @@
+{
+  "id": "hu_01_blinds_button_preflop",
+  "description": "HU: button posts SB, BB posts BB, button acts first preflop",
+  "coverage": [
+    "blinds",
+    "button",
+    "legal-actions",
+    "hu"
+  ],
+  "format": "hu",
+  "seatCount": 2,
+  "config": {
+    "tableId": "freeze-hu",
+    "smallBlind": 50,
+    "bigBlind": 100,
+    "rakePct": 0,
+    "rakeCap": null
+  },
+  "seats": [
+    {
+      "seatIndex": 0,
+      "stack": 10000
+    },
+    {
+      "seatIndex": 1,
+      "stack": 10000
+    }
+  ],
+  "steps": [
+    {
+      "op": "startHand",
+      "serverSeed": "wp030-hu-blinds",
+      "handId": "hand-hu-blinds"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "street": "preflop",
+        "button": 0,
+        "actingIndex": 0,
+        "pot": 150,
+        "currentBet": 100,
+        "legalActions": [
+          {
+            "action": "fold"
+          },
+          {
+            "action": "call",
+            "minAmount": 50,
+            "maxAmount": 50
+          },
+          {
+            "action": "raise",
+            "minAmount": 150,
+            "maxAmount": 9950
+          },
+          {
+            "action": "all_in",
+            "minAmount": 9950,
+            "maxAmount": 9950
+          }
+        ],
+        "stateHash": "0xaf954f1af25c1387f0abb965d47184b82b8899cb1219a34f64699fbe95f2350d",
+        "legalActionsHash": "0xe23059d7c82b33890c649386b32e5cdec0af40f361addf0c6580521b8377dc11"
+      }
+    }
+  ]
+}

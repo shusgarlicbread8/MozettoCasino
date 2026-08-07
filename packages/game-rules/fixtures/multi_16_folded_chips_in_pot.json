@@ -1,0 +1,90 @@
+{
+  "id": "multi_16_folded_chips_in_pot",
+  "description": "Folded contributor chips stay in layer; folded seat not eligible",
+  "coverage": [
+    "side-pots",
+    "fold",
+    "sixmax"
+  ],
+  "format": "multi",
+  "seatCount": 3,
+  "config": {
+    "tableId": "freeze-sixmax",
+    "smallBlind": 50,
+    "bigBlind": 100,
+    "rakePct": 0,
+    "rakeCap": null
+  },
+  "seats": [
+    {
+      "seatIndex": 0,
+      "stack": 80
+    },
+    {
+      "seatIndex": 1,
+      "stack": 80
+    },
+    {
+      "seatIndex": 2,
+      "stack": 0
+    }
+  ],
+  "steps": [
+    {
+      "op": "injectShowdown",
+      "button": 0,
+      "board": [
+        "2c",
+        "3d",
+        "4h",
+        "5s",
+        "7c"
+      ],
+      "seats": [
+        {
+          "seatIndex": 0,
+          "stack": 80,
+          "totalBet": 20,
+          "hole": [
+            "As",
+            "Kh"
+          ],
+          "folded": true
+        },
+        {
+          "seatIndex": 1,
+          "stack": 80,
+          "totalBet": 20,
+          "hole": [
+            "Qh",
+            "Qd"
+          ]
+        },
+        {
+          "seatIndex": 2,
+          "stack": 0,
+          "totalBet": 20,
+          "hole": [
+            "Jc",
+            "Jd"
+          ]
+        }
+      ]
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "potLayers": [
+          {
+            "amount": 60,
+            "eligible": [
+              1,
+              2
+            ]
+          }
+        ],
+        "stateHash": "0x6782344a0b2aa4b1204cbcad153eff897ee01ae744d3248afedb4eb23ec8617b"
+      }
+    }
+  ]
+}

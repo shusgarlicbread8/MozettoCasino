@@ -32,3 +32,14 @@ test("confidence labels", () => {
   assert.equal(confidenceLabel(300, 2), "Provisional");
   assert.equal(confidenceLabel(50, 80), "High");
 });
+
+test("half pair weight reduces rating movement vs full weight", () => {
+  const a = { rating: 1500, rd: 50, volatility: 0.06 };
+  const b = { rating: 1500, rd: 50, volatility: 0.06 };
+  const full = rateHeadsUpMatch(a, b, 1, 1);
+  const half = rateHeadsUpMatch(a, b, 1, 0.5);
+  const fullGain = full.a.rating - a.rating;
+  const halfGain = half.a.rating - a.rating;
+  assert.ok(fullGain > halfGain);
+  assert.ok(halfGain > 0);
+});

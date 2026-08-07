@@ -1,0 +1,50 @@
+{
+  "id": "hu_04_short_stack_blind_allin",
+  "description": "HU: SB has only 40 (< SB 50); posts all-in blind; BB can call/fold",
+  "coverage": [
+    "blinds",
+    "all-in",
+    "short-stack",
+    "hu"
+  ],
+  "format": "hu",
+  "seatCount": 2,
+  "config": {
+    "tableId": "freeze-hu",
+    "smallBlind": 50,
+    "bigBlind": 100,
+    "rakePct": 0,
+    "rakeCap": null
+  },
+  "seats": [
+    {
+      "seatIndex": 0,
+      "stack": 40
+    },
+    {
+      "seatIndex": 1,
+      "stack": 10000
+    }
+  ],
+  "steps": [
+    {
+      "op": "startHand",
+      "serverSeed": "wp030-hu-short-sb",
+      "handId": "hand-hu-short-sb"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "street": "preflop",
+        "button": 0,
+        "pot": 140,
+        "stacks": [
+          0,
+          9900
+        ],
+        "actingIndex": 0,
+        "stateHash": "0xe413d0a057311c549761ea70b5fa848730cf474d91b28114542ee49ce61c469d"
+      }
+    }
+  ]
+}

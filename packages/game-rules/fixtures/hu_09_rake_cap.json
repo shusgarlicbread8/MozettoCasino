@@ -1,0 +1,83 @@
+{
+  "id": "hu_09_rake_cap",
+  "description": "HU showdown rake capped at 20 despite 5% of 1000 = 50",
+  "coverage": [
+    "rake",
+    "rake-cap",
+    "hu"
+  ],
+  "format": "hu",
+  "seatCount": 2,
+  "config": {
+    "tableId": "freeze-hu",
+    "smallBlind": 50,
+    "bigBlind": 100,
+    "rakePct": 0.05,
+    "rakeCap": 20
+  },
+  "seats": [
+    {
+      "seatIndex": 0,
+      "stack": 0
+    },
+    {
+      "seatIndex": 1,
+      "stack": 0
+    }
+  ],
+  "steps": [
+    {
+      "op": "injectShowdown",
+      "button": 0,
+      "board": [
+        "2c",
+        "3d",
+        "4h",
+        "5s",
+        "7c"
+      ],
+      "rakePct": 0.05,
+      "rakeCap": 20,
+      "seats": [
+        {
+          "seatIndex": 0,
+          "stack": 0,
+          "totalBet": 500,
+          "hole": [
+            "As",
+            "Ah"
+          ]
+        },
+        {
+          "seatIndex": 1,
+          "stack": 0,
+          "totalBet": 500,
+          "hole": [
+            "Kc",
+            "Kd"
+          ]
+        }
+      ]
+    },
+    {
+      "op": "settleShowdown"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "rake": 20,
+        "winners": [
+          {
+            "seatIndex": 0,
+            "amount": 980
+          }
+        ],
+        "stacks": [
+          980,
+          0
+        ],
+        "stateHash": "0xfffbb9f452a8b4c3491300d3ea659f50453631a9d416af97125c80cd9cf28aa6"
+      }
+    }
+  ]
+}

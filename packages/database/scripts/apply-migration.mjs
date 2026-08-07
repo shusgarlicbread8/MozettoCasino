@@ -17,7 +17,20 @@ if (!url) {
   process.exit(1);
 }
 
-const client = new pg.Client({ connectionString: url, ssl: { rejectUnauthorized: false } });
+function sslConfig(connectionString) {
+  const lower = connectionString.toLowerCase();
+  if (
+    process.env.DATABASE_SSL === "0" ||
+    process.env.DATABASE_SSL === "false" ||
+    /[?&]sslmode=disable\b/.test(lower) ||
+    /@(localhost|127\.0\.0\.1)(:|\/)/.test(connectionString)
+  ) {
+    return false;
+  }
+  return { rejectUnauthorized: false };
+}
+
+const client = new pg.Client({ connectionString: url, ssl: sslConfig(url) });
 await client.connect();
 try {
   await client.query(sql);

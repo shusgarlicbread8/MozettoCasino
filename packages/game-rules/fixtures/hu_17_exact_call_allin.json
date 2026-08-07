@@ -1,0 +1,101 @@
+{
+  "id": "hu_17_exact_call_allin",
+  "description": "HU: facing bet, stack exactly equals toCall → call and all_in both legal",
+  "coverage": [
+    "all-in",
+    "legal-actions",
+    "hu"
+  ],
+  "format": "hu",
+  "seatCount": 2,
+  "config": {
+    "tableId": "freeze-hu",
+    "smallBlind": 50,
+    "bigBlind": 100,
+    "rakePct": 0,
+    "rakeCap": null
+  },
+  "seats": [
+    {
+      "seatIndex": 0,
+      "stack": 200
+    },
+    {
+      "seatIndex": 1,
+      "stack": 100
+    }
+  ],
+  "steps": [
+    {
+      "op": "forceBettingState",
+      "street": "flop",
+      "board": [
+        "2c",
+        "3d",
+        "4h"
+      ],
+      "pot": 200,
+      "currentBet": 100,
+      "minRaise": 100,
+      "button": 0,
+      "actingIndex": 1,
+      "seats": [
+        {
+          "seatIndex": 0,
+          "stack": 100,
+          "bet": 100,
+          "totalBet": 150,
+          "hole": [
+            "As",
+            "Kd"
+          ]
+        },
+        {
+          "seatIndex": 1,
+          "stack": 100,
+          "bet": 0,
+          "totalBet": 50,
+          "hole": [
+            "Qh",
+            "Qd"
+          ]
+        }
+      ]
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "legalActions": [
+          {
+            "action": "fold"
+          },
+          {
+            "action": "all_in",
+            "minAmount": 100,
+            "maxAmount": 100
+          },
+          {
+            "action": "call",
+            "minAmount": 100,
+            "maxAmount": 100
+          }
+        ],
+        "stateHash": "0xea0ec285087abb6c8fe492bab193fbd58bed39332782ae5d3f3e00cfad02c3b1",
+        "legalActionsHash": "0x43acef56802a87f55978ea2d860461172aedf000426a60c970662c20c22ff969"
+      }
+    },
+    {
+      "op": "action",
+      "action": "call",
+      "amount": 100
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "pot": 300,
+        "stateHash": "0x771da3399b161625b3a39073e0ef019f3ebafc8eb8737e2451226d0db535106e",
+        "legalActionsHash": "0x96cf62709a27d62aa1e681e3c4926ab25b43622135db0b0751f4c0eb281693c4"
+      }
+    }
+  ]
+}

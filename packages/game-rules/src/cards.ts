@@ -52,3 +52,25 @@ const RANK_VALUE: Record<Card["rank"], number> = {
 export function rankValue(r: Card["rank"]): number {
   return RANK_VALUE[r];
 }
+
+/** Protocol V3 rank index: 0=2 … 12=A. */
+export function rankIndex(r: Card["rank"]): number {
+  return rankValue(r) - 2;
+}
+
+/** Protocol V3 suit index: 0=c, 1=d, 2=h, 3=s. */
+export function suitIndex(s: Card["suit"]): number {
+  return SUITS.indexOf(s);
+}
+
+/** Canonical card code `0..51` (suit-major): `suitIndex * 13 + rankIndex`. */
+export function cardCode(c: Card): number {
+  return suitIndex(c.suit) * 13 + rankIndex(c.rank);
+}
+
+export function cardFromCode(code: number): Card {
+  if (!Number.isInteger(code) || code < 0 || code > 51) {
+    throw new Error(`card code out of range: ${code}`);
+  }
+  return { suit: SUITS[Math.floor(code / 13)], rank: RANKS[code % 13] };
+}

@@ -1,0 +1,62 @@
+{
+  "id": "hu_18_min_raise_bounds",
+  "description": "HU: after blinds, SB min raise chips-added is 150 (to 200 total)",
+  "coverage": [
+    "legal-actions",
+    "raise",
+    "hu"
+  ],
+  "format": "hu",
+  "seatCount": 2,
+  "config": {
+    "tableId": "freeze-hu",
+    "smallBlind": 50,
+    "bigBlind": 100,
+    "rakePct": 0,
+    "rakeCap": null
+  },
+  "seats": [
+    {
+      "seatIndex": 0,
+      "stack": 10000
+    },
+    {
+      "seatIndex": 1,
+      "stack": 10000
+    }
+  ],
+  "steps": [
+    {
+      "op": "startHand",
+      "serverSeed": "wp030-hu-minraise",
+      "handId": "hand-hu-minraise"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "legalActions": [
+          {
+            "action": "fold"
+          },
+          {
+            "action": "call",
+            "minAmount": 50,
+            "maxAmount": 50
+          },
+          {
+            "action": "raise",
+            "minAmount": 150,
+            "maxAmount": 9950
+          },
+          {
+            "action": "all_in",
+            "minAmount": 9950,
+            "maxAmount": 9950
+          }
+        ],
+        "stateHash": "0xb335694cbd8ae5cbd13cf308fd03a84d92911815b5ffc07d64a56eb97be36dc8",
+        "legalActionsHash": "0xe23059d7c82b33890c649386b32e5cdec0af40f361addf0c6580521b8377dc11"
+      }
+    }
+  ]
+}

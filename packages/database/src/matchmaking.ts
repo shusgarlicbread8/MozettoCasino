@@ -2,6 +2,59 @@ import { randomUUID } from "node:crypto";
 import { query } from "./client.js";
 import type { ArenaMode } from "./arena-mode.js";
 import { getAvailableBalance, getUserArenaMode } from "./ledger.js";
+import {
+  createDefaultLinkedAccountLookup,
+  type LinkedAccountLookup,
+} from "./linked-accounts.js";
+import {
+  allocateRankedMatch,
+  MAX_PAIR_MATCHES_PER_DAY,
+  rankedPoolKey,
+  type MatchCandidate,
+} from "./ranked-matchmaker.js";
+
+export {
+  allocateRankedMatch,
+  evaluateOpponentIntegrity,
+  filterEligibleCandidates,
+  isPairAtCap,
+  matchesRankedPool,
+  MAX_PAIR_MATCHES_PER_DAY,
+  PAIR_REDUCED_WEIGHT_UNTIL,
+  pairRatingWeight,
+  pickRandomEligible,
+  rankedPoolKey,
+  randomSeatOrder,
+  type AllocationDecision,
+  type CandidateRejection,
+  type MatchCandidate,
+  type OpponentIntegrityResult,
+  type PoolConstraints,
+  type RankedFormat,
+  type TablePoolFields,
+} from "./ranked-matchmaker.js";
+
+export {
+  assertRankedParticipantIntegrity,
+  createDefaultLinkedAccountLookup,
+  isLinked,
+  isLinkedSync,
+  StubLinkedAccountStore,
+  type LinkedAccountEdge,
+  type LinkedAccountLookup,
+  type LinkReason,
+} from "./linked-accounts.js";
+
+/** Process-wide linked-account lookup (stub by default; inject for tests / ops). */
+let linkedAccountLookup: LinkedAccountLookup = createDefaultLinkedAccountLookup();
+
+export function setLinkedAccountLookup(lookup: LinkedAccountLookup): void {
+  linkedAccountLookup = lookup;
+}
+
+export function getLinkedAccountLookup(): LinkedAccountLookup {
+  return linkedAccountLookup;
+}
 
 /**
  * Ranked Arena leagues. Each league has one fixed buy-in — there is no
@@ -71,7 +124,6 @@ export function arenaFormatConfig(format: ArenaFormat) {
 }
 
 const IDLE_MINUTES = 10;
-const MAX_PAIR_MATCHES_PER_DAY = 5;
 
 /** Big blind is engraved as 10% of buy-in, small blind as 5% — never a range. */
 const BIG_BLIND_PCT = 0.1;
@@ -148,7 +200,7 @@ async function seatedOwners(tableId: string): Promise<string[]> {
 }
 
 /** True if this pair already has MAX_PAIR_MATCHES_PER_DAY rated/session overlaps today. */
-async function pairCappedToday(ownerA: string, ownerB: string): Promise<boolean> {
+export async function pairCappedToday(ownerA: string, ownerB: string): Promise<boolean> {
   const rated = await query(
     `select count(*)::int as n from rated_matches
      where created_at > now() - interval '24 hours'
@@ -212,9 +264,82 @@ async function createArenaTable(opts: {
   return { id, name, smallBlind, bigBlind, minBuyIn, maxBuyIn, format: opts.format, variantId: cfg.variantId };
 }
 
+export type AllocationLogInput = {
+  profileId: string;
+  leagueId: string;
+  format: ArenaFormat;
+  arenaMode: ArenaMode;
+  chainId: number | null;
+  poolKey: string;
+  decision: "reuse_session" | "join_existing" | "create_table" | "rejected";
+  tableId?: string | null;
+  reasonCode: string;
+  candidateCount: number;
+  eligibleCount: number;
+  rejected?: unknown;
+  seatOrder?: number[] | null;
+  trace?: Record<string, unknown>;
+};
+
+/** Persist a ranked allocation decision for audit / ops review. */
+export async function recordAllocationDecision(input: AllocationLogInput): Promise<string | null> {
+  try {
+    const res = await query<{ id: string }>(
+      `insert into matchmaking_allocation_log
+         (profile_id, league_id, format, arena_mode, chain_id, pool_key, decision, table_id,
+          reason_code, candidate_count, eligible_count, rejected, seat_order, trace)
+       values ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14::jsonb)
+       returning id::text`,
+      [
+        input.profileId,
+        input.leagueId,
+        input.format,
+        input.arenaMode,
+        input.chainId,
+        input.poolKey,
+        input.decision,
+        input.tableId ?? null,
+        input.reasonCode,
+        input.candidateCount,
+        input.eligibleCount,
+        JSON.stringify(input.rejected ?? []),
+        input.seatOrder ?? null,
+        JSON.stringify(input.trace ?? {}),
+      ],
+    );
+    return res.rows[0]?.id ?? null;
+  } catch (e) {
+    // Migration may not be applied yet in older envs — never fail matchmaking on audit.
+    console.warn(
+      "[matchmaking] allocation audit insert failed:",
+      e instanceof Error ? e.message : e,
+    );
+    return null;
+  }
+}
+
+export type FindArenaMatchResult = {
+  tableId: string;
+  tableName: string;
+  created: boolean;
+  alreadySeated: boolean;
+  buyIn: number;
+  leagueId: string;
+  arenaMode: ArenaMode;
+  chainId: number | null;
+  format: ArenaFormat;
+  variantId: string;
+  /** Audit row id when migration 017 is applied. */
+  allocationId?: string | null;
+  /** Random seat permutation recorded for seal (not user-chosen). */
+  seatOrder?: number[];
+  poolKey?: string;
+};
+
 /**
- * Arena matchmaking for Texas Hold'em (HU) or Poker Classic (6-max).
- * Buy-in is the league's fixed amount.
+ * Ranked Arena matchmaking for Texas Hold'em (HU) or Poker Classic (6-max).
+ * Buy-in is the league's fixed amount. Allocation is random within the pool —
+ * players never select a public ranked table or opponent (WP-040).
  */
 export async function findArenaMatch(opts: {
   userId: string;
@@ -222,7 +347,7 @@ export async function findArenaMatch(opts: {
   arenaMode?: ArenaMode;
   chainId?: number | null;
   format?: ArenaFormat;
-}) {
+}): Promise<FindArenaMatchResult> {
   await closeIdleArenaTables();
 
   const format = opts.format ?? "hu";
@@ -239,6 +364,14 @@ export async function findArenaMatch(opts: {
     throw new InsufficientFundsError(buyIn, available, league.id);
   }
 
+  const poolKey = rankedPoolKey({
+    leagueId: opts.leagueId,
+    format,
+    arenaMode,
+    chainId,
+    buyIn,
+  });
+
   // Already in a live session for this format? Send them back.
   const seated = await query(
     `select s.table_id, t.name from table_sessions s
@@ -252,6 +385,20 @@ export async function findArenaMatch(opts: {
     [opts.userId, arenaMode, cfg.maxSeats, cfg.variantId, chainId],
   );
   if (seated.rows[0]) {
+    const allocationId = await recordAllocationDecision({
+      profileId: opts.userId,
+      leagueId: opts.leagueId,
+      format,
+      arenaMode,
+      chainId,
+      poolKey,
+      decision: "reuse_session",
+      tableId: seated.rows[0].table_id as string,
+      reasonCode: "already_seated",
+      candidateCount: 0,
+      eligibleCount: 0,
+      trace: { product: cfg.productLabel },
+    });
     return {
       tableId: seated.rows[0].table_id as string,
       tableName: seated.rows[0].name as string,
@@ -263,10 +410,13 @@ export async function findArenaMatch(opts: {
       chainId,
       format,
       variantId: cfg.variantId,
+      allocationId,
+      poolKey,
     };
   }
 
-  const candidates = await query<{ id: string; name: string; seated: number }>(
+  // Same-pool candidates only (SQL enforces league/buy-in/format/mode/chain).
+  const candidateRows = await query<{ id: string; name: string; seated: number }>(
     `select t.id, t.name,
             (select count(*)::int from table_seats s where s.table_id = t.id and s.status = 'occupied') as seated
      from tables t
@@ -281,28 +431,80 @@ export async function findArenaMatch(opts: {
        and exists (
          select 1 from table_seats s
          where s.table_id = t.id and s.status = 'empty'
-       )
-     order by seated desc, t.created_at asc`,
+       )`,
     [opts.leagueId, buyIn, cfg.maxSeats, cfg.variantId, arenaMode, chainId],
   );
 
-  for (const c of candidates.rows) {
-    const owners = await seatedOwners(c.id);
-    if (owners.includes(opts.userId)) continue;
-    // Pair cap only for HU rated; Classic can share tables more freely.
-    if (format === "hu") {
-      let blocked = false;
-      for (const opp of owners) {
-        if (await pairCappedToday(opts.userId, opp)) {
-          blocked = true;
-          break;
-        }
-      }
-      if (blocked) continue;
-    }
+  const candidates: MatchCandidate[] = [];
+  for (const row of candidateRows.rows) {
+    candidates.push({
+      id: row.id,
+      name: row.name,
+      seated: Number(row.seated),
+      owners: await seatedOwners(row.id),
+    });
+  }
+
+  const pairCache = new Map<string, boolean>();
+  const pairCapped = (opponentId: string): boolean => {
+    // Sync wrapper over cached async results — populated below before allocate.
+    return pairCache.get(opponentId) === true;
+  };
+
+  const opponents = new Set<string>();
+  for (const c of candidates) {
+    for (const o of c.owners) opponents.add(o);
+  }
+
+  if (format === "hu") {
+    await Promise.all(
+      [...opponents].map(async (opp) => {
+        pairCache.set(opp, await pairCappedToday(opts.userId, opp));
+      }),
+    );
+  }
+
+  // WP-043: linked / beneficial-owner cluster exclusion (stub lookup by default).
+  const excludedPeers = await Promise.resolve(
+    linkedAccountLookup.getExcludedPeers(opts.userId),
+  );
+  const linkedToUser = (opponentId: string): boolean => excludedPeers.has(opponentId);
+
+  const decision = allocateRankedMatch({
+    userId: opts.userId,
+    format,
+    maxSeats: cfg.maxSeats,
+    candidates,
+    pairCapped,
+    linkedToUser,
+  });
+
+  if (decision.kind === "join_existing") {
+    const allocationId = await recordAllocationDecision({
+      profileId: opts.userId,
+      leagueId: opts.leagueId,
+      format,
+      arenaMode,
+      chainId,
+      poolKey,
+      decision: "join_existing",
+      tableId: decision.candidate.id,
+      reasonCode: "random_within_pool",
+      candidateCount: candidates.length,
+      eligibleCount: candidates.length - decision.rejects.length,
+      rejected: decision.rejects,
+      seatOrder: decision.seatOrder,
+      trace: {
+        product: cfg.productLabel,
+        seatedAtPick: decision.candidate.seated,
+        eligibleIds: candidates
+          .filter((c) => !decision.rejects.some((r) => r.tableId === c.id))
+          .map((c) => c.id),
+      },
+    });
     return {
-      tableId: c.id,
-      tableName: c.name,
+      tableId: decision.candidate.id,
+      tableName: decision.candidate.name,
       created: false,
       alreadySeated: false,
       buyIn,
@@ -311,6 +513,9 @@ export async function findArenaMatch(opts: {
       chainId,
       format,
       variantId: cfg.variantId,
+      allocationId,
+      seatOrder: decision.seatOrder,
+      poolKey,
     };
   }
 
@@ -321,6 +526,22 @@ export async function findArenaMatch(opts: {
     arenaMode,
     chainId,
     format,
+  });
+  const allocationId = await recordAllocationDecision({
+    profileId: opts.userId,
+    leagueId: opts.leagueId,
+    format,
+    arenaMode,
+    chainId,
+    poolKey,
+    decision: "create_table",
+    tableId: created.id,
+    reasonCode: candidates.length === 0 ? "empty_pool" : "no_eligible_after_constraints",
+    candidateCount: candidates.length,
+    eligibleCount: 0,
+    rejected: decision.rejects,
+    seatOrder: decision.seatOrder,
+    trace: { product: cfg.productLabel },
   });
   return {
     tableId: created.id,
@@ -333,6 +554,9 @@ export async function findArenaMatch(opts: {
     chainId,
     format,
     variantId: cfg.variantId,
+    allocationId,
+    seatOrder: decision.seatOrder,
+    poolKey,
   };
 }
 

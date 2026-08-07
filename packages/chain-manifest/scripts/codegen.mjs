@@ -25,9 +25,11 @@ const defaults = {
     decimals: 6,
     isTestAsset: false,
     faucetEnabled: false,
-    protocolVersion: "1.0.0-sepolia",
-    vrfCoordinator: "0x5C210eF41CD1a72a13DcB20c28948D40729fEFFb",
-    vrfKeyHash: "0x9e1344a1247c8a1785d0a4681a27152bffdb43666ae28ee20d8c6dff7f9c1a30",
+    // WP-102 V3 staging slot — protocol addresses stay null until live DeploySepolia broadcast
+    protocolVersion: "2.0.0-sepolia",
+    // Chainlink VRF v2.5 — https://docs.chain.link/vrf/v2-5/supported-networks#base-sepolia-testnet
+    vrfCoordinator: "0x5C210eF41CD1a72de73bF76eC39637bB0d3d7BEE",
+    vrfKeyHash: "0x9e1344a1247c8a1785d0a4681a27152bffdb43666ae5bf7d14d24a5efd44bf71",
   },
   base: {
     chainId: 8453,
@@ -36,9 +38,11 @@ const defaults = {
     decimals: 6,
     isTestAsset: false,
     faucetEnabled: false,
-    protocolVersion: "1.0.0",
+    // WP-105 restricted mainnet slot — protocol addresses stay null until approved live DeployMainnet
+    protocolVersion: "2.0.0-mainnet-restricted",
     vrfCoordinator: "0xd5D517aBE5cF79B7e95eC98dB0f0277788aFF634",
-    vrfKeyHash: null,
+    // 2 gwei lane — verify before mainnet use
+    vrfKeyHash: "0x00b81b5a830cb0a4009fbd8904de511e28631e62ce5ad231373d3cdad373ccab",
   },
 };
 
@@ -69,10 +73,20 @@ function load(network) {
     arenaAccountFactory: hex(file.arenaAccountFactory),
     arenaAccountImplementation: hex(file.arenaAccountImplementation),
     tableRegistry: hex(file.tableRegistry),
+    gameRegistry: hex(file.gameRegistry),
+    sessionLifecycle: hex(file.sessionLifecycle),
+    protocolFeeVault: hex(file.protocolFeeVault),
     settlementHub: hex(file.settlementHub),
     settlementHubV1: hex(file.settlementHubV1),
+    settlementHubV2: hex(file.settlementHubV2),
+    settlementHubV3: hex(file.settlementHubV3),
+    verifierRouter: hex(file.verifierRouter),
+    signatureQuorumVerifier: hex(file.signatureQuorumVerifier),
     checkpointRegistry: hex(file.checkpointRegistry),
     randomnessCoordinator: hex(file.randomnessCoordinator),
+    randomnessBeacon: hex(file.randomnessBeacon),
+    chainlinkVrfAdapter: hex(file.chainlinkVrfAdapter),
+    proofBatchRegistry: hex(file.proofBatchRegistry),
     feeTreasury: hex(file.feeTreasury),
     deploymentBlock: String(file.deploymentBlock ?? 0),
     protocolVersion: file.protocolVersion ?? d.protocolVersion,
@@ -100,10 +114,20 @@ const blocks = networks
     arenaAccountFactory: ${addr(e.arenaAccountFactory)},
     arenaAccountImplementation: ${addr(e.arenaAccountImplementation)},
     tableRegistry: ${addr(e.tableRegistry)},
+    gameRegistry: ${addr(e.gameRegistry)},
+    sessionLifecycle: ${addr(e.sessionLifecycle)},
+    protocolFeeVault: ${addr(e.protocolFeeVault)},
     settlementHub: ${addr(e.settlementHub)},
     settlementHubV1: ${addr(e.settlementHubV1)},
+    settlementHubV2: ${addr(e.settlementHubV2)},
+    settlementHubV3: ${addr(e.settlementHubV3)},
+    verifierRouter: ${addr(e.verifierRouter)},
+    signatureQuorumVerifier: ${addr(e.signatureQuorumVerifier)},
     checkpointRegistry: ${addr(e.checkpointRegistry)},
     randomnessCoordinator: ${addr(e.randomnessCoordinator)},
+    randomnessBeacon: ${addr(e.randomnessBeacon)},
+    chainlinkVrfAdapter: ${addr(e.chainlinkVrfAdapter)},
+    proofBatchRegistry: ${addr(e.proofBatchRegistry)},
     feeTreasury: ${addr(e.feeTreasury)},
     deploymentBlock: BigInt(${e.deploymentBlock}),
     protocolVersion: "${e.protocolVersion}",
@@ -134,10 +158,26 @@ export type ChainManifestEntry = {
   arenaAccountFactory: HexAddress | null;
   arenaAccountImplementation: HexAddress | null;
   tableRegistry: HexAddress | null;
+  gameRegistry: HexAddress | null;
+  sessionLifecycle: HexAddress | null;
+  protocolFeeVault: HexAddress | null;
   settlementHub: HexAddress | null;
   settlementHubV1: HexAddress | null;
+  /** Explicit V2 hub when settlementHub points at V3 (or null until deploy) */
+  settlementHubV2: HexAddress | null;
+  /** WP-063 FinalSettlementV3 hub (null until deploy) */
+  settlementHubV3: HexAddress | null;
+  /** WP-063 VerifierRouter */
+  verifierRouter: HexAddress | null;
+  /** WP-063 SignatureQuorumVerifier */
+  signatureQuorumVerifier: HexAddress | null;
   checkpointRegistry: HexAddress | null;
   randomnessCoordinator: HexAddress | null;
+  randomnessBeacon: HexAddress | null;
+  /** WP-053 Chainlink VRF v2.5 adapter (null until Sepolia deploy) */
+  chainlinkVrfAdapter: HexAddress | null;
+  /** WP-062 global proof-batch registry (null until deploy) */
+  proofBatchRegistry: HexAddress | null;
   feeTreasury: HexAddress | null;
   deploymentBlock: bigint;
   protocolVersion: string;
