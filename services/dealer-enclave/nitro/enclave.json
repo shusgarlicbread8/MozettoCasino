@@ -1,0 +1,19 @@
+{
+  "description": "WP-054 Mozetto Nitro dealer enclave allocation stub — requires AWS Nitro",
+  "extra_nodes": [],
+  "_comment": "Pass to nitro-cli run-enclave after building mozetto-dealer.eif. Values are placeholders.",
+  "stub": true,
+  "requires_aws_nitro": true,
+  "suggested": {
+    "cpu_count": 2,
+    "memory_mib": 512,
+    "eif_path": "mozetto-dealer.eif",
+    "enclave_cid": null
+  },
+  "published_measurements": {
+    "note": "Replace with nitro-cli describe-eif output before any production KMS policy.",
+    "pcr0": null,
+    "pcr1": null,
+    "pcr2": null
+  }
+}

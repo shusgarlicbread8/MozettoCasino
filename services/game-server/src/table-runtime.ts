@@ -27,6 +27,7 @@ import { fetchHandSeed, fallbackHandSeed } from "@mozetto/dealer/client";
 import type { Card } from "@mozetto/shared-types";
 import {
   query,
+  persistWithOutbox,
   lockBuyIn,
   releaseSession,
   markOnchainSessionPlaying,
@@ -34,8 +35,30 @@ import {
   rebalanceEscrowToStacks,
   settleRatedMatch,
   getOnchainSessionForTable,
+  handPhase,
+  enqueueSeatChange,
+  rotateEpochAtBoundary,
+  ensureOpenEpoch,
+  markEpochActive,
+  listPendingLeaveOwnerIds,
+  listPendingSeatChanges,
+  type EpochParticipant,
+  type DbClient,
 } from "@mozetto/database";
 import type { PokerAction, TableEvent } from "@mozetto/shared-types";
+import { mapHandEventRows, recoverActorTip } from "./lease/index.js";
+import {
+  MemoryOutboxStore,
+  canUsePokerEventV1,
+  encodeSinglePokerEventV1,
+  getOutboxStore,
+  persistThenBroadcast,
+  preferredSchemaKind,
+  recoverUndeliveredOutbox,
+  sessionIdToHex,
+  type OutboxStore,
+  type SchemaKind,
+} from "./outbox/index.js";
 import {
   hashObservation,
   resolveSeatController,
@@ -44,6 +67,11 @@ import {
 } from "./controllers.js";
 
 type Hex = `0x${string}`;
+
+function hexToBytes(hex: string): Buffer {
+  const h = hex.startsWith("0x") ? hex.slice(2) : hex;
+  return Buffer.from(h, "hex");
+}
 
 /** Action clock for human play (seconds). */
 export const TURN_SECONDS = 15;
@@ -74,6 +102,19 @@ export class TableRuntime {
   variantId = "nlhe_6max";
   state: HoldemState;
   sequence = 0;
+  /** WP-080: durable chain verified on load; false ⇒ refuse advancement. */
+  durableChainOk = true;
+  durableChainIssues: string[] = [];
+  /** WP-080 fencing token version when this runtime holds the table lease. */
+  leaseVersion: number | null = null;
+  leaseActorId: string | null = null;
+  /** WP-081 outbox store (Postgres by default; inject memory in tests). */
+  outboxStore: OutboxStore = getOutboxStore();
+  /** Schema kind preference for canonical/outbox rows. */
+  schemaKindPrefer: SchemaKind = preferredSchemaKind();
+  /** Tip for poker_event_v1 chain when enabled (on-chain session hex). */
+  pokerV1PrevHash: Hex | null = null;
+  pokerV1Sequence = 0;
   prevHash: string | null = null;
   clients = new Set<Client>();
   running = false;
@@ -96,6 +137,8 @@ export class TableRuntime {
   canonicalPrevHash: Hex = GENESIS_EVENT_HASH;
   canonicalSequence = 0;
   seatControllers = new Map<number, SeatController>();
+  /** Owners with a pending leave queued for the next epoch boundary (WP-042). */
+  pendingLeaveOwners = new Set<string>();
 
   constructor(
     tableId: string,
@@ -141,14 +184,20 @@ export class TableRuntime {
     if (rt.arenaMode === "onchain") {
       await rt.loadOnchainSession();
     }
-    // Resume event chain after restarts — avoids duplicate (table_id, sequence) inserts.
-    const seq = await query(`select coalesce(max(sequence), 0)::int as m from hand_events where table_id = $1`, [tableId]);
-    rt.sequence = Number(seq.rows[0]?.m ?? 0);
-    const lastHash = await query(
-      `select event_hash from hand_events where table_id = $1 order by sequence desc limit 1`,
+    // WP-080: replay durable hand_events tip (hash chain) after lease reclaim.
+    const eventRows = await query(
+      `select sequence, event_type, event_hash, prev_event_hash, hand_id, payload, timestamp
+       from hand_events where table_id = $1 order by sequence`,
       [tableId],
     );
-    rt.prevHash = lastHash.rows[0]?.event_hash ?? null;
+    const tip = recoverActorTip(mapHandEventRows(eventRows.rows));
+    rt.sequence = tip.sequence;
+    rt.prevHash = tip.prevHash;
+    rt.durableChainOk = tip.chainOk;
+    rt.durableChainIssues = tip.issues;
+    if (!tip.chainOk) {
+      console.error("[table-runtime] durable event chain broken — refusing actor loop", tableId, tip.issues);
+    }
 
     const seats = await query(`select * from table_seats where table_id = $1 order by seat_index`, [tableId]);
     for (const s of seats.rows) {
@@ -178,7 +227,133 @@ export class TableRuntime {
     // Best-effort: hands played before a restart aren't attributable to a session start;
     // treat "now" as the start so only hands going forward count toward rated matches.
     for (const s of sessions.rows) rt.sessionStartHand.set(s.id, rt.state.handNumber);
+    try {
+      await ensureOpenEpoch(tableId, rt.epochParticipants());
+      rt.pendingLeaveOwners = await listPendingLeaveOwnerIds(tableId);
+    } catch (err) {
+      console.warn("[table-runtime] epoch bootstrap skipped", tableId, err);
+    }
+
+    // WP-081: republish undelivered outbox before accepting new authoritative writes.
+    try {
+      const recovered = await recoverUndeliveredOutbox({
+        store: rt.outboxStore,
+        tableId,
+        sessionId: rt.onchainSessionId ?? undefined,
+        publish: async (msg) => {
+          const event = msg.payload as TableEvent;
+          if (event && typeof event === "object" && "eventType" in event) {
+            rt.broadcast(event);
+          }
+        },
+      });
+      if (recovered.drained > 0 || recovered.failed > 0) {
+        console.info(
+          "[table-runtime] outbox recovery",
+          tableId,
+          `drained=${recovered.drained}`,
+          `failed=${recovered.failed}`,
+          `remaining=${recovered.remainingPending}`,
+        );
+      }
+    } catch (err) {
+      console.warn("[table-runtime] outbox recovery skipped", tableId, err);
+    }
+
     return rt;
+  }
+
+  /** WP-042: current seated participants for epoch planning. */
+  epochParticipants(): EpochParticipant[] {
+    return this.state.seats
+      .filter((s) => s.playerId)
+      .map((s) => ({
+        ownerId: s.playerId!,
+        seatIndex: s.seatIndex,
+        stack: Number(s.stack) || 0,
+        allIn: Boolean(s.allIn),
+        agentId: s.agentId,
+      }));
+  }
+
+  currentHandPhase() {
+    return handPhase({ handId: this.state.handId, street: this.state.street });
+  }
+
+  /**
+   * WP-042: apply queued join/leave/top-up at the epoch boundary (between hands).
+   * Must run only when participants are mutable (waiting / post-settlement).
+   * Rotates the table epoch even when the queue is empty (next-hand checkpoint).
+   */
+  async applyEpochBoundary(opts?: { onlyIfPending?: boolean }): Promise<void> {
+    if (this.currentHandPhase() === "hand_active") {
+      console.warn("[table-runtime] applyEpochBoundary blocked mid-hand", this.tableId);
+      return;
+    }
+    if (opts?.onlyIfPending) {
+      const pending = await listPendingSeatChanges(this.tableId).catch(() => []);
+      if (!pending.length) return;
+    }
+    // Clear all-in flags for planning — hand has resolved.
+    const participants = this.epochParticipants().map((p) => ({ ...p, allIn: false }));
+    const maxSeats = this.state.seats.length;
+    const rotated = await rotateEpochAtBoundary({
+      tableId: this.tableId,
+      participants,
+      maxSeats,
+      handNumberEnd: this.state.handNumber,
+    });
+    if (!rotated) return;
+
+    const { plan } = rotated;
+    for (const leave of plan.leaves) {
+      await this.leave(leave.ownerId, { forceImmediate: true });
+    }
+    for (const top of plan.topUps) {
+      const amount = Number(top.amount ?? 0);
+      if (amount > 0) {
+        await this.topUp(top.ownerId, amount, { forceImmediate: true });
+      }
+    }
+    for (const join of plan.joins) {
+      const buyIn = Number(join.amount ?? 0);
+      const agentConfigId = join.agentConfigId ?? String(join.payload?.agentConfigId ?? "");
+      if (!(buyIn > 0) || !join.agentId || !agentConfigId) {
+        console.warn("[table-runtime] skip queued join — missing agent fields", join.id);
+        continue;
+      }
+      const payload = join.payload ?? {};
+      await this.join({
+        userId: join.ownerId,
+        agentId: join.agentId,
+        agentConfigId,
+        buyIn,
+        seatIndex: join.seatIndex ?? undefined,
+        profileKey: join.profileKey ?? String(payload.profileKey ?? "machine"),
+        stopLoss: payload.stopLoss != null ? Number(payload.stopLoss) : undefined,
+        profitTarget: payload.profitTarget != null ? Number(payload.profitTarget) : undefined,
+        autoRebuy: Boolean(payload.autoRebuy),
+        forceImmediate: true,
+      });
+    }
+
+    this.pendingLeaveOwners = await listPendingLeaveOwnerIds(this.tableId).catch(
+      () => new Set<string>(),
+    );
+    if (plan.appliedIds.length || plan.rejected.length) {
+      await this.persistEvent("EPOCH_ROTATED", {
+        closedEpoch: plan.closedEpoch,
+        nextEpoch: plan.nextEpoch,
+        applied: plan.appliedIds.length,
+        rejected: plan.rejected,
+        participants: plan.nextParticipants.map((p) => ({
+          ownerId: p.ownerId,
+          seatIndex: p.seatIndex,
+          stack: p.stack,
+        })),
+      }).catch(() => null);
+      this.broadcastSnapshots();
+    }
   }
 
   async loadOnchainSession() {
@@ -228,9 +403,72 @@ export class TableRuntime {
     eventType: string,
     publicPayload: Record<string, unknown>,
     privatePayloadCommitment?: string | null,
+    client?: DbClient,
   ) {
     if (this.arenaMode !== "onchain" || !this.onchainSessionId) return;
+    const q = client?.query.bind(client) ?? query;
     this.canonicalSequence += 1;
+
+    const useV1 = canUsePokerEventV1(eventType, this.schemaKindPrefer);
+    if (useV1) {
+      const sessionHex = sessionIdToHex(this.onchainSessionId);
+      const prev =
+        (this.pokerV1PrevHash as Hex | null) ??
+        (("0x" + "00".repeat(32)) as Hex);
+      const encoded = encodeSinglePokerEventV1({
+        sessionId: sessionHex,
+        epoch: 0n,
+        handNumber: BigInt(this.state.handNumber ?? 0),
+        sequence: BigInt(this.pokerV1Sequence),
+        eventType,
+        publicPayload,
+        previousEventHash: prev,
+        privatePayloadCommitment: privatePayloadCommitment
+          ? (privatePayloadCommitment as Hex)
+          : undefined,
+      });
+      if (encoded) {
+        this.pokerV1PrevHash = encoded.eventHash;
+        this.pokerV1Sequence += 1;
+        this.canonicalPrevHash = encoded.eventHash;
+        try {
+          await q(
+            `insert into canonical_game_events
+             (session_id, hand_id, sequence, event_hash, previous_event_hash, event_type, public_payload,
+              private_payload_commitment, timestamp_ms, schema_kind, epoch, hand_number, protocol_version,
+              event_type_code, has_actor_seat, actor_seat, public_payload_hash, canonical_bytes)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'poker_event_v1',0,$10,3,$11,$12,$13,$14,$15)`,
+            [
+              this.onchainSessionId,
+              this.state.handId,
+              this.canonicalSequence,
+              encoded.eventHash,
+              encoded.previousEventHash,
+              eventType,
+              JSON.stringify(publicPayload),
+              privatePayloadCommitment ?? null,
+              Date.now(),
+              this.state.handNumber ?? 0,
+              encoded.eventTypeCode,
+              encoded.hasActorSeat,
+              encoded.actorSeat,
+              encoded.publicPayloadHash,
+              hexToBytes(encoded.canonicalBytesHex),
+            ],
+          );
+          await q(
+            `insert into public_event_payloads (event_hash, payload)
+             values ($1, $2::jsonb)
+             on conflict (event_hash) do nothing`,
+            [encoded.eventHash, JSON.stringify(publicPayload)],
+          ).catch(() => null);
+        } catch (err) {
+          console.warn("canonical_game_events poker_event_v1 insert failed", this.tableId, err);
+        }
+        return;
+      }
+    }
+
     const canonical = buildCanonicalEvent({
       sessionId: this.onchainSessionId,
       handId: this.state.handId,
@@ -243,10 +481,11 @@ export class TableRuntime {
     const eventHash = hashEvent(canonical);
     this.canonicalPrevHash = eventHash;
     try {
-      await query(
+      await q(
         `insert into canonical_game_events
-         (session_id, hand_id, sequence, event_hash, previous_event_hash, event_type, public_payload, private_payload_commitment, timestamp_ms)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+         (session_id, hand_id, sequence, event_hash, previous_event_hash, event_type, public_payload,
+          private_payload_commitment, timestamp_ms, schema_kind, epoch)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'legacy_json',0)`,
         [
           this.onchainSessionId,
           this.state.handId,
@@ -259,6 +498,12 @@ export class TableRuntime {
           canonical.timestampMs,
         ],
       );
+      await q(
+        `insert into public_event_payloads (event_hash, payload)
+         values ($1, $2::jsonb)
+         on conflict (event_hash) do nothing`,
+        [eventHash, JSON.stringify(publicPayload)],
+      ).catch(() => null);
     } catch (err) {
       console.warn("canonical_game_events insert failed", this.tableId, err);
     }
@@ -359,25 +604,126 @@ export class TableRuntime {
     const eventHash = createHash("sha256").update(JSON.stringify(body)).digest("hex");
     this.prevHash = eventHash;
     const full: TableEvent = { ...body, eventHash, visibility };
-    await query(
-      `insert into hand_events (table_id, hand_id, sequence, event_type, timestamp, payload, visibility, prev_event_hash, event_hash)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [
-        this.tableId,
-        this.state.handId,
-        this.sequence,
-        eventType,
-        body.timestamp,
-        JSON.stringify(payload),
-        visibility,
-        body.prevEventHash,
-        eventHash,
-      ],
-    );
-    if (this.arenaMode === "onchain" && visibility !== "owner_private") {
-      await this.persistCanonicalEvent(eventType, payload);
+
+    const sessionId = this.onchainSessionId ?? this.tableId;
+    const schemaKind: SchemaKind = canUsePokerEventV1(eventType, this.schemaKindPrefer)
+      ? "poker_event_v1"
+      : "legacy_json";
+
+    // WP-081: durable hand_events (+ optional canonical) + outbox in one transaction,
+    // then broadcast, then mark published.
+    const useMemoryOutbox = this.outboxStore instanceof MemoryOutboxStore;
+
+    if (useMemoryOutbox) {
+      await persistThenBroadcast({
+        store: this.outboxStore,
+        durableWrite: async () => {
+          await query(
+            `insert into hand_events (table_id, hand_id, sequence, event_type, timestamp, payload, visibility, prev_event_hash, event_hash)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+            [
+              this.tableId,
+              this.state.handId,
+              this.sequence,
+              eventType,
+              body.timestamp,
+              JSON.stringify(payload),
+              visibility,
+              body.prevEventHash,
+              eventHash,
+            ],
+          );
+          if (this.arenaMode === "onchain" && visibility !== "owner_private") {
+            await this.persistCanonicalEvent(eventType, payload);
+          }
+        },
+        outbox: {
+          sessionId,
+          tableId: this.tableId,
+          sequence: this.sequence,
+          eventHash,
+          channel: `table:${this.tableId}:public`,
+          payload: full as unknown as Record<string, unknown>,
+          schemaKind,
+          visibility,
+        },
+        publish: async () => {
+          this.broadcast(full);
+        },
+      });
+      return full;
     }
-    this.broadcast(full);
+
+    await persistThenBroadcast({
+      store: this.outboxStore,
+      durableWrite: async () => {
+        /* atomicPersist below owns the write */
+      },
+      outbox: {
+        sessionId,
+        tableId: this.tableId,
+        sequence: this.sequence,
+        eventHash,
+        channel: `table:${this.tableId}:public`,
+        payload: full as unknown as Record<string, unknown>,
+        schemaKind,
+        visibility,
+      },
+      atomicPersist: async () => {
+        const { outbox } = await persistWithOutbox({
+          outbox: {
+            sessionId,
+            tableId: this.tableId,
+            sequence: this.sequence,
+            eventHash,
+            channel: `table:${this.tableId}:public`,
+            payload: full as unknown as Record<string, unknown>,
+            schemaKind,
+            visibility,
+          },
+          write: async (client) => {
+            await client.query(
+              `insert into hand_events (table_id, hand_id, sequence, event_type, timestamp, payload, visibility, prev_event_hash, event_hash)
+               values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+              [
+                this.tableId,
+                this.state.handId,
+                this.sequence,
+                eventType,
+                body.timestamp,
+                JSON.stringify(payload),
+                visibility,
+                body.prevEventHash,
+                eventHash,
+              ],
+            );
+            if (this.arenaMode === "onchain" && visibility !== "owner_private") {
+              await this.persistCanonicalEvent(eventType, payload, null, client);
+            }
+          },
+        });
+        return {
+          id: outbox.id,
+          sessionId: outbox.sessionId,
+          tableId: outbox.tableId,
+          epoch: outbox.epoch,
+          sequence: outbox.sequence,
+          eventHash: outbox.eventHash,
+          channel: outbox.channel,
+          payload: outbox.payload,
+          schemaKind: outbox.schemaKind,
+          visibility: outbox.visibility,
+          status: outbox.status,
+          attempts: outbox.attempts,
+          lastError: outbox.lastError,
+          createdAtMs: Date.parse(outbox.createdAt) || Date.now(),
+          publishedAtMs: outbox.publishedAt ? Date.parse(outbox.publishedAt) : null,
+        };
+      },
+      publish: async () => {
+        this.broadcast(full);
+      },
+    });
     return full;
   }
 
@@ -391,6 +737,8 @@ export class TableRuntime {
     stopLoss?: number;
     profitTarget?: number;
     autoRebuy?: boolean;
+    /** WP-042: skip queue when applying an epoch-boundary flush. */
+    forceImmediate?: boolean;
   }) {
     // Enforce table buy-in window (ranked arena uses fixed equal stacks).
     const limits = await query(`select min_buy_in, max_buy_in, arena_mode from tables where id=$1`, [this.tableId]);
@@ -421,6 +769,7 @@ export class TableRuntime {
         sessionId: this.sessions.get(opts.userId) ?? null,
         seated: this.state.seats.filter((s) => s.playerId && !s.sitOut).length,
         alreadySeated: true,
+        queued: false,
       };
     }
     // Still seated but sat out / busted — resume via top-up, don't create a second seat.
@@ -428,6 +777,48 @@ export class TableRuntime {
     if (selfSitOut) {
       throw new Error("Already seated — use top-up to add chips");
     }
+
+    // WP-042: mid-hand joins are queued for the next epoch — no participant mutation.
+    const phase = this.currentHandPhase();
+    if (phase === "hand_active" && !opts.forceImmediate) {
+      const enqueued = await enqueueSeatChange({
+        tableId: this.tableId,
+        changeType: "join",
+        ownerId: opts.userId,
+        phase,
+        participants: this.epochParticipants(),
+        agentId: opts.agentId,
+        agentConfigId: opts.agentConfigId,
+        seatIndex: opts.seatIndex ?? null,
+        amount: opts.buyIn,
+        profileKey: opts.profileKey,
+        payload: {
+          agentConfigId: opts.agentConfigId,
+          profileKey: opts.profileKey,
+          stopLoss: opts.stopLoss ?? null,
+          profitTarget: opts.profitTarget ?? null,
+          autoRebuy: opts.autoRebuy ?? false,
+        },
+      });
+      if (enqueued.queued === false) throw new Error(enqueued.reason);
+      await this.persistEvent("JOIN_QUEUED", {
+        userId: opts.userId,
+        buyIn: opts.buyIn,
+        targetEpoch: enqueued.targetEpoch,
+        changeId: enqueued.change.id,
+      }).catch(() => null);
+      this.broadcastSnapshots();
+      return {
+        seatIndex: null,
+        sessionId: null,
+        seated: this.state.seats.filter((s) => s.playerId && !s.sitOut).length,
+        alreadySeated: false,
+        queued: true,
+        targetEpoch: enqueued.targetEpoch,
+        changeId: enqueued.change.id,
+      };
+    }
+
     // Only truly empty seats. Never steal another player's sit-out / busted seat.
     const empty = this.state.seats.find(
       (s) => (opts.seatIndex == null || s.seatIndex === opts.seatIndex) && !s.playerId,
@@ -487,6 +878,7 @@ export class TableRuntime {
       sessionId,
       seated: seatedCount,
       alreadySeated: false,
+      queued: false,
     };
   }
 
@@ -512,15 +904,50 @@ export class TableRuntime {
     for (const ev of events) await this.emitEngine(ev);
     await this.syncStacks();
     await this.persistEvent("HAND_COMPLETE", { reason, winnerSeat: live[0].seatIndex, potWon: true }).catch(() => null);
+    this.resetToWaiting();
+    await this.applyEpochBoundary();
     return true;
   }
 
-  async leave(userId: string) {
+  async leave(userId: string, opts?: { forceImmediate?: boolean }) {
     const seat = this.state.seats.find((s) => s.playerId === userId);
     if (!seat || !seat.playerId) {
       // Still close any orphaned DB session so the lobby doesn't think we're seated.
       await this.completeSessionsForUser(userId, 0);
-      return;
+      this.pendingLeaveOwners.delete(userId);
+      return { queued: false, ok: true };
+    }
+
+    // WP-042: mid-hand leave is queued — player remains exposed until hand finishes.
+    const phase = this.currentHandPhase();
+    if (phase === "hand_active" && !opts?.forceImmediate) {
+      const enqueued = await enqueueSeatChange({
+        tableId: this.tableId,
+        changeType: "leave",
+        ownerId: userId,
+        phase,
+        participants: this.epochParticipants(),
+        agentId: seat.agentId,
+        seatIndex: seat.seatIndex,
+      });
+      if (enqueued.queued === false) {
+        // Idempotent: already queued
+        if (enqueued.reason === "leave_already_queued") {
+          this.pendingLeaveOwners.add(userId);
+          return { queued: true, ok: true, reason: enqueued.reason };
+        }
+        throw new Error(enqueued.reason);
+      }
+      this.pendingLeaveOwners.add(userId);
+      await this.persistEvent("LEAVE_QUEUED", {
+        seatIndex: seat.seatIndex,
+        userId,
+        targetEpoch: enqueued.targetEpoch,
+        changeId: enqueued.change.id,
+        allIn: Boolean(seat.allIn),
+      }).catch(() => null);
+      this.broadcastSnapshots();
+      return { queued: true, ok: true, targetEpoch: enqueued.targetEpoch, changeId: enqueued.change.id };
     }
 
     const seatIndex = seat.seatIndex;
@@ -538,13 +965,12 @@ export class TableRuntime {
       Boolean(this.state.handId) && this.state.street !== "waiting" && this.state.street !== "settlement";
     const wasActing = this.state.actingIndex === seatIndex;
 
-    // Mid-hand leave = fold + forfeit pot contribution; remaining player scoops.
+    // Legacy force path only: mid-hand leave = fold + forfeit (should not run under WP-042 queue).
     if (midHand && !seat.folded) {
       this.state = foldSeat(this.state, seatIndex);
       if (wasActing) this.clearPendingHuman();
       const awarded = await this.settleIfOnePlayerLeft("opponent_left");
       if (!awarded && wasActing) {
-        // Hand continues — advance action off the empty actor.
         const legalNext = this.state.seats.find(
           (s) => !s.folded && !s.allIn && s.playerId && !s.sitOut && s.seatIndex !== seatIndex,
         );
@@ -596,6 +1022,7 @@ export class TableRuntime {
       await this.completeSessionsForUser(userId, stack);
     }
     this.agentProfiles.delete(seatIndex);
+    this.pendingLeaveOwners.delete(userId);
     for (const c of this.clients) {
       if (c.userId === userId) c.seatIndex = undefined;
     }
@@ -618,6 +1045,7 @@ export class TableRuntime {
     }
     // Always push a fresh snapshot so every client flips the seat to SEAT OPEN.
     this.broadcastSnapshots();
+    return { queued: false, ok: true };
   }
 
   /**
@@ -705,10 +1133,31 @@ export class TableRuntime {
     }
   }
 
+  /** WP-080: bind fencing token from lease manager after acquire. */
+  bindLease(actorInstanceId: string, leaseVersion: number) {
+    this.leaseActorId = actorInstanceId;
+    this.leaseVersion = leaseVersion;
+  }
+
+  clearLease() {
+    this.leaseActorId = null;
+    this.leaseVersion = null;
+  }
+
   ensureLoop() {
+    if (!this.durableChainOk) {
+      console.error("[table-runtime] ensureLoop blocked — durable chain not ok", this.tableId, this.durableChainIssues);
+      return;
+    }
     if (this.running) return;
     this.running = true;
     void this.loop();
+  }
+
+  /** Stop the actor loop after lease loss (split-brain prevention). */
+  stopLoop() {
+    this.running = false;
+    this.clearLease();
   }
 
   resetToWaiting() {
@@ -833,10 +1282,12 @@ export class TableRuntime {
           // Hold so clients can play win / reveal animations — and busted players can top up.
           await sleep(3200);
           // Anyone still at $0 vacates: open seat, not a dimmed ghost card.
-          const broke = this.state.seats.filter((s) => s.playerId && s.stack <= 0).map((s) => s.playerId);
+          const broke = this.state.seats.filter((s) => s.playerId && s.stack <= 0).map((s) => s.playerId!);
           for (const uid of broke) {
-            await this.leave(uid);
+            await this.leave(uid, { forceImmediate: true });
           }
+          // WP-042: apply queued join/leave/top-up before the next hand.
+          await this.applyEpochBoundary();
         }
       } catch (err) {
         console.error("table loop error", this.tableId, err);
@@ -859,6 +1310,12 @@ export class TableRuntime {
   async beginHand() {
     const seated = this.state.seats.filter((s) => !s.sitOut && s.playerId && s.stack > 0);
     if (seated.length < 2) return;
+
+    // WP-042 safety net: flush pending queue only (avoid double epoch rotate).
+    await this.applyEpochBoundary({ onlyIfPending: true });
+
+    const seatedAfter = this.state.seats.filter((s) => !s.sitOut && s.playerId && s.stack > 0);
+    if (seatedAfter.length < 2) return;
 
     // On-chain: hard-gate first deal on confirmed V2 custody locks (not ledger mirror alone).
     if (this.arenaMode === "onchain") {
@@ -950,14 +1407,42 @@ export class TableRuntime {
       [handId, this.tableId, state.handNumber, state.button, state.seedCommit],
     );
     this.state = state;
+    await markEpochActive(this.tableId, state.handNumber);
     for (const ev of events) await this.emitEngine(ev);
   }
 
   /** Add chips to a seated (possibly busted) player mid-session. */
-  async topUp(userId: string, amount: number) {
+  async topUp(userId: string, amount: number, opts?: { forceImmediate?: boolean }) {
     if (!(amount > 0)) throw new Error("Invalid top-up");
     const seat = this.state.seats.find((s) => s.playerId === userId);
     if (!seat) throw new Error("Not seated");
+
+    // WP-042: mid-hand top-ups queue for the next epoch (stack mutation deferred).
+    const phase = this.currentHandPhase();
+    if (phase === "hand_active" && !opts?.forceImmediate) {
+      const enqueued = await enqueueSeatChange({
+        tableId: this.tableId,
+        changeType: "top_up",
+        ownerId: userId,
+        phase,
+        participants: this.epochParticipants(),
+        agentId: seat.agentId,
+        seatIndex: seat.seatIndex,
+        amount,
+        idempotencyKey: `top_up:${this.tableId}:${userId}:${Date.now()}`,
+      });
+      if (enqueued.queued === false) throw new Error(enqueued.reason);
+      await this.persistEvent("TOP_UP_QUEUED", {
+        seatIndex: seat.seatIndex,
+        userId,
+        amount,
+        targetEpoch: enqueued.targetEpoch,
+        changeId: enqueued.change.id,
+      }).catch(() => null);
+      this.broadcastSnapshots();
+      return { stack: seat.stack, queued: true, targetEpoch: enqueued.targetEpoch };
+    }
+
     let sessionId = this.sessions.get(userId);
     if (!sessionId) {
       const row = await query(
@@ -987,7 +1472,7 @@ export class TableRuntime {
     await query(`update table_sessions set stack=$1, buy_in = buy_in + $2 where id=$3`, [nextStack, amount, sessionId]);
     await this.persistEvent("PLAYER_TOP_UP", { seatIndex: seat.seatIndex, userId, amount, stack: nextStack });
     this.ensureLoop();
-    return { stack: nextStack };
+    return { stack: nextStack, queued: false };
   }
 
   clearPendingHuman(reason: "cancelled" | "replaced" = "cancelled") {

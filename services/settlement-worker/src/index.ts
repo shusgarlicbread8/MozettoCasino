@@ -1,26 +1,25 @@
 /**
- * Settlement + checkpoint worker (Phases 3/5/7).
- * - Tracks pending settlements
- * - Builds settlement proposals + 2-of-3 attestations (game / replay / dealer)
- * - Submits PokerSettlementHub.settle when configured
- * - Anchors hand-event Merkle roots into CheckpointRegistry when configured
- * - Mock VRF: call fulfillMock when ENABLE_MOCK_VRF=1 (local Anvil only).
- *   Production: wire Chainlink VRF via RandomnessCoordinator.requestRandomWords +
- *   fulfillRandomWords callback — do not use fulfillMock on mainnet/testnet.
+ * Settlement + checkpoint worker (Phases 3/5/7) — WP-084.
+ * - V3 path (additive): FinalSettlementV3 via @mozetto/root-builder + @mozetto/attestors → Hub V3
+ * - V2 path (legacy Anvil demos): FinalSettlement EIP-712 "2" → PokerSettlementHubV2
+ * Mode: SETTLEMENT_HUB_V3_ADDRESS set, or SETTLEMENT_HUB_VERSION=v3|v2
  */
 import { createHash } from "node:crypto";
-import {
-  createWalletClient,
-  createPublicClient,
-  http,
-  keccak256,
-  toBytes,
-  type Hex,
-} from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { baseSepolia, foundry } from "viem/chains";
-import { query, settleRatedMatch } from "@mozetto/database";
+import { pathToFileURL } from "node:url";
+import type { Hex } from "viem";
+import { probeAttestorKeys, tryLoadAttestorKey } from "@mozetto/attestors";
+import { query } from "@mozetto/database";
 import { requestDealerAttestation } from "@mozetto/dealer/client";
+import {
+  chainClients,
+  keccakLike,
+  resolveSettlementMode,
+  sessionIdToBytes32,
+  toBytes32,
+} from "./chain.js";
+import { startHealthServer } from "./health.js";
+import { maybeRateOnchainSession } from "./rating.js";
+import { processOnchainSettlementsV3 } from "./v3/process.js";
 
 const CHECKPOINT_ABI = [
   {
@@ -69,6 +68,7 @@ const RANDOMNESS_ABI = [
   },
 ] as const;
 
+/** Legacy Hub V2 ABI — kept for Anvil demos when SETTLEMENT_HUB_VERSION=v2. */
 const SETTLEMENT_HUB_ABI = [
   {
     type: "function",
@@ -120,43 +120,13 @@ const ARENA_VAULT_FEE_ABI = [
   },
 ] as const;
 
-function keccakLike(data: string): Hex {
-  return (`0x${createHash("sha256").update(data).digest("hex")}`) as Hex;
-}
-
-function sessionIdToBytes32(sessionId: string): Hex {
-  // Custody session ids are already bytes32 hex from openSession — do not re-hash.
-  if (/^0x[0-9a-fA-F]{64}$/.test(sessionId)) return sessionId.toLowerCase() as Hex;
-  const hex = sessionId.startsWith("0x") ? sessionId.slice(2) : sessionId;
-  if (/^[0-9a-fA-F]{64}$/.test(hex)) return (`0x${hex.toLowerCase()}`) as Hex;
-  return keccak256(toBytes(sessionId));
-}
-
-function toBytes32(raw: string): Hex {
-  const hex = raw.startsWith("0x") ? raw.slice(2) : raw;
-  return (`0x${hex.padStart(64, "0").slice(-64)}`) as Hex;
-}
-
-function hubDomain(chainId: number, verifyingContract: Hex) {
+function hubDomainV2(chainId: number, verifyingContract: Hex) {
   return {
     name: "MozettoPokerSettlement",
     version: "2",
     chainId,
     verifyingContract,
   } as const;
-}
-
-function chainClients(pk: Hex) {
-  const chainId = Number(process.env.CHAIN_ID || 84532);
-  const chain = chainId === 31337 ? foundry : baseSepolia;
-  const rpc =
-    chainId === 31337
-      ? process.env.ANVIL_RPC_URL || "http://127.0.0.1:8545"
-      : process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org";
-  const account = privateKeyToAccount(pk);
-  const wallet = createWalletClient({ account, chain, transport: http(rpc) });
-  const publicClient = createPublicClient({ chain, transport: http(rpc) });
-  return { chainId, chain, rpc, account, wallet, publicClient };
 }
 
 async function tickPending() {
@@ -251,9 +221,7 @@ type SessionRow = {
   chain_id: number;
 };
 
-async function buildProposal(session: SessionRow) {
-  // Prefer latest table_session per player (active or completed). Never join on
-  // osp.session_id = ts.id — custody session ids are bytes32, not table_session UUIDs.
+async function buildProposalV2(session: SessionRow) {
   type StackRow = {
     wallet_address: string;
     stack: string;
@@ -327,8 +295,6 @@ async function buildProposal(session: SessionRow) {
     startTotal += start;
     endTotal += end;
   }
-  // Rake is the chips removed from the table as a whole, not the sum of
-  // individual losses (which incorrectly counts chips won by another player).
   const totalRake = Math.max(0, startTotal - endTotal);
 
   const deadline = new Date(Date.now() + 86400_000);
@@ -364,9 +330,10 @@ async function buildProposal(session: SessionRow) {
   };
 }
 
-async function collectAttestations(proposal: NonNullable<Awaited<ReturnType<typeof buildProposal>>>) {
+async function collectAttestationsV2(proposal: NonNullable<Awaited<ReturnType<typeof buildProposalV2>>>) {
   const hub = process.env.SETTLEMENT_HUB_ADDRESS as Hex | undefined;
-  const gamePk = (process.env.GAME_ATTESTOR_PRIVATE_KEY || process.env.SETTLEMENT_PRIVATE_KEY) as Hex | undefined;
+  const gameKey = tryLoadAttestorKey("game");
+  const gamePk = gameKey?.privateKey;
   const replayUrl = process.env.REPLAY_VERIFIER_URL ?? "http://localhost:4004";
   const signatures: Hex[] = [];
   const roles: ("game" | "replay" | "dealer")[] = [];
@@ -374,7 +341,7 @@ async function collectAttestations(proposal: NonNullable<Awaited<ReturnType<type
   if (gamePk && hub) {
     const { account, wallet, chainId } = chainClients(gamePk);
     const sig = await wallet.signTypedData({
-      domain: hubDomain(chainId, hub),
+      domain: hubDomainV2(chainId, hub),
       types: {
         FinalSettlement: [
           { name: "sessionId", type: "bytes32" },
@@ -451,13 +418,13 @@ async function collectAttestations(proposal: NonNullable<Awaited<ReturnType<type
   return { signatures, roles };
 }
 
-async function submitHubSettlement(
-  proposal: NonNullable<Awaited<ReturnType<typeof buildProposal>>>,
+async function submitHubSettlementV2(
+  proposal: NonNullable<Awaited<ReturnType<typeof buildProposalV2>>>,
   signatures: Hex[],
+  hub: Hex,
 ) {
-  const hub = process.env.SETTLEMENT_HUB_ADDRESS as Hex | undefined;
-  const pk = (process.env.SETTLEMENT_PRIVATE_KEY || process.env.GAME_ATTESTOR_PRIVATE_KEY) as Hex | undefined;
-  if (!hub || !pk || signatures.length < 2) {
+  const pk = process.env.SETTLEMENT_PRIVATE_KEY as Hex | undefined;
+  if (!pk || signatures.length < 2) {
     console.log(
       "[settlement-worker] quorum incomplete",
       proposal.sessionId,
@@ -523,10 +490,8 @@ async function submitHubSettlement(
       `update onchain_sessions set status = 'settled', settlement_tx_hash = $2, settled_at = now() where session_id = $1`,
       [proposal.sessionId, hash],
     ).catch(() => null);
-    console.log("[settlement-worker] hub settle submitted", proposal.sessionId, hash);
+    console.log("[settlement-worker] hub V2 settle submitted", proposal.sessionId, hash);
 
-    // The vault accrues rake for accounting; sweep it immediately to the
-    // configured fee treasury after each successful settlement.
     const vault = process.env.ARENA_VAULT_ADDRESS as Hex | undefined;
     if (vault) {
       const fees = await publicClient.readContract({
@@ -542,99 +507,25 @@ async function submitHubSettlement(
           args: [fees],
         });
         await publicClient.waitForTransactionReceipt({ hash: feeHash });
-        console.log("[settlement-worker] protocol fees swept", fees.toString(), feeHash);
+        console.log("[settlement-worker] protocol fees deposited to fee vault", fees.toString(), feeHash);
       }
     }
 
-    // Post-settlement Glicko for on-chain HU sessions (deferred from game-server).
     await maybeRateOnchainSession(proposal.sessionId, proposal.balances).catch((e) =>
       console.warn("[settlement-worker] rated match skip", e),
     );
   } catch (e) {
     console.warn("[settlement-worker] hub settle failed", proposal.sessionId, e instanceof Error ? e.message : e);
-    // Do not leave an invalid proposal in `proposed` forever. A fresh proposal
-    // gets fresh attestations on the next pass.
     await query(`update settlement_proposals set status = 'rejected' where id = $1`, [
       proposal.proposalId,
     ]).catch(() => null);
   }
 }
 
-async function maybeRateOnchainSession(sessionId: string, _balances: Record<string, number>) {
-  const meta = await query<{ table_id: string; variant_id: string; max_seats: number }>(
-    `select os.table_id, t.variant_id::text as variant_id, t.max_seats::int as max_seats
-     from onchain_sessions os
-     join tables t on t.id = os.table_id
-     where os.session_id = $1 limit 1`,
-    [sessionId],
-  );
-  const tableId = meta.rows[0]?.table_id ?? null;
-  const variantId = meta.rows[0]?.variant_id ?? "";
-  const maxSeats = Number(meta.rows[0]?.max_seats ?? 0);
+async function processOnchainSettlementsV2(hub: Hex) {
+  const pk = process.env.SETTLEMENT_PRIVATE_KEY as Hex | undefined;
+  if (!pk) return;
 
-  const rows = await query<{ owner_id: string; agent_id: string; buy_in: string; stack: string }>(
-    `select distinct on (owner_id)
-            owner_id::text, coalesce(agent_id::text, '') as agent_id, buy_in::text, stack::text
-     from table_sessions
-     where table_id = $2
-       and owner_id in (
-         select profile_id from onchain_session_players where session_id = $1
-       )
-     order by owner_id, coalesce(ended_at, started_at) desc`,
-    [sessionId, tableId],
-  );
-  // Only HU-style rating (exactly two owners). Multiway Classic stays unrated for now.
-  if (rows.rows.length !== 2 || !tableId) return;
-  const poolId =
-    variantId === "nlhe_hu" || maxSeats === 2
-      ? "hu_holdem_standard"
-      : variantId === "nlhe_6max"
-        ? "nlhe_6max_standard"
-        : null;
-  if (!poolId) return;
-  const [a, b] = rows.rows;
-
-  const handsRow = await query<{ n: string }>(
-    `select count(*)::text as n from hands
-     where table_id = $1 and (status = 'settled' or settled_at is not null)`,
-    [tableId],
-  );
-  // Fall back to hand_number progress if status wasn't flipped for some hands.
-  const maxHand = await query<{ m: string }>(
-    `select coalesce(max(hand_number), 0)::text as m from hands where table_id = $1`,
-    [tableId],
-  );
-  const hands = Math.max(
-    Number(handsRow.rows[0]?.n ?? 0),
-    Number(maxHand.rows[0]?.m ?? 0),
-    1,
-  );
-
-  const profitA = Number(a.stack) - Number(a.buy_in);
-  const profitB = Number(b.stack) - Number(b.buy_in);
-  const scoreA: 0 | 0.5 | 1 = profitA > profitB ? 1 : profitA < profitB ? 0 : 0.5;
-  await settleRatedMatch({
-    poolId,
-    ownerA: a.owner_id,
-    ownerB: b.owner_id,
-    agentA: a.agent_id || null,
-    agentB: b.agent_id || null,
-    scoreA,
-    hands,
-    tableId,
-    stake: Number(a.buy_in),
-    eventLogRoot: keccakLike(`onchain:${sessionId}`),
-    reason: "onchain_settled",
-  });
-}
-
-async function processOnchainSettlements() {
-  const hub = process.env.SETTLEMENT_HUB_ADDRESS as Hex | undefined;
-  const pk = (process.env.SETTLEMENT_PRIVATE_KEY || process.env.GAME_ATTESTOR_PRIVATE_KEY) as Hex | undefined;
-  if (!hub || !pk) return;
-
-  // Also pick opened sessions with no active seats (abandoned / both left) so
-  // Instant buy-ins are not stuck locked forever waiting for a status flip.
   const sessions = await query<SessionRow>(
     `select session_id, table_id, chain_id from onchain_sessions os
      where settlement_tx_hash is null
@@ -662,33 +553,66 @@ async function processOnchainSettlements() {
       `select id from settlement_proposals where session_id = $1 and status in ('proposed','attesting','submitted') limit 1`,
       [session.session_id],
     );
-    let proposal;
     if (existing.rows[0]) {
       console.log("[settlement-worker] proposal already exists", session.session_id);
       continue;
     }
-    proposal = await buildProposal(session);
+    const proposal = await buildProposalV2(session);
     if (!proposal) continue;
     await query(`update onchain_sessions set status = 'settling' where session_id = $1`, [session.session_id]).catch(
       () => null,
     );
-    const { signatures } = await collectAttestations(proposal);
-    await submitHubSettlement(proposal, signatures);
+    const { signatures } = await collectAttestationsV2(proposal);
+    await submitHubSettlementV2(proposal, signatures, hub);
   }
 }
 
-console.log("[settlement-worker] running — quorum settle + checkpoints + mock VRF when configured");
+const { mode, hubAddress } = resolveSettlementMode();
+console.log(
+  `[settlement-worker] running — mode=${mode} hub=${hubAddress ?? "(unset)"} — quorum settle + checkpoints + mock VRF when configured`,
+);
+
+try {
+  const probe = probeAttestorKeys();
+  for (const k of probe.loaded) {
+    console.log(`[settlement-worker] attestor role=${k.role} address=${k.address}`);
+  }
+  if (probe.duplicateError) {
+    console.warn("[settlement-worker] attestor key collision:", probe.duplicateError.message);
+  }
+} catch (e) {
+  console.error("[settlement-worker] attestor key check failed", e instanceof Error ? e.message : e);
+  throw e;
+}
 
 async function loop() {
   await tickPending();
-  await processOnchainSettlements().catch((e) => console.error(e));
+  if (hubAddress) {
+    if (mode === "v3") {
+      await processOnchainSettlementsV3(hubAddress).catch((e) => console.error(e));
+    } else {
+      await processOnchainSettlementsV2(hubAddress).catch((e) => console.error(e));
+    }
+  }
   await publishCheckpoints().catch((e) => console.error(e));
   await mockVrfEpoch().catch((e) => console.error(e));
 }
 
-const SETTLEMENT_POLL_MS = Number(process.env.SETTLEMENT_POLL_MS || 15_000);
-setInterval(() => {
-  loop().catch(console.error);
-}, SETTLEMENT_POLL_MS);
+const isMain =
+  typeof process.argv[1] === "string" &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
 
-loop().catch(console.error);
+if (isMain) {
+  const SETTLEMENT_HEALTH_PORT = Number(
+    process.env.PORT ?? process.env.SETTLEMENT_HEALTH_PORT ?? 4011,
+  );
+  if (process.env.SETTLEMENT_HEALTH !== "0") {
+    startHealthServer(SETTLEMENT_HEALTH_PORT);
+  }
+
+  const SETTLEMENT_POLL_MS = Number(process.env.SETTLEMENT_POLL_MS || 15_000);
+  setInterval(() => {
+    loop().catch(console.error);
+  }, SETTLEMENT_POLL_MS);
+  loop().catch(console.error);
+}

@@ -1,0 +1,304 @@
+import { query } from "@mozetto/database";
+import type { Address, Hex } from "viem";
+import { chainClients, keccakLike, toBytes32 } from "../chain.js";
+import {
+  buildV3Proposal,
+  collectV3Attestations,
+  defaultV3HttpAdapters,
+  submitHubSettlementV3,
+  toHubSettlementArg,
+  type V3Proposal,
+} from "./index.js";
+import { maybeRateOnchainSession } from "../rating.js";
+
+const ARENA_VAULT_FEE_ABI = [
+  {
+    type: "function",
+    name: "accruedProtocolFees",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "withdrawProtocolFees",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "amount", type: "uint256" }],
+    outputs: [],
+  },
+] as const;
+
+export type SessionRow = {
+  session_id: string;
+  table_id: string | null;
+  chain_id: number;
+};
+
+type StackRow = {
+  wallet_address: string;
+  stack: string;
+  buy_in: string;
+  buy_in_raw: string;
+  owner_id: string;
+  agent_id: string;
+  seat: number | null;
+};
+
+async function loadStacks(session: SessionRow): Promise<StackRow[]> {
+  try {
+    const stacks = await query<StackRow>(
+      `select osp.wallet_address,
+              coalesce(ts.stack, (osp.buy_in_raw::numeric / 1000000))::text as stack,
+              coalesce(ts.buy_in, (osp.buy_in_raw::numeric / 1000000))::text as buy_in,
+              osp.buy_in_raw::text as buy_in_raw,
+              coalesce(ts.owner_id::text, osp.profile_id::text, '') as owner_id,
+              coalesce(ts.agent_id::text, '') as agent_id,
+              ts.seat
+       from onchain_session_players osp
+       left join lateral (
+         select stack, buy_in, owner_id, agent_id, seat
+         from table_sessions
+         where ($2::text is not null)
+           and table_id = $2
+           and owner_id = osp.profile_id
+         order by case when status = 'active' then 0 else 1 end,
+                  coalesce(ended_at, started_at) desc nulls last
+         limit 1
+       ) ts on true
+       where osp.session_id = $1`,
+      [session.session_id, session.table_id],
+    );
+    return stacks.rows;
+  } catch (e) {
+    console.warn(
+      "[settlement-worker:v3] stack query failed",
+      session.session_id,
+      e instanceof Error ? e.message : e,
+    );
+    return [];
+  }
+}
+
+export async function buildProposalV3FromDb(
+  session: SessionRow,
+  hub: Hex,
+  chainId: number,
+): Promise<{ proposalId: string; v3: V3Proposal } | null> {
+  const stacks = await loadStacks(session);
+  if (!stacks.length) {
+    console.log(
+      "[settlement-worker:v3] skip proposal — no ending stacks",
+      session.session_id,
+      "table",
+      session.table_id,
+    );
+    return null;
+  }
+
+  const canonical = await query<{ sequence: string; event_hash: string }>(
+    `select sequence::text, event_hash from canonical_game_events
+     where session_id = $1 order by sequence desc limit 1`,
+    [session.session_id],
+  ).catch(() => ({ rows: [] as { sequence: string; event_hash: string }[] }));
+
+  const finalSequence = BigInt(canonical.rows[0]?.sequence ?? 0);
+  const finalEventRoot = canonical.rows[0]?.event_hash
+    ? toBytes32(canonical.rows[0].event_hash)
+    : keccakLike(`events:${session.session_id}:${finalSequence}`);
+
+  const handRootRow = await query<{ hand_root: string }>(
+    `select hand_root from hand_roots where session_id = $1 order by created_at desc limit 1`,
+    [session.session_id],
+  ).catch(() => ({ rows: [] as { hand_root: string }[] }));
+  const handRoot = handRootRow.rows[0]?.hand_root
+    ? toBytes32(handRootRow.rows[0].hand_root)
+    : keccakLike(`hands:${session.session_id}`);
+
+  const players = stacks.map((row, i) => {
+    const startLocked = BigInt(row.buy_in_raw);
+    const endBalance = BigInt(Math.floor(Number(row.stack) * 1e6));
+    return {
+      user: row.wallet_address as Address,
+      seat: row.seat != null ? Number(row.seat) : i,
+      startLocked,
+      endBalance,
+    };
+  });
+
+  let v3: V3Proposal;
+  try {
+    v3 = buildV3Proposal({
+      sessionId: session.session_id,
+      finalSequence,
+      finalEventRoot,
+      handRoot,
+      players,
+      chainId: BigInt(chainId),
+      verifyingContract: hub,
+    });
+  } catch (e) {
+    console.warn(
+      "[settlement-worker:v3] proposal build failed",
+      session.session_id,
+      e instanceof Error ? e.message : e,
+    );
+    return null;
+  }
+
+  const deadlineIso = new Date(Number(v3.settlement.deadline) * 1000).toISOString();
+  const insert = await query<{ id: string }>(
+    `insert into settlement_proposals
+     (session_id, final_sequence, event_root, hand_root, balance_root, total_rake, balances, deadline, status)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,'proposed')
+     returning id`,
+    [
+      session.session_id,
+      finalSequence.toString(),
+      v3.settlement.finalEventRoot,
+      v3.settlement.handRoot,
+      v3.settlement.balanceRoot,
+      Number(v3.totalRake) / 1e6,
+      JSON.stringify({
+        ...v3.balancesChip,
+        _v3: {
+          digest: v3.digests.digest,
+          openingTotal: v3.openingTotal.toString(),
+          endingPlayerTotal: v3.endingPlayerTotal.toString(),
+          totalRake: v3.totalRake.toString(),
+          randomnessEpochId: v3.settlement.randomnessEpochId,
+          proofBatchSequence: v3.settlement.proofBatchSequence.toString(),
+        },
+      }),
+      deadlineIso,
+    ],
+  ).catch(() => ({ rows: [] as { id: string }[] }));
+
+  const proposalId = insert.rows[0]?.id;
+  if (!proposalId) return null;
+  return { proposalId, v3 };
+}
+
+export async function processOnchainSettlementsV3(hub: Hex) {
+  const pk = process.env.SETTLEMENT_PRIVATE_KEY as Hex | undefined;
+  if (!pk) {
+    console.warn("[settlement-worker:v3] SETTLEMENT_PRIVATE_KEY unset — skip submit path");
+    return;
+  }
+
+  const chainId = Number(process.env.CHAIN_ID || 84532);
+  const sessions = await query<SessionRow>(
+    `select session_id, table_id, chain_id from onchain_sessions os
+     where settlement_tx_hash is null
+       and not exists (
+         select 1 from table_sessions active
+         where active.table_id = os.table_id and active.status = 'active'
+       )
+       and (
+         status in ('playing', 'settling')
+         or (
+           status = 'opened'
+           and table_id is not null
+           and exists (
+             select 1 from table_sessions ts
+             where ts.table_id = os.table_id and ts.status = 'completed'
+           )
+         )
+       )
+     order by created_at asc
+     limit 5`,
+  ).catch(() => ({ rows: [] as SessionRow[] }));
+
+  for (const session of sessions.rows) {
+    const existing = await query(
+      `select id from settlement_proposals where session_id = $1 and status in ('proposed','attesting','submitted') limit 1`,
+      [session.session_id],
+    );
+    if (existing.rows[0]) {
+      console.log("[settlement-worker:v3] proposal already exists", session.session_id);
+      continue;
+    }
+
+    const built = await buildProposalV3FromDb(session, hub, session.chain_id || chainId);
+    if (!built) continue;
+
+    await query(`update onchain_sessions set status = 'settling' where session_id = $1`, [
+      session.session_id,
+    ]).catch(() => null);
+
+    const { attestations, signatures } = await collectV3Attestations({
+      settlement: built.v3.settlement,
+      httpAdapters: defaultV3HttpAdapters(),
+    });
+
+    for (const att of attestations) {
+      await query(
+        `insert into settlement_attestations (proposal_id, attestor_role, attestor_address, signature)
+         values ($1,$2,$3,$4) on conflict (proposal_id, attestor_role) do nothing`,
+        [built.proposalId, att.role, att.address, att.signature],
+      ).catch(() => null);
+    }
+
+    try {
+      const result = await submitHubSettlementV3({
+        hub,
+        submitterPk: pk,
+        settlement: toHubSettlementArg(built.v3.settlement),
+        players: built.v3.players,
+        signatures,
+      });
+      if (!result) {
+        continue;
+      }
+
+      await query(`update settlement_proposals set status = 'confirmed' where id = $1`, [
+        built.proposalId,
+      ]).catch(() => null);
+      await query(
+        `update onchain_sessions set status = 'settled', settlement_tx_hash = $2, settled_at = now() where session_id = $1`,
+        [session.session_id, result.txHash],
+      ).catch(() => null);
+      console.log(
+        "[settlement-worker:v3] hub settle confirmed",
+        session.session_id,
+        result.txHash,
+        "digest",
+        built.v3.digests.digest,
+      );
+
+      const vault = process.env.ARENA_VAULT_ADDRESS as Hex | undefined;
+      if (vault) {
+        const { wallet, publicClient } = chainClients(pk);
+        const fees = await publicClient.readContract({
+          address: vault,
+          abi: ARENA_VAULT_FEE_ABI,
+          functionName: "accruedProtocolFees",
+        });
+        if (fees > 0n) {
+          const feeHash = await wallet.writeContract({
+            address: vault,
+            abi: ARENA_VAULT_FEE_ABI,
+            functionName: "withdrawProtocolFees",
+            args: [fees],
+          });
+          await publicClient.waitForTransactionReceipt({ hash: feeHash });
+          console.log("[settlement-worker:v3] protocol fees deposited", fees.toString(), feeHash);
+        }
+      }
+
+      await maybeRateOnchainSession(
+        session.session_id,
+        built.v3.balancesChip,
+        built.v3.digests.digest,
+      ).catch((e) => console.warn("[settlement-worker:v3] rated match skip", e));
+    } catch (e) {
+      console.warn(
+        "[settlement-worker:v3] hub settle failed",
+        session.session_id,
+        e instanceof Error ? e.message : e,
+      );
+      await query(`update settlement_proposals set status = 'rejected' where id = $1`, [
+        built.proposalId,
+      ]).catch(() => null);
+    }
+  }
+}

@@ -27,7 +27,9 @@ import { getChainConfig } from "@mozetto/blockchain";
 import { corsOriginCheck } from "@mozetto/server-env";
 import { readSession, registerAuthRoutes, requireUser, requireDemoUser } from "./auth.js";
 import { handleOnchainFindMatch, registerArenaOnchainRoutes } from "./arena-onchain.js";
-import { registerAdminRoutes, registerVerifyRoutes } from "./admin.js";
+import { registerAdminRoutes } from "./admin.js";
+import { registerVerifyRoutes } from "./verify.js";
+import { registerPlan19Routes } from "./plan19-routes.js";
 
 const GAME_HTTP = process.env.NEXT_PUBLIC_GAME_HTTP_URL ?? "http://localhost:4001";
 
@@ -51,6 +53,7 @@ await registerAuthRoutes(app);
 registerArenaOnchainRoutes(app);
 registerAdminRoutes(app);
 registerVerifyRoutes(app);
+registerPlan19Routes(app);
 
 app.get("/health", async () => ({ ok: true }));
 

@@ -6,7 +6,7 @@ import { WsClientMessageSchema } from "@mozetto/shared-types";
 import { corsOriginCheck } from "@mozetto/server-env";
 import { TableRuntime } from "./table-runtime.js";
 import { resolvePlayer, resolvePlayerFromToken } from "./auth.js";
-import { acquireTableLease, leaseEnabled, renewTableLease } from "./lease.js";
+import { defaultLeaseWaitMs, getLeaseManager } from "./lease/index.js";
 
 const app = Fastify({ logger: true });
 // Allow empty JSON bodies (leave/action clients often send Content-Type without payload).
@@ -31,37 +31,79 @@ await app.register(cors, {
 await app.register(websocket);
 
 const tables = new Map<string, TableRuntime>();
+const { manager: leaseManager, mode: leaseMode } = await getLeaseManager();
+const leaseWaitMs = defaultLeaseWaitMs(leaseManager.ttlMs);
+
+async function unloadTable(tableId: string, reason: string) {
+  app.log.warn({ tableId, reason }, "unloading table actor");
+  const rt = tables.get(tableId);
+  if (rt) {
+    rt.stopLoop();
+    tables.delete(tableId);
+  }
+  leaseManager.stopHeartbeat(tableId);
+  await leaseManager.release(tableId).catch(() => null);
+}
 
 async function getRuntime(tableId: string) {
   let rt = tables.get(tableId);
   if (!rt) {
-    const leased = await acquireTableLease(tableId);
-    if (!leased) {
+    const lease = await leaseManager.acquire(tableId, { waitMs: leaseWaitMs });
+    if (!lease) {
       throw new Error("table_lease_held_by_another_replica");
     }
-    rt = await TableRuntime.load(tableId);
+    try {
+      rt = await TableRuntime.load(tableId);
+    } catch (err) {
+      await leaseManager.release(tableId).catch(() => null);
+      throw err;
+    }
+    if (!rt.durableChainOk) {
+      await leaseManager.release(tableId).catch(() => null);
+      throw new Error(
+        `table_durable_chain_broken: ${rt.durableChainIssues.join("; ") || "unknown"}`,
+      );
+    }
+    rt.bindLease(lease.actorInstanceId, lease.leaseVersion);
     tables.set(tableId, rt);
-    // restore baselines from DB stacks
     for (const s of rt.state.seats) {
       if (s.playerId) rt.stackBaseline.set(s.playerId, s.stack);
     }
+    leaseManager.startHeartbeat(tableId, (id) => {
+      void unloadTable(id, "lease_lost");
+    });
     rt.ensureLoop();
   } else {
-    await renewTableLease(tableId);
+    leaseManager.assertHeld(tableId);
+    const renewed = await leaseManager.renew(tableId);
+    if (!renewed) {
+      await unloadTable(tableId, "renew_failed");
+      throw new Error("table_lease_lost");
+    }
+    rt.bindLease(renewed.actorInstanceId, renewed.leaseVersion);
   }
   return rt;
 }
 
+function requireLease(tableId: string) {
+  leaseManager.assertHeld(tableId);
+}
+
 app.get("/health", async () => ({
   ok: true,
-  tableLease: leaseEnabled() ? "redis" : "disabled",
+  tableLease: leaseMode,
+  actorInstanceId: leaseManager.actorInstanceId,
   tables: [...tables.keys()].map((id) => {
     const rt = tables.get(id)!;
+    const held = leaseManager.getHeld(id);
     return {
       id,
       seated: rt.state.seats.filter((s) => s.playerId && !s.sitOut).length,
       street: rt.state.street,
       pot: rt.state.pot,
+      sequence: rt.sequence,
+      leaseVersion: held?.leaseVersion ?? rt.leaseVersion,
+      durableChainOk: rt.durableChainOk,
     };
   }),
 }));
@@ -89,6 +131,7 @@ app.get("/v1/tables/:id", async (req, reply) => {
       board: rt.state.board,
       arenaMode: rt.arenaMode,
       onchainSessionId: rt.onchainSessionId,
+      sequence: rt.sequence,
       seated,
       legalHint:
         rt.state.actingIndex != null
@@ -97,7 +140,8 @@ app.get("/v1/tables/:id", async (req, reply) => {
     };
   } catch (e) {
     const message = e instanceof Error ? e.message : "table_unavailable";
-    return reply.code(404).send({ error: "table_not_found", message });
+    const code = message.includes("lease") ? 409 : 404;
+    return reply.code(code).send({ error: code === 409 ? "table_lease_conflict" : "table_not_found", message });
   }
 });
 
@@ -116,8 +160,9 @@ app.post("/v1/tables/:id/join", async (req, reply) => {
   };
   if (!body.buyIn || body.buyIn <= 0) return reply.code(400).send({ error: "invalid_buy_in" });
 
-  const rt = await getRuntime(tableId);
   try {
+    const rt = await getRuntime(tableId);
+    requireLease(tableId);
     const result = await rt.join({
       userId: player.profileId,
       agentId: player.agentId,
@@ -137,7 +182,8 @@ app.post("/v1/tables/:id/join", async (req, reply) => {
     };
   } catch (e) {
     const message = e instanceof Error ? e.message : "join_failed";
-    return reply.code(400).send({ error: "join_failed", message });
+    const code = message.includes("lease") ? 409 : 400;
+    return reply.code(code).send({ error: code === 409 ? "table_lease_conflict" : "join_failed", message });
   }
 });
 
@@ -145,9 +191,16 @@ app.post("/v1/tables/:id/leave", async (req, reply) => {
   const player = await resolvePlayer(req);
   if (!player) return reply.code(401).send({ error: "unauthenticated" });
   const tableId = (req.params as { id: string }).id;
-  const rt = await getRuntime(tableId);
-  await rt.leave(player.profileId);
-  return { ok: true };
+  try {
+    const rt = await getRuntime(tableId);
+    requireLease(tableId);
+    const result = await rt.leave(player.profileId);
+    return { ok: true, ...result };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "leave_failed";
+    const code = message.includes("lease") ? 409 : 400;
+    return reply.code(code).send({ error: code === 409 ? "table_lease_conflict" : "leave_failed", message });
+  }
 });
 
 app.post("/v1/tables/:id/action", async (req, reply) => {
@@ -156,13 +209,15 @@ app.post("/v1/tables/:id/action", async (req, reply) => {
   const tableId = (req.params as { id: string }).id;
   const body = req.body as { action?: string; amount?: number };
   if (!body.action) return reply.code(400).send({ error: "action_required", message: "Action required." });
-  const rt = await getRuntime(tableId);
   try {
+    const rt = await getRuntime(tableId);
+    requireLease(tableId);
     rt.submitPlayerAction(player.profileId, body.action as any, body.amount);
     return { ok: true };
   } catch (e) {
     const message = e instanceof Error ? e.message : "action_failed";
-    return reply.code(400).send({ error: "action_failed", message });
+    const code = message.includes("lease") ? 409 : 400;
+    return reply.code(code).send({ error: code === 409 ? "table_lease_conflict" : "action_failed", message });
   }
 });
 
@@ -171,13 +226,15 @@ app.post("/v1/tables/:id/top-up", async (req, reply) => {
   if (!player) return reply.code(401).send({ error: "unauthenticated", message: "Sign in to top up." });
   const tableId = (req.params as { id: string }).id;
   const amount = Number((req.body as { amount?: number }).amount ?? 0);
-  const rt = await getRuntime(tableId);
   try {
+    const rt = await getRuntime(tableId);
+    requireLease(tableId);
     const result = await rt.topUp(player.profileId, amount);
     return { ok: true, ...result };
   } catch (e) {
     const message = e instanceof Error ? e.message : "top_up_failed";
-    return reply.code(400).send({ error: "top_up_failed", message });
+    const code = message.includes("lease") ? 409 : 400;
+    return reply.code(code).send({ error: code === 409 ? "table_lease_conflict" : "top_up_failed", message });
   }
 });
 
@@ -252,6 +309,7 @@ app.get("/ws", { websocket: true }, (socket, req) => {
           current = null;
         }
         const rt = await getRuntime(m.tableId);
+        requireLease(m.tableId);
         const seat = identity ? rt.state.seats.find((s) => s.playerId === identity!.profileId) : undefined;
         const client = {
           send,
@@ -266,6 +324,7 @@ app.get("/ws", { websocket: true }, (socket, req) => {
       if (m.type === "join_table") {
         if (!identity) return send({ type: "error", code: "unauthenticated", message: "Auth required", retryable: false });
         const rt = await getRuntime(m.tableId);
+        requireLease(m.tableId);
         const result = await rt.join({
           userId: identity.profileId,
           agentId: identity.agentId,
@@ -283,31 +342,37 @@ app.get("/ws", { websocket: true }, (socket, req) => {
       if (m.type === "leave_table") {
         if (!identity) return send({ type: "error", code: "unauthenticated", message: "Auth required", retryable: false });
         const rt = await getRuntime(m.tableId);
+        requireLease(m.tableId);
         await rt.leave(identity.profileId);
         return send({ type: "left", tableId: m.tableId });
       }
       if (m.type === "player_action") {
         if (!identity) return send({ type: "error", code: "unauthenticated", message: "Auth required", retryable: false });
         const rt = await getRuntime(m.tableId);
+        requireLease(m.tableId);
         rt.submitPlayerAction(identity.profileId, m.action, m.amount);
         return send({ type: "ok", command: "player_action" });
       }
       if (m.type === "owner_command") {
         if (!identity) return send({ type: "error", code: "unauthenticated", message: "Auth required", retryable: false });
         const rt = await getRuntime(m.tableId);
+        requireLease(m.tableId);
         if (m.command === "leave") await rt.leave(identity.profileId);
         return send({ type: "ok", command: m.command });
       }
       if (m.type === "replay_from") {
         const rt = await getRuntime(m.tableId);
+        requireLease(m.tableId);
         const rows = await rt.eventsFrom(m.afterSequence);
         return send({ type: "event_batch", events: rows.rows });
       }
     } catch (e) {
+      const message = e instanceof Error ? e.message : "error";
+      const leaseConflict = message.includes("lease");
       send({
         type: "error",
-        code: "server_error",
-        message: e instanceof Error ? e.message : "error",
+        code: leaseConflict ? "table_lease_conflict" : "server_error",
+        message,
         retryable: true,
       });
     }
@@ -332,3 +397,16 @@ app.get("/ws", { websocket: true }, (socket, req) => {
 
 const port = Number(process.env.PORT ?? process.env.GAME_SERVER_PORT ?? 4001);
 await app.listen({ port, host: "0.0.0.0" });
+
+async function shutdown(signal: string) {
+  app.log.info({ signal }, "shutting down — releasing table leases");
+  for (const tableId of [...tables.keys()]) {
+    await unloadTable(tableId, `shutdown_${signal}`);
+  }
+  await leaseManager.releaseAll();
+  await app.close();
+  process.exit(0);
+}
+
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));

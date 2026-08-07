@@ -93,5 +93,5 @@ app.post("/v1/act", async (req, reply) => {
 
 app.get("/health", async () => ({ ok: true }));
 
-const port = Number(process.env.AGENT_PORT ?? 4002);
+const port = Number(process.env.PORT ?? process.env.AGENT_PORT ?? 4002);
 await app.listen({ port, host: "0.0.0.0" });
