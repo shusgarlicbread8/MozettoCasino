@@ -2,7 +2,7 @@
 
 **Authority:** Follows `00_READ_ME_FIRST.md`, `01_MASTER_EXECUTION_ROADMAP.md`, `16_AGENT_WORK_PACKETS.md`, `17_FINAL_DEFINITION_OF_DONE.md`.  
 **Rule:** Protocol V3 specs are **frozen** (WP-010–015). Implementations MUST match `/specs` and fail CI if vectors diverge. Do not invent new encodings.  
-**Last updated:** 2026-08-07 (Wave 11 production integration + Wave 12 consumer UX opened; Plan 20A IN_PROGRESS)
+**Last updated:** 2026-08-07 (WP-120 Product IA / design system DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
 
 ---
 
@@ -21,7 +21,7 @@
 | Field | Value |
 |---|---|
 | **Active wave** | **Wave 11 Production Integration** + **Wave 12 Consumer UX** (parallel) |
-| **Active packets** | WP-106–113 (Track A/C), WP-120–132 (Track B); Sepolia Stage A blocked until WP-106–112 green |
+| **Active packets** | WP-106–113 (Track A/C), WP-121–132 (Track B; WP-120 DONE); Sepolia Stage A blocked until WP-106–112 green |
 | **Architecture status** | Protocol architecture largely built (~component-complete). Remaining work is integration, productization, hosted staging — **not** “ops only.” |
 | **Blocked until (Sepolia Stage A)** | WP-106–112 green on Anvil release candidate; then funded Sepolia deploy |
 | **Hard stop** | No new architecture invention; live AWS Nitro during Stage A; Plan 15 expansion stays deferred |
@@ -31,7 +31,7 @@
 | **Plan 11 note** | Rake/treasury code DONE; Season 1 schedule = hypotheses until WP-111 empirical COGS |
 | **Plan 12 note** | Ratings / anti-cheat DONE — ML collusion deferred |
 | **Plan 19 note** | Schema map DONE; hosted migrate + WS v2 + GRANTs + scheduler persist hooks → **WP-110** |
-| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120+); Plan 20B cinematic 3D remains DEFERRED |
+| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120 DONE → WP-121+); Plan 20B cinematic 3D remains DEFERRED |
 | **Anvil release candidate** | Normal user can Find Match → Groq AI session → verify → withdraw with **zero GAPs** (WP-106–112) |
 
 ---
@@ -237,7 +237,7 @@
 
 | ID | Surface | Status |
 |---|---|---|
-| WP-120 | Product IA / design system | `IN_PROGRESS` |
+| WP-120 | Product IA / design system | `DONE` |
 | WP-121 | Home (Play Now first) | `NOT_STARTED` |
 | WP-122 | Play / Find Match | `NOT_STARTED` |
 | WP-123 | Strategy setup (profiles + tuning) | `NOT_STARTED` |
@@ -260,6 +260,25 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 ---
 
 ## Session log
+
+### 2026-08-07 — WP-120 Product IA / design system (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- Design tokens + night-felt atmosphere in `apps/web` (`globals.css`, `lib/design-tokens.ts`)
+- Typography: Syne (display) / DM Sans / IBM Plex Mono
+- Nav IA: Home · Play · AI/Strategy · Wallet · Rankings · Watch; Verify/Replays/Settings secondary; **Play Now** primary CTA
+- Lean primitives: `Button`, `LeagueChip`, `BrandMark`
+- Brand-first landing first viewport (competitive AI poker, not crypto dashboard)
+- Docs: `docs/WP-120_PRODUCT_IA_DESIGN.md`
+
+**Commands / evidence:**
+- `pnpm --filter @mozetto/web typecheck` — pass
+
+**Out of scope:** Spec mutations; 3D production art (Plan 20B); protocol field changes; full Home rewrite (WP-121).
+
+**Follow-up:** WP-121 Home (Play Now first); WP-122 Find Match; migrate remaining legacy green/Geist page styles onto tokens.
 
 ### 2026-08-07 — Wave 11/12 opened (productionization correction)
 
@@ -1909,6 +1928,7 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 | Settlement worker V3 (WP-084) | `services/settlement-worker` + `docs/WP-084_SETTLEMENT_WORKER_V3.md` |
 | Attest-v3 HTTP (WP-084 follow-up) | dealer `/v1/dealer/attest-v3` + replay `/v1/attest-settlement-v3` + `docs/WP-084_ATTEST_V3_HTTP.md` |
 | Hosted deployment recipes (WP-086) | `docs/WP-086_HOSTED_DEPLOYMENT.md` + `render.yaml` + `docker-compose.hosted.yml` + `deploy/fly/` + `Dockerfile.*` |
+| Product IA / design system (WP-120) | `apps/web` tokens/nav/ui + `docs/WP-120_PRODUCT_IA_DESIGN.md` |
 | Public Verify Game (WP-090) | `apps/web/src/app/verify/` + `services/api/src/verify.ts` + `docs/WP-090_VERIFY_GAME.md` |
 | Admin solvency dashboard (WP-091) | `apps/admin/src/app/solvency/` + `services/api/src/admin-solvency.ts` + `docs/WP-091_ADMIN_SOLVENCY_DASHBOARD.md` |
 | Plan 11 rake / treasury | `packages/game-rules/src/rake.ts` + `packages/unit-economics/` + `docs/PLAN_11_RAKE_TREASURY.md` + `GET /v1/admin/treasury` |

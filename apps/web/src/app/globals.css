@@ -1,27 +1,80 @@
 @import "tailwindcss";
 
+/*
+ * Mozetto consumer design tokens — WP-120
+ * Night-felt competitive AI poker (not crypto trading dashboard).
+ */
 :root {
-  --bg: #080808;
-  --panel: #0a0a0a;
-  --accent: #00e676;
-  --text: #ededed;
+  /* Surfaces */
+  --mz-ink: #070a08;
+  --mz-ink-elevated: #0c1210;
+  --mz-ink-panel: #101816;
+  --mz-ink-hover: #15201c;
+  --mz-felt: #0e3b2a;
+  --mz-felt-mid: #145c3e;
+
+  /* Accent */
+  --mz-accent: #3ddc8a;
+  --mz-accent-strong: #2bc875;
+  --mz-accent-dim: rgba(61, 220, 138, 0.14);
+  --mz-accent-border: rgba(61, 220, 138, 0.35);
+
+  /* Text */
+  --mz-text: #e8eee9;
+  --mz-text-muted: #8a968e;
+  --mz-text-faint: #5c665f;
+  --mz-text-inverse: #061008;
+
+  /* Lines / status */
+  --mz-line: rgba(232, 238, 233, 0.08);
+  --mz-line-strong: rgba(232, 238, 233, 0.14);
+  --mz-danger: #ff6b6b;
+  --mz-warn: #e8b84a;
+  --mz-live: #ff5a5a;
+
+  /* Leagues */
+  --mz-league-bronze: #b87333;
+  --mz-league-silver: #b8c0c8;
+  --mz-league-gold: #c9a227;
+  --mz-league-platinum: #8fe3d2;
+  --mz-league-diamond: #8fb8ff;
+  --mz-league-sovereign: #d4a574;
+
+  /* Profiles */
+  --mz-profile-shark: #3ddc8a;
+  --mz-profile-fox: #e8a06a;
+  --mz-profile-professor: #8fb8ff;
+  --mz-profile-machine: #b8c0c8;
+
+  /* Radii / type */
+  --mz-radius-sm: 6px;
+  --mz-radius-md: 10px;
+  --mz-radius-lg: 14px;
+  --mz-radius-xl: 18px;
+
+  /* Legacy aliases (existing pages) */
+  --bg: var(--mz-ink);
+  --panel: var(--mz-ink-elevated);
+  --accent: var(--mz-accent);
+  --text: var(--mz-text);
 }
 
 @theme inline {
-  --color-bg: var(--bg);
-  --color-panel: var(--panel);
-  --color-accent: var(--accent);
-  --color-ink: var(--text);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-bg: var(--mz-ink);
+  --color-panel: var(--mz-ink-elevated);
+  --color-accent: var(--mz-accent);
+  --color-ink: var(--mz-text);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-display: var(--font-display);
 }
 
 html,
 body {
   margin: 0;
-  background: #080808;
-  color: #ededed;
-  font-family: var(--font-geist-sans), "Geist", system-ui, sans-serif;
+  background: var(--mz-ink);
+  color: var(--mz-text);
+  font-family: var(--font-sans), "DM Sans", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   min-height: 100%;
 }
@@ -31,11 +84,28 @@ body {
 }
 
 a {
-  color: #00e676;
+  color: var(--mz-accent);
   text-decoration: none;
 }
 a:hover {
-  color: #5bffaa;
+  color: #6aefab;
+}
+
+/* Atmospheric felt wash — shell / landing */
+.mz-atmosphere {
+  background:
+    radial-gradient(1200px 700px at 18% -8%, rgba(20, 92, 62, 0.35), transparent 58%),
+    radial-gradient(900px 520px at 88% 12%, rgba(61, 220, 138, 0.08), transparent 52%),
+    radial-gradient(700px 480px at 50% 100%, rgba(14, 59, 42, 0.45), transparent 55%),
+    var(--mz-ink);
+}
+
+.mz-display {
+  font-family: var(--font-display), "Syne", system-ui, sans-serif;
+}
+
+.mz-mono {
+  font-family: var(--font-mono), "IBM Plex Mono", ui-monospace, monospace;
 }
 
 ::-webkit-scrollbar {
@@ -43,11 +113,33 @@ a:hover {
   height: 9px;
 }
 ::-webkit-scrollbar-track {
-  background: #0b0b0b;
+  background: var(--mz-ink-elevated);
 }
 ::-webkit-scrollbar-thumb {
-  background: #232323;
+  background: #24302a;
   border-radius: 9px;
+}
+
+/* Buttons */
+.mz-btn {
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.22s ease,
+    opacity 0.2s ease,
+    transform 0.18s ease;
+}
+.mz-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.mz-btn-primary:hover {
+  box-shadow: 0 0 28px rgba(61, 220, 138, 0.38);
+  filter: brightness(1.04);
+}
+.mz-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 @keyframes ar-pulse {
@@ -199,21 +291,41 @@ a:hover {
 @keyframes ar-win-glow {
   0%,
   100% {
-    box-shadow: 0 0 0 1px rgba(0, 230, 118, 0.35), 0 0 28px rgba(0, 230, 118, 0.18);
+    box-shadow: 0 0 0 1px rgba(61, 220, 138, 0.35), 0 0 28px rgba(61, 220, 138, 0.18);
   }
   50% {
-    box-shadow: 0 0 0 1px rgba(0, 230, 118, 0.7), 0 0 42px rgba(0, 230, 118, 0.38);
+    box-shadow: 0 0 0 1px rgba(61, 220, 138, 0.7), 0 0 42px rgba(61, 220, 138, 0.38);
+  }
+}
+@keyframes mz-hero-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.03);
+  }
+}
+@keyframes mz-nav-in {
+  0% {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
   }
 }
 
-/* Hover utilities mirroring the design files' style-hover attributes
-   (inline styles can't express :hover, so these are applied via className). */
+/* Hover utilities */
 .mz-hover-border:hover {
   border-color: rgba(255, 255, 255, 0.3) !important;
 }
 .mz-hover-border-strong:hover {
   border-color: rgba(255, 255, 255, 0.3) !important;
-  color: #ededed !important;
+  color: var(--mz-text) !important;
 }
 .mz-hover-lift:hover {
   transform: translateY(-3px);
@@ -225,19 +337,19 @@ a:hover {
   background: rgba(255, 255, 255, 0.03) !important;
 }
 .mz-hover-cta:hover {
-  box-shadow: 0 0 32px rgba(0, 230, 118, 0.42) !important;
+  box-shadow: 0 0 32px rgba(61, 220, 138, 0.42) !important;
 }
 .mz-join-cta:hover {
-  box-shadow: 0 0 34px rgba(0, 230, 118, 0.45) !important;
-  color: #050505 !important;
+  box-shadow: 0 0 34px rgba(61, 220, 138, 0.45) !important;
+  color: var(--mz-text-inverse) !important;
 }
 .mz-open-cta:hover {
-  box-shadow: 0 0 28px rgba(0, 230, 118, 0.4) !important;
-  color: #050505 !important;
+  box-shadow: 0 0 28px rgba(61, 220, 138, 0.4) !important;
+  color: var(--mz-text-inverse) !important;
 }
 .mz-register-cta:hover {
-  background: rgba(0, 230, 118, 0.07) !important;
-  color: #00e676 !important;
+  background: rgba(61, 220, 138, 0.07) !important;
+  color: var(--mz-accent) !important;
 }
 
 /* Netflix-style game cards on Home — poster hovers up, CTA fades in. */

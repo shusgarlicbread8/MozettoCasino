@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { SplitFlapNumber } from "@/components/SplitFlapNumber";
+import { Button } from "@/components/ui";
+import { color, font } from "@/lib/design-tokens";
 import { useSession } from "@/lib/session";
 import { useMozettoBalances } from "@/lib/use-mozetto-balances";
 
@@ -31,15 +33,15 @@ export function Topbar() {
     ? "LOADING"
     : isOnchain
       ? me?.chainId === 8453
-        ? "ON-CHAIN · BASE"
+        ? "BASE"
         : me?.chainId === 31337
-          ? "CHAIN TEST · mUSDC"
+          ? "TEST · mUSDC"
           : me?.chainId === 84532
-            ? "CHAIN TEST · SEPOLIA"
+            ? "SEPOLIA"
             : "ON-CHAIN"
       : accountKind === "demo"
         ? "DEMO"
-        : "SESSION ERROR";
+        : "SESSION";
   const accountTitle = isOnchain
     ? me?.chainId === 8453
       ? "Live Base USDC custody"
@@ -47,20 +49,14 @@ export function Topbar() {
     : accountKind === "demo"
       ? "Demo paper account"
       : "Account is still loading";
-  // One player ↔ one agent at a table — only show PLAYERS (not a separate AGENTS count).
-  const ticker = [
-    { k: "SEATED", v: String(stats?.occupiedSeats ?? 0), d: "", c: "#8A8A8A" },
-    { k: "HANDS", v: String(stats?.settledHands ?? 0), d: "", c: "#8A8A8A" },
-    { k: "PLAYERS", v: String(stats?.profiles ?? 0), d: "", c: "#8A8A8A" },
-  ];
 
   return (
     <header
       style={{
         height: 52,
         flex: "none",
-        borderBottom: "1px solid rgba(255,255,255,.07)",
-        background: "rgba(8,8,8,.88)",
+        borderBottom: `1px solid ${color.line}`,
+        background: "rgba(7,10,8,.88)",
         backdropFilter: "blur(18px)",
         display: "flex",
         alignItems: "center",
@@ -80,8 +76,8 @@ export function Topbar() {
             gap: 7,
             padding: "4px 9px",
             borderRadius: 6,
-            background: "rgba(255,82,82,.1)",
-            border: "1px solid rgba(255,82,82,.22)",
+            background: "rgba(255,90,90,.1)",
+            border: "1px solid rgba(255,90,90,.22)",
             flex: "none",
             textDecoration: "none",
           }}
@@ -91,69 +87,62 @@ export function Topbar() {
               width: 5,
               height: 5,
               borderRadius: "50%",
-              background: "#FF5252",
+              background: color.live,
               animation: "ar-pulse 1.4s infinite",
             }}
           />
           <span
             style={{
-              font: "500 10px var(--font-geist-mono), monospace",
+              font: `500 10px ${font.mono}`,
               letterSpacing: ".08em",
               color: "#FF8A8A",
             }}
           >
-            {liveCount} TABLES LIVE
+            {liveCount} LIVE
           </span>
         </Link>
         <div
           style={{
-            display: "flex",
-            gap: 20,
-            whiteSpace: "nowrap",
-            font: "400 11px var(--font-geist-mono), monospace",
-            color: "#8A8A8A",
+            font: `400 12px ${font.sans}`,
+            color: color.textMuted,
             overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
           }}
         >
-          {ticker.map((t) => (
-            <span key={t.k}>
-              <span style={{ color: "#4A4A4A" }}>{t.k}</span> {t.v}{" "}
-              <span style={{ color: t.c }}>{t.d}</span>
-            </span>
-          ))}
+          Competitive AI poker · verifiable settlement
         </div>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 14, flex: "none" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flex: "none" }}>
         <div
           title={accountTitle}
           style={{
             padding: "5px 10px",
             borderRadius: 8,
-            border:
-              isOnchain
-                ? "1px solid rgba(0,230,118,.35)"
-                : "1px solid rgba(255,255,255,.1)",
-            background:
-              isOnchain ? "rgba(0,230,118,.1)" : "rgba(255,255,255,.04)",
-            font: "600 10px var(--font-geist-mono), monospace",
+            border: isOnchain ? `1px solid ${color.accentBorder}` : `1px solid ${color.lineStrong}`,
+            background: isOnchain ? color.accentDim : "rgba(255,255,255,.04)",
+            font: `600 10px ${font.mono}`,
             letterSpacing: ".06em",
-            color: isOnchain ? "#00E676" : "#9A9A9A",
+            color: isOnchain ? color.accent : color.textMuted,
           }}
         >
           {accountLabel}
         </div>
-        <Link href="/wallet" style={{ display: "flex", alignItems: "center", gap: 14, textDecoration: "none", color: "#EDEDED" }}>
+        <Link
+          href="/wallet"
+          style={{ display: "flex", alignItems: "center", gap: 14, textDecoration: "none", color: color.text }}
+        >
           <div style={{ textAlign: "right" }}>
-            <div style={{ font: "400 9px var(--font-geist-mono), monospace", letterSpacing: ".1em", color: "#4A4A4A" }}>
-              WALLET
+            <div style={{ font: `400 9px ${font.mono}`, letterSpacing: ".1em", color: color.textFaint }}>
+              AVAILABLE
             </div>
-            <div style={{ font: "500 13px var(--font-geist-mono), monospace" }}>
+            <div style={{ font: `500 13px ${font.mono}` }}>
               <SplitFlapNumber value={balances.displayWallet} fontSize={13} />
             </div>
           </div>
           <div style={{ textAlign: "right" }}>
-            <div style={{ font: "400 9px var(--font-geist-mono), monospace", letterSpacing: ".1em", color: "#4A4A4A" }}>
-              AT TABLES
+            <div style={{ font: `400 9px ${font.mono}`, letterSpacing: ".1em", color: color.textFaint }}>
+              LOCKED
             </div>
             <div
               title={
@@ -161,26 +150,15 @@ export function Topbar() {
                   ? `Live at tables. ${balances.pendingSettlement.toFixed(0)} still unlocking on-chain.`
                   : "Live chips at your active seats"
               }
-              style={{ font: "500 13px var(--font-geist-mono), monospace", color: "#FFB020" }}
+              style={{ font: `500 13px ${font.mono}`, color: color.warn }}
             >
-              <SplitFlapNumber value={balances.displayLocked} color="#FFB020" fontSize={13} />
+              <SplitFlapNumber value={balances.displayLocked} color={color.warn} fontSize={13} />
             </div>
           </div>
         </Link>
-        <Link
-          href="/poker"
-          style={{
-            padding: "7px 15px",
-            borderRadius: 8,
-            background: "#00E676",
-            color: "#050505",
-            fontSize: 12.5,
-            fontWeight: 600,
-            textDecoration: "none",
-          }}
-        >
-          Play now
-        </Link>
+        <Button href="/poker" variant="primary" size="sm">
+          Play Now
+        </Button>
         <button
           type="button"
           onClick={() => {
@@ -194,30 +172,31 @@ export function Topbar() {
           style={{
             padding: "7px 12px",
             borderRadius: 8,
-            border: "1px solid rgba(255,255,255,.12)",
+            border: `1px solid ${color.lineStrong}`,
             background: "transparent",
-            color: "#9A9A9A",
+            color: color.textMuted,
             fontSize: 12,
             cursor: "pointer",
+            fontFamily: font.sans,
           }}
         >
           Sign out
         </button>
-        <div style={{ width: 1, height: 22, background: "rgba(255,255,255,.08)" }} />
+        <div style={{ width: 1, height: 22, background: color.line }} />
         <div
           onClick={() => setOpen((v) => !v)}
           style={{
             width: 32,
             height: 32,
             borderRadius: 8,
-            border: "1px solid rgba(255,255,255,.08)",
+            border: `1px solid ${color.line}`,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             cursor: "pointer",
             position: "relative",
             fontSize: 12,
-            color: "#9A9A9A",
+            color: color.textMuted,
           }}
         >
           ◔
@@ -231,9 +210,9 @@ export function Topbar() {
                 height: 15,
                 padding: "0 4px",
                 borderRadius: 8,
-                background: "#00E676",
-                color: "#050505",
-                font: "600 9px/15px var(--font-geist-mono), monospace",
+                background: color.accent,
+                color: color.textInverse,
+                font: `600 9px/15px ${font.mono}`,
                 textAlign: "center",
               }}
             >
@@ -250,8 +229,8 @@ export function Topbar() {
             right: 14,
             width: 376,
             borderRadius: 15,
-            border: "1px solid rgba(255,255,255,.1)",
-            background: "rgba(12,12,12,.98)",
+            border: `1px solid ${color.lineStrong}`,
+            background: "rgba(12,18,16,.98)",
             backdropFilter: "blur(22px)",
             boxShadow: "0 30px 80px rgba(0,0,0,.85)",
             overflow: "hidden",
@@ -262,7 +241,7 @@ export function Topbar() {
           <div
             style={{
               padding: "15px 18px",
-              borderBottom: "1px solid rgba(255,255,255,.06)",
+              borderBottom: `1px solid ${color.line}`,
               display: "flex",
               justifyContent: "space-between",
               alignItems: "center",
@@ -271,7 +250,7 @@ export function Topbar() {
             <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-.02em" }}>Notifications</div>
           </div>
           {notifs.length === 0 ? (
-            <div style={{ padding: 18, fontSize: 12.5, color: "#6A6A6A" }}>No notifications yet.</div>
+            <div style={{ padding: 18, fontSize: 12.5, color: color.textFaint }}>No notifications yet.</div>
           ) : (
             notifs.map((n) => (
               <Link
@@ -281,13 +260,13 @@ export function Topbar() {
                 style={{
                   display: "block",
                   padding: "14px 18px",
-                  borderBottom: "1px solid rgba(255,255,255,.04)",
+                  borderBottom: `1px solid ${color.line}`,
                   textDecoration: "none",
-                  color: "#DADADA",
+                  color: color.text,
                 }}
               >
                 <div style={{ fontSize: 12.5, fontWeight: 550 }}>{n.title}</div>
-                <div style={{ fontSize: 12, color: "#8A8A8A", marginTop: 4 }}>{n.body}</div>
+                <div style={{ fontSize: 12, color: color.textMuted, marginTop: 4 }}>{n.body}</div>
               </Link>
             ))
           )}

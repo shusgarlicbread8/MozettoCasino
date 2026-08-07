@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { BrandMark, Button, LeagueChip } from "@/components/ui";
+import { color, font, primaryNav } from "@/lib/design-tokens";
 import {
   landingFairness,
   landingGames,
@@ -6,9 +8,14 @@ import {
   landingSteps,
 } from "@/lib/design-data";
 
+const navLinks = [
+  ...primaryNav.filter((n) => n.id !== "home"),
+  { id: "verify", label: "Verify", href: "/verify" },
+] as const;
+
 export default function LandingPage() {
   return (
-    <div style={{ minWidth: 1180, background: "#080808" }}>
+    <div className="mz-atmosphere" style={{ minHeight: "100vh", background: color.ink }}>
       <header
         style={{
           height: 64,
@@ -16,182 +23,124 @@ export default function LandingPage() {
           alignItems: "center",
           justifyContent: "space-between",
           padding: "0 42px",
-          borderBottom: "1px solid rgba(255,255,255,.06)",
+          borderBottom: `1px solid ${color.line}`,
           position: "sticky",
           top: 0,
-          background: "rgba(8,8,8,.86)",
+          background: "rgba(7,10,8,.86)",
           backdropFilter: "blur(18px)",
           zIndex: 40,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div
-            style={{
-              width: 26,
-              height: 26,
-              borderRadius: 8,
-              background: "linear-gradient(145deg,#00E676,#00A855)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              boxShadow: "0 0 18px rgba(0,230,118,.35)",
-            }}
-          >
-            <div
-              style={{
-                width: 8,
-                height: 8,
-                background: "#050505",
-                borderRadius: 2,
-                transform: "rotate(45deg)",
-              }}
-            />
-          </div>
-          <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: "-.03em" }}>Mozetto</div>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 26, fontSize: 13.5, color: "#8A8A8A" }}>
-          <Link href="/poker" style={{ color: "#8A8A8A" }}>
-            Poker
-          </Link>
-          <Link href="/casino" style={{ color: "#8A8A8A" }}>
-            Casino
-          </Link>
-          <Link href="/live" style={{ color: "#8A8A8A" }}>
-            Live
-          </Link>
-          <Link href="/rankings" style={{ color: "#8A8A8A" }}>
-            Rankings
-          </Link>
-          <Link href="/sign-in" style={{ color: "#8A8A8A" }}>
-            Demo
-          </Link>
-          <Link href="/onchain" style={{ color: "#8A8A8A" }}>
-            On-chain
-          </Link>
-          <Link
-            href="/sign-in"
-            style={{
-              padding: "9px 20px",
-              borderRadius: 9,
-              border: "1px solid rgba(255,255,255,.14)",
-              color: "#EDEDED",
-              fontSize: 13,
-              fontWeight: 600,
-              textDecoration: "none",
-            }}
-          >
-            Play Demo
-          </Link>
-          <Link
-            href="/onchain"
-            style={{
-              padding: "9px 20px",
-              borderRadius: 9,
-              background: "#00E676",
-              color: "#050505",
-              fontSize: 13,
-              fontWeight: 600,
-              textDecoration: "none",
-            }}
-          >
-            Enter On-chain
-          </Link>
+        <BrandMark href="/" size="md" />
+        <div style={{ display: "flex", alignItems: "center", gap: 22, fontSize: 13.5 }}>
+          {navLinks.map((n) => (
+            <Link key={n.id} href={n.href} style={{ color: color.textMuted }}>
+              {n.label}
+            </Link>
+          ))}
+          <Button href="/poker" variant="primary" size="sm">
+            Play Now
+          </Button>
         </div>
       </header>
 
+      {/* First viewport — brand-first competitive AI poker (WP-120) */}
       <section
         style={{
-          padding: "92px 42px 70px",
-          background: "radial-gradient(1100px 620px at 50% -10%,rgba(0,230,118,.08),#080808 68%)",
-          textAlign: "center",
+          position: "relative",
+          minHeight: "calc(100vh - 64px)",
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "center",
+          padding: "48px 42px 64px",
+          overflow: "hidden",
         }}
       >
+        {/* Dominant felt-table light plane (presentation only — not 3D art) */}
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            inset: 0,
+            background:
+              "radial-gradient(85% 70% at 50% 55%, rgba(20,92,62,0.55) 0%, rgba(14,59,42,0.22) 42%, transparent 68%)",
+            animation: "mz-hero-breathe 8s ease-in-out infinite",
+            pointerEvents: "none",
+          }}
+        />
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: "58%",
+            transform: "translate(-50%, -50%)",
+            width: "min(920px, 92vw)",
+            height: "min(420px, 48vh)",
+            borderRadius: "50% / 42%",
+            border: `1px solid ${color.accentBorder}`,
+            background:
+              "radial-gradient(70% 80% at 50% 40%, rgba(61,220,138,0.12), rgba(7,10,8,0.2) 70%)",
+            boxShadow: `inset 0 0 80px rgba(61,220,138,0.08), 0 40px 100px -40px rgba(0,0,0,0.8)`,
+            pointerEvents: "none",
+          }}
+        />
+
         <div
           style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "5px 13px",
-            borderRadius: 100,
-            border: "1px solid rgba(0,230,118,.24)",
-            background: "rgba(0,230,118,.06)",
-            font: "500 10.5px var(--font-geist-mono), monospace",
-            letterSpacing: ".1em",
-            color: "#00E676",
+            position: "relative",
+            zIndex: 1,
+            maxWidth: 720,
+            margin: "0 auto",
+            textAlign: "center",
+            animation: "ar-up .55s ease both",
           }}
         >
-          <span
+          <BrandMark href={false} hero style={{ justifyContent: "center" }} />
+          <h1
+            className="mz-display"
             style={{
-              width: 5,
-              height: 5,
-              borderRadius: "50%",
-              background: "#00E676",
-              animation: "ar-pulse 1.6s infinite",
-            }}
-          />
-          AUTONOMOUS POKER AND CASINO WITH ON-CHAIN SETTLEMENT
-        </div>
-        <h1
-          style={{
-            margin: "26px auto 0",
-            fontSize: 74,
-            fontWeight: 600,
-            letterSpacing: "-.052em",
-            lineHeight: 1.03,
-            maxWidth: 940,
-          }}
-        >
-          Choose a game.
-          <br />
-          Your AI takes the seat.
-        </h1>
-        <p
-          style={{
-            margin: "22px auto 0",
-            fontSize: 18,
-            lineHeight: 1.6,
-            color: "#8A8A8A",
-            maxWidth: 640,
-          }}
-        >
-          Browse open tables, decide how much of your wallet to bring, pick a playing style — and watch. From $10 in
-          Bronze to seven figures in Sovereign.
-        </p>
-        <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 34 }}>
-          <Link
-            href="/home"
-            style={{
-              padding: "15px 32px",
-              borderRadius: 11,
-              background: "#00E676",
-              color: "#050505",
-              fontSize: 15,
-              fontWeight: 600,
+              margin: "28px 0 0",
+              fontSize: "clamp(36px, 5.5vw, 56px)",
+              fontWeight: 700,
+              letterSpacing: "-0.045em",
+              lineHeight: 1.05,
+              color: color.text,
             }}
           >
-            Enter the lobby
-          </Link>
-          <Link
-            href="/live"
+            Competitive AI poker.
+            <br />
+            Your agent takes the seat.
+          </h1>
+          <p
             style={{
-              padding: "15px 28px",
-              borderRadius: 11,
-              border: "1px solid rgba(255,255,255,.14)",
-              fontSize: 15,
-              color: "#EDEDED",
+              margin: "18px auto 0",
+              fontSize: 17,
+              lineHeight: 1.55,
+              color: color.textMuted,
+              maxWidth: 480,
+              fontFamily: font.sans,
             }}
           >
-            Watch a live table
-          </Link>
-        </div>
-        <div
-          style={{
-            font: "400 12px var(--font-geist-mono), monospace",
-            color: "#4A4A4A",
-            marginTop: 20,
-          }}
-        >
-          NO PROMPTS · NO SETUP · NO CODE · 18+
+            Pick a league, tune a strategy, find a match — then watch autonomous play settle on Base.
+          </p>
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              justifyContent: "center",
+              marginTop: 32,
+              flexWrap: "wrap",
+              animation: "ar-fade .6s ease .15s both",
+            }}
+          >
+            <Button href="/poker" variant="primary" size="lg">
+              Play Now
+            </Button>
+            <Button href="/live" variant="secondary" size="lg">
+              Watch live
+            </Button>
+          </div>
         </div>
       </section>
 
@@ -202,22 +151,27 @@ export default function LandingPage() {
               key={s.n}
               style={{
                 borderRadius: 18,
-                border: "1px solid rgba(255,255,255,.07)",
-                background: "#0A0A0A",
+                border: `1px solid ${color.line}`,
+                background: color.inkElevated,
                 padding: "26px 24px",
               }}
             >
               <div
                 style={{
-                  font: "500 11px var(--font-geist-mono), monospace",
+                  font: `500 11px ${font.mono}`,
                   letterSpacing: ".14em",
-                  color: "#00E676",
+                  color: color.accent,
                 }}
               >
                 {s.n}
               </div>
-              <div style={{ fontSize: 19, fontWeight: 600, letterSpacing: "-.03em", marginTop: 14 }}>{s.k}</div>
-              <div style={{ fontSize: 13, lineHeight: 1.6, color: "#7A7A7A", marginTop: 9 }}>{s.t}</div>
+              <div
+                className="mz-display"
+                style={{ fontSize: 19, fontWeight: 600, letterSpacing: "-.03em", marginTop: 14 }}
+              >
+                {s.k}
+              </div>
+              <div style={{ fontSize: 13, lineHeight: 1.6, color: color.textMuted, marginTop: 9 }}>{s.t}</div>
             </div>
           ))}
         </div>
@@ -225,9 +179,14 @@ export default function LandingPage() {
 
       <section style={{ padding: "0 42px 90px", maxWidth: 1180, margin: "0 auto" }}>
         <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <h2 style={{ margin: 0, fontSize: 40, fontWeight: 600, letterSpacing: "-.04em" }}>Four games. One AI.</h2>
-          <p style={{ margin: "14px auto 0", fontSize: 15, color: "#8A8A8A", maxWidth: 560 }}>
-            Texas Hold&apos;em (heads-up), Poker Classic (6-max), Omaha, and Short Deck — all played by the same AI you own.
+          <h2
+            className="mz-display"
+            style={{ margin: 0, fontSize: 40, fontWeight: 650, letterSpacing: "-.04em" }}
+          >
+            One engine. Ranked seats.
+          </h2>
+          <p style={{ margin: "14px auto 0", fontSize: 15, color: color.textMuted, maxWidth: 560 }}>
+            Texas Hold&apos;em heads-up first. Classic 6-max and more formats share the same verifiable rules engine.
           </p>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 }}>
@@ -236,8 +195,8 @@ export default function LandingPage() {
               key={g.name}
               style={{
                 borderRadius: 18,
-                border: "1px solid rgba(255,255,255,.07)",
-                background: "#0A0A0A",
+                border: `1px solid ${color.line}`,
+                background: color.inkElevated,
                 overflow: "hidden",
               }}
             >
@@ -248,7 +207,7 @@ export default function LandingPage() {
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  borderBottom: "1px solid rgba(255,255,255,.06)",
+                  borderBottom: `1px solid ${color.line}`,
                   position: "relative",
                 }}
               >
@@ -274,7 +233,7 @@ export default function LandingPage() {
                     position: "absolute",
                     top: 11,
                     right: 11,
-                    font: "500 8.5px var(--font-geist-mono), monospace",
+                    font: `500 8.5px ${font.mono}`,
                     letterSpacing: ".11em",
                     color: g.typeColor,
                   }}
@@ -284,7 +243,7 @@ export default function LandingPage() {
               </div>
               <div style={{ padding: 20 }}>
                 <div style={{ fontSize: 16.5, fontWeight: 600, letterSpacing: "-.026em" }}>{g.name}</div>
-                <div style={{ fontSize: 12.5, lineHeight: 1.6, color: "#7A7A7A", marginTop: 10 }}>{g.desc}</div>
+                <div style={{ fontSize: 12.5, lineHeight: 1.6, color: color.textMuted, marginTop: 10 }}>{g.desc}</div>
               </div>
             </div>
           ))}
@@ -294,17 +253,21 @@ export default function LandingPage() {
       <section
         style={{
           padding: "72px 42px",
-          borderTop: "1px solid rgba(255,255,255,.06)",
-          borderBottom: "1px solid rgba(255,255,255,.06)",
-          background: "#0A0A0A",
+          borderTop: `1px solid ${color.line}`,
+          borderBottom: `1px solid ${color.line}`,
+          background: color.inkElevated,
         }}
       >
         <div style={{ maxWidth: 1180, margin: "0 auto" }}>
           <div style={{ textAlign: "center", marginBottom: 34 }}>
-            <h2 style={{ margin: 0, fontSize: 40, fontWeight: 600, letterSpacing: "-.04em" }}>Six leagues</h2>
-            <p style={{ margin: "14px auto 0", fontSize: 15, color: "#8A8A8A", maxWidth: 620 }}>
-              Every league has a minimum buy-in and a way in. Bring any amount above the table minimum — never your whole
-              wallet by default.
+            <h2
+              className="mz-display"
+              style={{ margin: 0, fontSize: 40, fontWeight: 650, letterSpacing: "-.04em" }}
+            >
+              Six leagues
+            </h2>
+            <p style={{ margin: "14px auto 0", fontSize: 15, color: color.textMuted, maxWidth: 620 }}>
+              Fixed buy-ins per league. Matchmaking finds your seat — you never pick the opponent.
             </p>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)", gap: 12 }}>
@@ -319,13 +282,10 @@ export default function LandingPage() {
                   opacity: Number(l.op),
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                  <div style={{ width: 5, height: 18, borderRadius: 3, background: l.color }} />
-                  <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: "-.025em" }}>{l.k}</div>
-                </div>
+                <LeagueChip league={l.k} size="md" />
                 <div
                   style={{
-                    font: "500 24px var(--font-geist-mono), monospace",
+                    font: `500 24px ${font.mono}`,
                     color: l.color,
                     marginTop: 16,
                     letterSpacing: "-.03em",
@@ -335,8 +295,8 @@ export default function LandingPage() {
                 </div>
                 <div
                   style={{
-                    font: "400 9.5px var(--font-geist-mono), monospace",
-                    color: "#5A5A5A",
+                    font: `400 9.5px ${font.mono}`,
+                    color: color.textFaint,
                     marginTop: 5,
                     letterSpacing: ".08em",
                   }}
@@ -347,10 +307,10 @@ export default function LandingPage() {
                   style={{
                     fontSize: 12,
                     lineHeight: 1.55,
-                    color: "#7A7A7A",
+                    color: color.textMuted,
                     marginTop: 16,
                     paddingTop: 14,
-                    borderTop: "1px solid rgba(255,255,255,.06)",
+                    borderTop: `1px solid ${color.line}`,
                   }}
                 >
                   {l.req}
@@ -366,28 +326,28 @@ export default function LandingPage() {
           <div>
             <div
               style={{
-                font: "500 10.5px var(--font-geist-mono), monospace",
+                font: `500 10.5px ${font.mono}`,
                 letterSpacing: ".16em",
-                color: "#00E676",
+                color: color.accent,
               }}
             >
-              FAIRNESS BY DEFAULT
+              VERIFY · NOT GREENWASH
             </div>
             <h2
+              className="mz-display"
               style={{
                 margin: "16px 0 0",
                 fontSize: 38,
-                fontWeight: 600,
+                fontWeight: 650,
                 letterSpacing: "-.04em",
                 lineHeight: 1.15,
               }}
             >
-              Nobody can put a thumb on the table.
+              Trust is a checklist, not a badge.
             </h2>
-            <p style={{ margin: "16px 0 0", fontSize: 15, lineHeight: 1.65, color: "#8A8A8A" }}>
-              Once your AI is seated, you cannot message it, steer it or override it. Configuration is hashed and locked,
-              every player receives the same reasoning energy, and no AI ever sees another&apos;s cards or reasoning.
-              Spectators watch on a delay.
+            <p style={{ margin: "16px 0 0", fontSize: 15, lineHeight: 1.65, color: color.textMuted }}>
+              Funds locked, players sealed, VRF, deck commitment, event roots, settlement — each component is shown as
+              verified, pending, or missing. Deep detail lives on Verify Game.
             </p>
             <Link href="/verify" style={{ display: "inline-block", marginTop: 22, fontSize: 14 }}>
               Open public Verify Game →
@@ -396,20 +356,20 @@ export default function LandingPage() {
           <div
             style={{
               borderRadius: 18,
-              border: "1px solid rgba(255,255,255,.08)",
-              background: "#0A0A0A",
+              border: `1px solid ${color.lineStrong}`,
+              background: color.inkElevated,
               padding: "24px 26px",
             }}
           >
             <div
               style={{
-                font: "500 9.5px var(--font-geist-mono), monospace",
+                font: `500 9.5px ${font.mono}`,
                 letterSpacing: ".14em",
-                color: "#4A4A4A",
+                color: color.textFaint,
                 marginBottom: 16,
               }}
             >
-              MONACO 12 · GOLD · HAND #184
+              PUBLIC SESSION COMPONENTS
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 13 }}>
               {landingFairness.map((f) => (
@@ -418,10 +378,10 @@ export default function LandingPage() {
                   style={{
                     display: "flex",
                     justifyContent: "space-between",
-                    font: "400 11.5px var(--font-geist-mono), monospace",
+                    font: `400 11.5px ${font.mono}`,
                   }}
                 >
-                  <span style={{ color: "#6A6A6A" }}>{f.k}</span>
+                  <span style={{ color: color.textMuted }}>{f.k}</span>
                   <span style={{ color: f.color }}>{f.v}</span>
                 </div>
               ))}
@@ -432,60 +392,50 @@ export default function LandingPage() {
 
       <section style={{ padding: "0 42px 100px", textAlign: "center" }}>
         <h2
+          className="mz-display"
           style={{
             margin: 0,
-            fontSize: 50,
-            fontWeight: 600,
+            fontSize: "clamp(32px, 4vw, 48px)",
+            fontWeight: 700,
             letterSpacing: "-.05em",
             lineHeight: 1.1,
           }}
         >
-          Choose a game. Fund your AI.
-          <br />
-          Join the next hand. It plays for you.
+          Play Now. Your AI takes the seat.
         </h2>
         <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 32 }}>
-          <Link
-            href="/home"
-            style={{
-              padding: "15px 34px",
-              borderRadius: 11,
-              background: "#00E676",
-              color: "#050505",
-              fontSize: 15,
-              fontWeight: 600,
-            }}
-          >
-            Enter the lobby
-          </Link>
-          <Link
-            href="/sign-in"
-            style={{
-              padding: "15px 28px",
-              borderRadius: 11,
-              border: "1px solid rgba(255,255,255,.14)",
-              fontSize: 15,
-              color: "#EDEDED",
-            }}
-          >
-            Create an account
-          </Link>
+          <Button href="/poker" variant="primary" size="lg">
+            Play Now
+          </Button>
+          <Button href="/sign-in" variant="secondary" size="lg">
+            Sign in
+          </Button>
         </div>
       </section>
 
       <footer
         style={{
           padding: "28px 42px",
-          borderTop: "1px solid rgba(255,255,255,.06)",
+          borderTop: `1px solid ${color.line}`,
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          font: "400 11.5px var(--font-geist-mono), monospace",
-          color: "#4A4A4A",
+          font: `400 11.5px ${font.mono}`,
+          color: color.textFaint,
+          gap: 16,
+          flexWrap: "wrap",
         }}
       >
-        <span>MOZETTO · AUTONOMOUS POKER AND CASINO WITH ON-CHAIN SETTLEMENT</span>
-        <span>18+ ONLY · PLAY RESPONSIBLY · ONLY YOUR TABLE BALANCE IS EVER AT RISK</span>
+        <span>MOZETTO · COMPETITIVE AI POKER</span>
+        <span>
+          <Link href="/verify" style={{ color: color.textFaint, marginRight: 16 }}>
+            Verify
+          </Link>
+          <Link href="/responsible-play" style={{ color: color.textFaint, marginRight: 16 }}>
+            Responsible play
+          </Link>
+          18+ ONLY
+        </span>
       </footer>
     </div>
   );
