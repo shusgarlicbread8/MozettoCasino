@@ -28,7 +28,7 @@ No live deploy is required for this packet. Recipes are staging-shaped; Plan 07 
 | **indexer** | `Dockerfile.indexer` | `PORT` / 4010 | `GET /health`, `/metrics` | Vault / chain projection |
 | **worker** | `Dockerfile.worker` | `PORT` / 4011 | `GET /health` | Settlement + checkpoints poller |
 
-`packages/proof-batch-publisher` includes an optional `src/run.ts` runner (WP-085). A dedicated publisher Dockerfile can mirror `Dockerfile.worker` when ops wants a separate process; until then, settlement-worker / ops jobs may invoke the package locally.
+`packages/proof-batch-publisher` continuous runner (WP-085/112): `Dockerfile.publisher` + `pnpm --filter @mozetto/proof-batch-publisher start` with `DATABASE_URL` + `PROOF_BATCH_REGISTRY_ADDRESS`. See `docs/WP-112_HOSTED_PROOF_PIPELINE.md`.
 
 **Datastores (managed, not in app containers):**
 
@@ -213,7 +213,8 @@ Minimum staging checks (manual):
 5. Restart **indexer** — cursor resumes; lag recovers without rewriting settled custody incorrectly.
 6. Restart **worker** — no double-settle when hub/session already settled (idempotent settle path).
 
-Full chaos automation: `docs/WP-101_CHAOS_SUITE.md` + `scripts/chaos/` (`pnpm test:chaos`).
+Unit chaos: `docs/WP-101_CHAOS_SUITE.md` (`pnpm test:chaos`).  
+Live multi-container: `docs/WP-113_LIVE_CHAOS.md` (`CHAOS_LIVE=1 pnpm test:chaos:live`).
 
 ---
 

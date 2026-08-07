@@ -164,7 +164,7 @@ pnpm db:migrate   # applies 023_proof_batch_inclusion.sql
 | Admin chain/solvency dashboard | WP-091 |
 | Watchtower independent consumer | WP-095 |
 | Nitro enclave measurement display | WP-054 |
-| Continuous checkpoint feeder into `CheckpointSource` | WP-085 residual |
+| Continuous checkpoint feeder into `CheckpointSource` | **DONE** — WP-112 |
 
 ---
 
@@ -203,6 +203,6 @@ Commands:
 - pnpm --filter @mozetto/database test
 - pnpm --filter @mozetto/api test
 Spec clauses: none mutated; Plan 10 categories preserved
-Follow-up: wire CheckpointSource feeder; continuous SQL store in hosted runner
+Follow-up: WP-112 continuous CheckpointSource + SQL store (DONE)
 ```
 

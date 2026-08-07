@@ -138,7 +138,22 @@ export class ProofBatchPublisher {
     manifest?: DataManifestInput,
   ): Promise<PublishResult> {
     const pending = await source.drainPending();
-    return this.publish(pending, manifest);
+    const result = await this.publish(pending, manifest);
+    if (
+      !result.skipped &&
+      result.prepared &&
+      typeof source.acknowledge === "function"
+    ) {
+      try {
+        await source.acknowledge(pending, result.prepared.batch.sequence);
+      } catch (ackErr) {
+        console.error(
+          "[proof-batch-publisher] checkpoint acknowledge failed",
+          ackErr instanceof Error ? ackErr.message : ackErr,
+        );
+      }
+    }
+    return result;
   }
 }
 
@@ -160,10 +175,25 @@ export async function runPublisherLoop(opts: {
 
   while (!opts.signal?.aborted) {
     try {
-      const result = await opts.publisher.publishFromSource(
-        opts.source,
-        opts.manifest,
-      );
+      const pending = await opts.source.drainPending();
+      const result = await opts.publisher.publish(pending, opts.manifest);
+      if (
+        !result.skipped &&
+        result.prepared &&
+        typeof opts.source.acknowledge === "function"
+      ) {
+        try {
+          await opts.source.acknowledge(
+            pending,
+            result.prepared.batch.sequence,
+          );
+        } catch (ackErr) {
+          console.error(
+            "[proof-batch-publisher] checkpoint acknowledge failed",
+            ackErr instanceof Error ? ackErr.message : ackErr,
+          );
+        }
+      }
       if (opts.onResult) await opts.onResult(result);
     } catch (err) {
       if (opts.onError) await opts.onError(err);

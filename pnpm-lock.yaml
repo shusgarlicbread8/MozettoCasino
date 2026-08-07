@@ -60,6 +60,9 @@ importers:
       '@mozetto/game-rules':
         specifier: workspace:*
         version: link:../../packages/game-rules
+      '@mozetto/presentation-adapter':
+        specifier: workspace:*
+        version: link:../../packages/presentation-adapter
       '@mozetto/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
@@ -276,8 +279,23 @@ importers:
         specifier: ^5.8.2
         version: 5.9.3
 
+  packages/presentation-adapter:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.5
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
   packages/proof-batch-publisher:
     dependencies:
+      '@mozetto/database':
+        specifier: workspace:*
+        version: link:../database
       '@mozetto/root-builder':
         specifier: workspace:*
         version: link:../root-builder
@@ -492,6 +510,9 @@ importers:
       '@mozetto/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
+      '@mozetto/unit-economics':
+        specifier: workspace:*
+        version: link:../../packages/unit-economics
       fastify:
         specifier: ^5.2.1
         version: 5.11.2
@@ -695,6 +716,9 @@ importers:
       '@mozetto/game-rules':
         specifier: workspace:*
         version: link:../../packages/game-rules
+      '@mozetto/root-builder':
+        specifier: workspace:*
+        version: link:../../packages/root-builder
       '@mozetto/server-env':
         specifier: workspace:*
         version: link:../../packages/server-env

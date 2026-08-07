@@ -78,6 +78,14 @@ export type RegistryClient = {
 export type CheckpointSource = {
   /** Return (and typically dequeue) pending leaves for the next batch. */
   drainPending(): Promise<CheckpointLeaf[]> | CheckpointLeaf[];
+  /**
+   * Optional: mark drained leaves as included after registry accepts a batch
+   * (SQL claim/ack). Memory sources omit this.
+   */
+  acknowledge?(
+    leaves: readonly CheckpointLeaf[],
+    batchSequence: bigint,
+  ): Promise<void> | void;
 };
 
 export type PublishResult = {

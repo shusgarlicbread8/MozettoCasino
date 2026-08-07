@@ -1,0 +1,15 @@
+export {
+  buildCanonicalSettlementRoots,
+  buildHandRootForSettledHand,
+  buildSettlementRootsFromTip,
+  buildTableCheckpointRoot,
+  deckRootFromSeedReveal,
+  persistHandRoot,
+  persistBalanceLeaves,
+  persistSessionCheckpoint,
+  requireRealRoots,
+  assertRealRoot,
+  StubRootError,
+  type PersistHandRootInput,
+  type SeatBalanceSnapshot,
+} from "./canonical-roots.js";

@@ -2,7 +2,7 @@
 
 **Authority:** Follows `00_READ_ME_FIRST.md`, `01_MASTER_EXECUTION_ROADMAP.md`, `16_AGENT_WORK_PACKETS.md`, `17_FINAL_DEFINITION_OF_DONE.md`.  
 **Rule:** Protocol V3 specs are **frozen** (WP-010–015). Implementations MUST match `/specs` and fail CI if vectors diverge. Do not invent new encodings.  
-**Last updated:** 2026-08-07 (WP-130 Rankings / profile DONE; WP-120–124 + WP-130 DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
+**Last updated:** 2026-08-07 (WP-128 Verify UX DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
 
 ---
 
@@ -21,17 +21,17 @@
 | Field | Value |
 |---|---|
 | **Active wave** | **Wave 11 Production Integration** + **Wave 12 Consumer UX** (parallel) |
-| **Active packets** | WP-106–113 (Track A/C), WP-125–132 (Track B; WP-120–124 + WP-130 DONE); Sepolia Stage A blocked until WP-106–112 green |
+| **Active packets** | WP-106–113 (Track A/C), WP-125–132 (Track B; WP-120–124 + WP-128 DONE + WP-130 DONE); Sepolia Stage A blocked until WP-106–112 green |
 | **Architecture status** | Protocol architecture largely built (~component-complete). Remaining work is integration, productization, hosted staging — **not** “ops only.” |
 | **Blocked until (Sepolia Stage A)** | WP-106–112 green on Anvil release candidate; then funded Sepolia deploy |
 | **Hard stop** | No new architecture invention; live AWS Nitro during Stage A; Plan 15 expansion stays deferred |
 | **WP-100 correction** | WP-100 = `PASS_WITH_GAPS` only. Gaps reopened as WP-106–108 (sealAndFund, API match, live AI hands, real roots). |
 | **Wave 0 note** | Packets DONE; `baseline-v2` tag optional (create only when user requests) |
 | **Plan 02 note** | Specs **frozen**; WP-015 TS/Rust/Solidity hashes identical |
-| **Plan 11 note** | Rake/treasury code DONE; Season 1 schedule = hypotheses until WP-111 empirical COGS |
+| **Plan 11 note** | Rake/treasury + WP-111 COGS hooks DONE; Season 1 schedule + pricing remain **hypotheses** (no GameTemplate freeze) |
 | **Plan 12 note** | Ratings / anti-cheat DONE — ML collusion deferred |
 | **Plan 19 note** | Schema map DONE; hosted cutover **WP-110 DONE** (GRANTs `030`, scheduler persist, WS dual-accept) |
-| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120–124 + WP-130 DONE → WP-125+); Plan 20B cinematic 3D remains DEFERRED |
+| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120–124 + WP-128 + WP-130 DONE → WP-125+); Plan 20B cinematic 3D remains DEFERRED |
 | **Anvil release candidate** | Normal user can Find Match → Groq AI session → verify → withdraw with **zero GAPs** (WP-106–112) |
 
 ---
@@ -83,7 +83,7 @@
 | 18 | Sources and decision log | `DONE` | — | pack authored | Locked decisions log |
 | 19 | Database schema API migration | `DONE` | 2026-08-07 | 2026-08-07 | Map DONE; hosted cutover WP-110 DONE |
 | 20A | Consumer product UX | `IN_PROGRESS` | 2026-08-07 | | Wave 12 WP-120–132 — WP-120–121 DONE; WP-122+ next |
-| 20B | Full 3D production | `DEFERRED` | | | After 2D table + WP-132 adapter prove themselves |
+| 20B | Full 3D production | `DEFERRED` | | | After 2D table + WP-132 adapter (DONE) prove themselves — no art yet |
 
 ---
 
@@ -210,7 +210,7 @@
 | ID | Status |
 |---|---|
 | WP-100 Full Anvil E2E | `DONE` (`PASS_WITH_GAPS` — gaps → WP-106–108) |
-| WP-101 Chaos suite | `DONE` (unit path; live multi-container → WP-113) |
+| WP-101 Chaos suite | `DONE` (unit path; live multi-container → WP-113 **DONE**) |
 | WP-102 Sepolia deployment/manifest | `DONE` (recipes; live tx pending ops) |
 | WP-103 Public testnet program | `DONE` (program scaffold; Stage A after Wave 11) |
 | WP-104 Audit remediation | `DONE` (register scaffold; no external audit claimed) |
@@ -222,12 +222,12 @@
 |---|---|---|---|
 | WP-106 | True full Anvil match lifecycle | `IN_PROGRESS` | Browser/API → match → SeatTicket V3 → `sealAndFundSession` → real game → settle → withdraw; **zero GAPs** |
 | WP-107 | Live Groq AI table integration | `DONE` | Game-server runs Groq seats + cognition + Energy + cadence for complete sessions |
-| WP-108 | Real canonical roots | `IN_PROGRESS` | AI gameplay produces real eventRoot/handRoot/balanceRoot (no stub settlement roots) |
-| WP-109 | Poker release hardening | `IN_PROGRESS` | Uncalled bets, deep 6-max, sit-out/timeout; PokerKit mandatory oracle; large generated set |
+| WP-108 | Real canonical roots | `DONE` | AI gameplay produces real eventRoot/handRoot/balanceRoot (no stub settlement roots) |
+| WP-109 | Poker release hardening | `DONE` | Uncalled bets, deep 6-max, sit-out/timeout; PokerKit mandatory oracle; large generated set |
 | WP-110 | Hosted DB + WS cutover | `DONE` | Migrations 017–030; GRANTs; scheduler DB persist; WS v2 dual-accept |
-| WP-111 | Economics instrumentation | `IN_PROGRESS` | Actual Groq/chain/VRF/relayer/cloud COGS + rake contribution per hand |
-| WP-112 | Hosted proof pipeline | `IN_PROGRESS` | Continuous CheckpointSource → publisher → SQL proofs → Verify page |
-| WP-113 | Live chaos completeness | `NOT_STARTED` | Multi-container Redis/RPC/VRF/dealer/worker/settlement failure drills |
+| WP-111 | Economics instrumentation | `DONE` | Actual Groq/chain/VRF/relayer/cloud COGS + rake contribution per hand |
+| WP-112 | Hosted proof pipeline | `DONE` | Continuous CheckpointSource → publisher → SQL proofs → Verify page |
+| WP-113 | Live chaos completeness | `DONE` | Multi-container Redis/RPC/VRF/dealer/worker/settlement failure drills (`CHAOS_LIVE=1`) |
 
 **Wave 11 gate:** WP-106–112 green ⇒ Anvil release candidate. Do **not** open Sepolia Stage A before this gate.
 
@@ -245,11 +245,11 @@
 | WP-125 | Live table 2D premium | `IN_PROGRESS` |
 | WP-126 | AI cognition presentation | `IN_PROGRESS` |
 | WP-127 | Result / replay | `IN_PROGRESS` |
-| WP-128 | Verify UX (trust badge → deep verify) | `IN_PROGRESS` |
+| WP-128 | Verify UX (trust badge → deep verify) | `DONE` |
 | WP-129 | Watch / spectator | `NOT_STARTED` |
 | WP-130 | Rankings / profile | `DONE` |
 | WP-131 | Mobile / performance | `NOT_STARTED` |
-| WP-132 | 3D event adapter (no art dependency) | `IN_PROGRESS` |
+| WP-132 | 3D event adapter (no art dependency) | `DONE` |
 
 **Wave 12 rule:** UX must not mutate protocol semantics. Feel = competitive autonomous gaming with verifiable settlement — not crypto-trading infrastructure.
 
@@ -260,6 +260,44 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 ---
 
 ## Session log
+
+### 2026-08-07 — WP-128 Verify UX (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- In-session trust badge (Funds secured / Players sealed / Cards committed) expanding to BASE VERIFIED details (WP-120 tokens)
+- Post-settlement ✓ GAME VERIFIED deep-link to `/verify/[sessionId]` (WP-090); `variant="result"` for WP-127
+- Table header + rail wiring; `onchain_session_id` on `GET /v1/tables/:id` (read-only join)
+- Docs: `docs/WP-128_VERIFY_UX.md`
+
+**Commands / evidence:**
+- WP-128 TypeScript artifacts typecheck clean (parallel-packet errors may remain in web)
+
+**Out of scope:** Spec / protocol mutations; WP-090 page rewrite.
+
+**Follow-up:** WP-127 Result / replay reuses `SessionTrustBadge` `variant="result"`.
+
+### 2026-08-07 — WP-132 Presentation event adapter (DONE)
+
+**Status:** `DONE` (technical adapter only; Plan 20B full 3D remains `DEFERRED`)
+
+**Delivered:**
+- Package `@mozetto/presentation-adapter` — Canonical → Presentation → AvatarState
+- Explicit mapping table (`AVATAR_STATE_MAP`); golden: `PLAYER_RAISED`+`shark` → `lean_forward_aggressive`
+- Unit tests for mapping, pot class, cadence/professor, aliases
+- Thin WP-125 hook: `apps/web/src/lib/table-presentation.ts` (+ feed wiring when WP-125 table module lands)
+- Docs: `docs/WP-132_PRESENTATION_ADAPTER.md`
+
+**Commands / evidence:**
+- `pnpm --filter @mozetto/presentation-adapter test` — pass
+- `pnpm --filter @mozetto/presentation-adapter typecheck` — pass
+
+**Out of scope:** Unity/R3F/art; Plan 20B; spec mutations; private-state tells.
+
+**Follow-up:** WP-125 may style from `data-avatar-state`; Plan 20B when 2D table + adapter proven.
+
+---
 
 ### 2026-08-07 — WP-130 Rankings / profile (DONE)
 
@@ -1775,7 +1813,7 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 
 **Out of scope:** Spec mutations; changing Plan 10 public result categories; private keys / dealer secrets on public routes.
 
-**Follow-up:** Wire continuous `CheckpointSource` + SQL inclusion store in hosted publisher runner.
+**Follow-up:** Wire continuous `CheckpointSource` + SQL inclusion store in hosted publisher runner — **DONE** (WP-112).
 
 ### 2026-08-07 — WP-102 Sepolia deployment/manifest (DONE — recipes)
 
@@ -1989,6 +2027,52 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 
 ---
 
+### 2026-08-07 — WP-108 Real canonical roots (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- `buildCanonicalSettlementRoots` / `requireRealRoots` / `StubRootError` in `@mozetto/root-builder`
+- Game-server: engine → PokerEventV1 mapping; HandRoot + balance/checkpoint persistence after `HAND_SETTLED`
+- Settlement-worker: `resolveSettlementRoots` — hard-fail stubs when `REQUIRE_REAL_ROOTS=1` / `MOZETTO_GOLDEN=1`
+- Docs: `docs/WP-108_REAL_CANONICAL_ROOTS.md` (WP-106 API + flags)
+
+**Commands / evidence:**
+- `pnpm --filter @mozetto/root-builder test` — fixture hand tip == eventRoot
+- `pnpm --filter @mozetto/game-server test`
+- `pnpm --filter @mozetto/settlement-worker test`
+
+**Out of scope:** `/specs` mutations; WP-106 browser golden wiring (consumes this API); live dealer Merkle deckRoot attach.
+
+**Follow-up:** WP-106 sets `REQUIRE_REAL_ROOTS=1` and calls `buildCanonicalSettlementRoots` or consumes DB `hand_roots` / checkpoints.
+
+---
+
+### 2026-08-07 — WP-111 Economics instrumentation (DONE)
+
+**Status:** `DONE` (rates remain hypotheses — not a fee freeze)
+
+**Delivered:**
+- `@mozetto/unit-economics` pricing hypotheses + per-hand/session cost reports + `pnpm economics:report` CLI
+- Groq `usage` → token/COGS on `DecisionResult`; `EconomicsLedger` in agent-runtime
+- Extended WP-107 `/v1/metrics` with tokens + economics; `GET /v1/economics`; `POST /v1/hand/end`
+- Game-server `HAND_SETTLED` rake → observe + `/v1/hand/end`
+- Admin `GET /v1/admin/economics` merges treasury + live COGS; freeze warning explicit
+- Docs: `docs/WP-111_ECONOMICS_INSTRUMENTATION.md`
+
+**Commands / evidence:**
+- `pnpm --filter @mozetto/unit-economics test`
+- `pnpm --filter @mozetto/agent-runtime test`
+- `pnpm economics:report -- --demo`
+
+**Hypotheses labeled:** Groq $/MTok, chain/VRF/relayer/cloud per-hand placeholders, Season 1 rake schedule — **not** GameTemplate freezes.
+
+**Deferred:** Sepolia-calibrated rates; Safe/timelock fee freeze; uncalled-bet rake eligibility; per-league acceptance pack.
+
+**Out of scope:** `/specs` mutations; inventing player AI fees.
+
+---
+
 ### 2026-08-07 — WP-110 Hosted DB + WS cutover (DONE)
 
 **Status:** `DONE` (with documented ops follow-ups)
@@ -2011,6 +2095,29 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 
 **Out of scope:** `/specs` mutations; destructive prod resets; committing secrets.
 
+### 2026-08-07 — WP-112 Hosted proof pipeline (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- Migration `031_session_checkpoint_proof_batch.sql` — `checkpoint_root` + claim/ack columns on `session_checkpoints`
+- `SqlCheckpointSource` + Season-1 `buildTableCheckpointRoot` in `@mozetto/proof-batch-publisher`
+- Continuous runner: `DATABASE_URL` → SQL checkpoint drain + SQL inclusion persist; `Dockerfile.publisher`
+- Settlement-worker tip emission + CheckpointRegistryV1 anchor (`services/settlement-worker/src/checkpoints.ts`)
+- Game-server hand-settle path also writes `session_checkpoints` (WP-108 roots) including `checkpoint_root`
+- Verify path unchanged (WP-090) — surfaces inclusion when SQL rows present
+- Docs: `docs/WP-112_HOSTED_PROOF_PIPELINE.md`
+
+**Commands / evidence:**
+- `pnpm --filter @mozetto/proof-batch-publisher test` — **19/19** pass
+- `pnpm --filter @mozetto/proof-batch-publisher typecheck` — pass
+- `pnpm --filter @mozetto/settlement-worker test` — **14/14** pass
+- `pnpm --filter @mozetto/settlement-worker typecheck` — pass
+
+**Spec clauses:** none mutated; Season-1 operational `TableCheckpointRoot = keccak256(abi.encode(eventRoot, balanceRoot))`.
+
+**Follow-up:** Enable Hub `requireProofBatch` in staging; optional CID `dataManifestHash` upload.
+
 ---
 
 ## Baseline inventory (post-WP-000)
@@ -2024,7 +2131,7 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 | Local boot | `pnpm bootstrap` → readiness; also `scripts/start-local.sh` |
 | Reset | `pnpm reset:local` (+ `--db`) |
 | E2E scripts | `pnpm e2e:arena-account`, `e2e:instant`, `e2e:mock-vrf`, `e2e:proof-batch`, `e2e:protocol-v3`, `smoke:custody` |
-| Migrations | `packages/database/migrations/001`–`030` (+ CI dry-run) |
+| Migrations | `packages/database/migrations/001`–`031` (+ CI dry-run) |
 | Architecture prose | `docs/PLATFORM_ARCHITECTURE.md` |
 | Machine-readable manifest | `docs/architecture-manifest.v2.json` (+ `.md`; `pnpm manifest:architecture`) |
 | Tool versions doc | `docs/TOOL_VERSIONS.md` |
@@ -2054,6 +2161,7 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 | Persist-before-broadcast outbox (WP-081) | `services/game-server/src/outbox/` + `docs/WP-081_PERSIST_OUTBOX.md` + migration `020` |
 | Reconciliation worker (WP-083) | `packages/reconciliation` + `services/reconciliation-worker` + `docs/WP-083_RECONCILIATION_WORKER.md` + migration `021` |
 | Hand/balance root builder (WP-061) | `packages/root-builder` + `docs/WP-061_HAND_BALANCE_ROOTS.md` |
+| Real canonical roots (WP-108) | `session-roots` + game-server persist + `REQUIRE_REAL_ROOTS` + `docs/WP-108_REAL_CANONICAL_ROOTS.md` |
 | Energy ledger (WP-074) | `services/agent-runtime/src/energy/` + `docs/WP-074_ENERGY_LEDGER.md` |
 | AgentState store (WP-072) | `services/agent-runtime/src/state/` + `docs/WP-072_AGENT_STATE_STORE.md` |
 | Poker eval harness (WP-077) | `services/agent-runtime/src/eval/` + `docs/WP-077_POKER_EVAL_HARNESS.md` (`pnpm eval:poker`) |
@@ -2064,7 +2172,7 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 | Emergency exit (WP-066) | `ArenaVaultV2.emergencyExitWithBalanceLeaf` + `docs/WP-066_EMERGENCY_EXIT.md` |
 | Table actor lease (WP-080) | `services/game-server/src/lease/` + `docs/WP-080_TABLE_ACTOR_LEASE.md` |
 | Chain indexer V3 (WP-082) | `services/chain-indexer/` + `docs/WP-082_CHAIN_INDEXER_V3.md` |
-| Proof-batch publisher (WP-085) | `packages/proof-batch-publisher` + `docs/WP-085_PROOF_BATCH_PUBLISHER.md` |
+| Proof-batch publisher (WP-085/112) | `packages/proof-batch-publisher` + `docs/WP-085_PROOF_BATCH_PUBLISHER.md` + `docs/WP-112_HOSTED_PROOF_PIPELINE.md` |
 | Settlement worker V3 (WP-084) | `services/settlement-worker` + `docs/WP-084_SETTLEMENT_WORKER_V3.md` |
 | Attest-v3 HTTP (WP-084 follow-up) | dealer `/v1/dealer/attest-v3` + replay `/v1/attest-settlement-v3` + `docs/WP-084_ATTEST_V3_HTTP.md` |
 | Hosted deployment recipes (WP-086) | `docs/WP-086_HOSTED_DEPLOYMENT.md` + `render.yaml` + `docker-compose.hosted.yml` + `deploy/fly/` + `Dockerfile.*` |
@@ -2083,6 +2191,8 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 | Restricted mainnet recipes/gates (WP-105) | `docs/WP-105_RESTRICTED_MAINNET.md` + `scripts/mainnet/` + `deployments/base.json` (`pnpm mainnet:*`) — live mainnet BLOCKED |
 | Watchtower prototype (WP-095) | `packages/watchtower` + `docs/WP-095_WATCHTOWER.md` (`pnpm watchtower`) |
 | Live Groq AI table (WP-107) | `services/agent-runtime/src/live/` + game-server wire + `docs/WP-107_LIVE_GROQ_TABLE.md` (`pnpm smoke:groq-table`) |
+| Economics instrumentation (WP-111) | `packages/unit-economics` COGS + agent-runtime ledger + `GET /v1/admin/economics` + `docs/WP-111_ECONOMICS_INSTRUMENTATION.md` (`pnpm economics:report`) |
 | Plan 19 DB/API migration | migrations `024`–`029` + `docs/PLAN_19_DATABASE_API_MIGRATION.md` + `services/api/src/plan19-routes.ts` |
 | Hosted DB + WS cutover (WP-110) | migration `030` + scheduler persist + WS dual-accept + `docs/WP-110_HOSTED_DB_WS.md` |
+| Presentation event adapter (WP-132) | `packages/presentation-adapter` + `apps/web/src/lib/table-presentation.ts` + `docs/WP-132_PRESENTATION_ADAPTER.md` (Plan 20B deferred) |
 | `baseline-v2` tag | Not created yet (await user) |

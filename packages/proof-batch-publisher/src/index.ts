@@ -47,6 +47,11 @@ export {
 
 export { MemoryCheckpointSource } from "./source.js";
 
+export { buildTableCheckpointRoot } from "./checkpoint-root.js";
+
+export { SqlCheckpointSource } from "./sql-source.js";
+export type { SqlCheckpointSourceOptions } from "./sql-source.js";
+
 export { ProofBatchPublisher, runPublisherLoop } from "./publisher.js";
 
 export {

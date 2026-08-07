@@ -19,31 +19,11 @@ import {
 } from "./chain.js";
 import { startHealthServer } from "./health.js";
 import { maybeRateOnchainSession } from "./rating.js";
+import {
+  anchorCheckpointsOnchain,
+  emitSessionCheckpoints,
+} from "./checkpoints.js";
 import { processOnchainSettlementsV3 } from "./v3/process.js";
-
-const CHECKPOINT_ABI = [
-  {
-    type: "function",
-    name: "anchor",
-    stateMutability: "nonpayable",
-    inputs: [
-      {
-        name: "cp",
-        type: "tuple",
-        components: [
-          { name: "tableId", type: "bytes32" },
-          { name: "epoch", type: "uint256" },
-          { name: "lastEventSequence", type: "uint256" },
-          { name: "handsRoot", type: "bytes32" },
-          { name: "balancesRoot", type: "bytes32" },
-          { name: "timestamp", type: "uint64" },
-          { name: "attestationHash", type: "bytes32" },
-        ],
-      },
-    ],
-    outputs: [],
-  },
-] as const;
 
 const RANDOMNESS_ABI = [
   {
@@ -134,53 +114,6 @@ async function tickPending() {
     () => ({ rows: [{ n: 0 }] }),
   );
   console.log("[settlement-worker] pending settlements", pending.rows[0]?.n ?? 0);
-}
-
-async function publishCheckpoints() {
-  const registry = process.env.CHECKPOINT_REGISTRY_ADDRESS as Hex | undefined;
-  const pk = (process.env.SETTLEMENT_PRIVATE_KEY || process.env.GAME_ATTESTOR_PRIVATE_KEY) as Hex | undefined;
-  if (!registry || !pk) return;
-
-  const rows = await query<{ table_id: string; max_seq: string; hand_id: string }>(
-    `select table_id, max(sequence)::text as max_seq, max(hand_id) as hand_id
-     from hand_events
-     where created_at > now() - interval '5 minutes'
-     group by table_id
-     limit 10`,
-  ).catch(() => ({ rows: [] as { table_id: string; max_seq: string; hand_id: string }[] }));
-
-  if (!rows.rows.length) return;
-
-  const { wallet, publicClient } = chainClients(pk);
-
-  for (const row of rows.rows) {
-    const tableId = keccakLike(row.table_id);
-    const handsRoot = keccakLike(`${row.table_id}:${row.hand_id}:${row.max_seq}`);
-    const balancesRoot = keccakLike(`balances:${row.table_id}:${row.max_seq}`);
-    const attestationHash = keccakLike(`attestor:settlement-worker:${Date.now()}`);
-    try {
-      const hash = await wallet.writeContract({
-        address: registry,
-        abi: CHECKPOINT_ABI,
-        functionName: "anchor",
-        args: [
-          {
-            tableId,
-            epoch: BigInt(1),
-            lastEventSequence: BigInt(row.max_seq || 0),
-            handsRoot,
-            balancesRoot,
-            timestamp: BigInt(Math.floor(Date.now() / 1000)),
-            attestationHash,
-          },
-        ],
-      });
-      await publicClient.waitForTransactionReceipt({ hash });
-      console.log("[settlement-worker] checkpoint anchored", row.table_id, hash);
-    } catch (e) {
-      console.warn("[settlement-worker] checkpoint skip", row.table_id, e instanceof Error ? e.message : e);
-    }
-  }
 }
 
 /**
@@ -594,7 +527,9 @@ async function loop() {
       await processOnchainSettlementsV2(hubAddress).catch((e) => console.error(e));
     }
   }
-  await publishCheckpoints().catch((e) => console.error(e));
+  // WP-112: SQL session_checkpoints → proof-batch publisher CheckpointSource
+  await emitSessionCheckpoints().catch((e) => console.error(e));
+  await anchorCheckpointsOnchain().catch((e) => console.error(e));
   await mockVrfEpoch().catch((e) => console.error(e));
 }
 

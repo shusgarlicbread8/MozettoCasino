@@ -78,7 +78,9 @@ const result = await publisher.publishFromSource(source);
 
 ### Checkpoint feeder
 
-Production should implement `CheckpointSource.drainPending()` over table checkpoint roots produced by the game/settlement path. Until that feeder is wired, the optional runner idles on empty drains or publishes a demo batch with `PROOF_BATCH_DEMO_LEAVES=1`.
+**WP-112 (DONE):** `SqlCheckpointSource` drains `session_checkpoints` (claim/ack) written by game-server hand settle and settlement-worker tip emission. Continuous runner enables it when `DATABASE_URL` is set — see `docs/WP-112_HOSTED_PROOF_PIPELINE.md`.
+
+Without `DATABASE_URL`, the optional runner idles on empty drains or publishes a demo batch with `PROOF_BATCH_DEMO_LEAVES=1`.
 
 ---
 
@@ -125,8 +127,8 @@ pnpm --filter @mozetto/proof-batch-publisher typecheck
 
 ## Follow-up
 
-- Wire game-server / settlement-worker checkpoint emission into `CheckpointSource`
 - Enable Hub `requireProofBatch` once publisher is continuous in staging
+- Continuous feeder: **DONE** — WP-112 (`docs/WP-112_HOSTED_PROOF_PIPELINE.md`)
 
 ### WP-090/085 inclusion-proof follow-up (DONE)
 
@@ -153,4 +155,4 @@ const inclusionStore = new MemoryInclusionProofStore();
 const publisher = new ProofBatchPublisher({ registry, inclusionStore });
 ```
 
-Local runner writes JSON when `PROOF_BATCH_INCLUSION_DIR` is set.
+Local / hosted runner: `DATABASE_URL` → SQL inclusion store; else `PROOF_BATCH_INCLUSION_DIR` → JSON.

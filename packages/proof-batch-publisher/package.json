@@ -15,6 +15,7 @@
     "dev": "tsx watch --env-file=../../.env.local src/run.ts"
   },
   "dependencies": {
+    "@mozetto/database": "workspace:*",
     "@mozetto/root-builder": "workspace:*",
     "viem": "^2.55.11"
   },
