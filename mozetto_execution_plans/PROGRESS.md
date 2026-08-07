@@ -272,6 +272,21 @@
 
 ## Session log
 
+### 2026-08-07 — Wave 13 Stage A Anvil-key refuse correction (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- Corrected `scripts/sepolia-deploy.sh` Anvil `#5`/`#8` addresses and `#6`/`#9` private keys to match Foundry Anvil defaults (prior commit had typos; private-key gate for `#0` already worked)
+- Re-verified all 10 Anvil key↔address pairs via `cast wallet address`
+- `pnpm sepolia:check` → `anvil_key_gate=FAIL` + `anvil_addr_gate=FAIL` + `balance_gate=FAIL` with local Anvil `#0` (broadcast still refused)
+
+**Commands / evidence:**
+- `bash scripts/sepolia-deploy.sh check` — FAIL (Anvil key forbidden; ~0 ETH)
+- No broadcast; no invented addresses
+
+**Follow-up:** Ops fund non-Anvil deployer → ordered checklist in `docs/WAVE_13_STAGE_A_GO_LIVE.md`
+
 ### 2026-08-07 — Wave 13 Stage A go-live runbook (DONE — recipes; live tx blocked)
 
 **Status:** `DONE` for ops **runbook + Anvil-key hardening**. Live Stage A remains **BLOCKED** until a funded non-Anvil deployer exists.
