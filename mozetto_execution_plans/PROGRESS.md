@@ -21,7 +21,7 @@
 | Field | Value |
 |---|---|
 | **Active wave** | **Wave 11 Production Integration** + **Wave 12 Consumer UX** (parallel) |
-| **Active packets** | WP-106–113 (Track A/C), WP-125–132 (Track B; WP-120–124 + WP-128 DONE + WP-130 DONE); Sepolia Stage A blocked until WP-106–112 green |
+| **Active packets** | WP-106–113 (Track A/C), WP-125–132 (Track B; WP-120–124 + WP-128–130 + WP-132 DONE; WP-129 DONE); Sepolia Stage A blocked until WP-106–112 green |
 | **Architecture status** | Protocol architecture largely built (~component-complete). Remaining work is integration, productization, hosted staging — **not** “ops only.” |
 | **Blocked until (Sepolia Stage A)** | WP-106–112 green on Anvil release candidate; then funded Sepolia deploy |
 | **Hard stop** | No new architecture invention; live AWS Nitro during Stage A; Plan 15 expansion stays deferred |
@@ -31,7 +31,7 @@
 | **Plan 11 note** | Rake/treasury + WP-111 COGS hooks DONE; Season 1 schedule + pricing remain **hypotheses** (no GameTemplate freeze) |
 | **Plan 12 note** | Ratings / anti-cheat DONE — ML collusion deferred |
 | **Plan 19 note** | Schema map DONE; hosted cutover **WP-110 DONE** (GRANTs `030`, scheduler persist, WS dual-accept) |
-| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120–124 + WP-128 + WP-130 DONE → WP-125+); Plan 20B cinematic 3D remains DEFERRED |
+| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120–124 + WP-128–130 + WP-132 DONE; WP-129 DONE → WP-125–127, WP-131); Plan 20B cinematic 3D remains DEFERRED |
 | **Anvil release candidate** | Normal user can Find Match → Groq AI session → verify → withdraw with **zero GAPs** (WP-106–112) |
 
 ---
@@ -54,7 +54,7 @@
 | 11 | Base Sepolia deployment | `BLOCKED` | Recipes ready; Stage A gated on Wave 11 WP-106–112 |
 | 12 | Adversarial program and audits | `BLOCKED` | Program/register scaffolds DONE; live A/B/C after Anvil RC + Sepolia deploy |
 | 13 | Restricted Base Mainnet | `BLOCKED` | WP-105 recipes/gates DONE; `finalGateApproval=false` |
-| 14 | Consumer product UX (Plan 20A) | `IN_PROGRESS` | Wave 12 WP-120–132 (WP-120–121 DONE); 3D production (20B) deferred |
+| 14 | Consumer product UX (Plan 20A) | `IN_PROGRESS` | Wave 12 WP-120–132 (WP-120–124 + WP-131 DONE); 3D production (20B) deferred |
 
 ---
 
@@ -82,7 +82,7 @@
 | 17 | Final definition of done | `DONE` | — | pack authored | Completion checklist |
 | 18 | Sources and decision log | `DONE` | — | pack authored | Locked decisions log |
 | 19 | Database schema API migration | `DONE` | 2026-08-07 | 2026-08-07 | Map DONE; hosted cutover WP-110 DONE |
-| 20A | Consumer product UX | `IN_PROGRESS` | 2026-08-07 | | Wave 12 WP-120–132 — WP-120–121 DONE; WP-122+ next |
+| 20A | Consumer product UX | `IN_PROGRESS` | 2026-08-07 | | Wave 12 WP-120–132 — WP-120–124 + WP-128–132 DONE; WP-125–127 next |
 | 20B | Full 3D production | `DEFERRED` | | | After 2D table + WP-132 adapter (DONE) prove themselves — no art yet |
 
 ---
@@ -248,7 +248,7 @@
 | WP-128 | Verify UX (trust badge → deep verify) | `DONE` |
 | WP-129 | Watch / spectator | `NOT_STARTED` |
 | WP-130 | Rankings / profile | `DONE` |
-| WP-131 | Mobile / performance | `NOT_STARTED` |
+| WP-131 | Mobile / performance | `DONE` |
 | WP-132 | 3D event adapter (no art dependency) | `DONE` |
 
 **Wave 12 rule:** UX must not mutate protocol semantics. Feel = competitive autonomous gaming with verifiable settlement — not crypto-trading infrastructure.
@@ -260,6 +260,23 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 ---
 
 ## Session log
+
+### 2026-08-07 — WP-127 Result / replay (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- Post-match `/result/[sessionId]` with P&L, rating Δ, aggression (when published), hand timeline, Rematch / Verify / Home
+- Replay list + hand detail on WP-120 tokens; removed mock EV / CoT sample hand
+- Links WP-128 `SessionTrustBadge` `variant="result"` (→ `GameVerifiedBadge` when verified); leave table redirects to result
+- Docs: `docs/WP-127_RESULT_REPLAY.md`
+
+**Commands / evidence:**
+- `pnpm --filter @mozetto/web typecheck` — pass
+
+**Out of scope:** Spec mutations; fake brilliant-move analysis; WP-128 badge ownership (reuse only).
+
+**Follow-up:** WP-125 live table polish; WP-126 cognition presentation.
 
 ### 2026-08-07 — WP-128 Verify UX (DONE)
 

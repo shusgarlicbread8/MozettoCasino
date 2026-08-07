@@ -1,8 +1,8 @@
 /**
  * Plan 11 — read-only treasury / revenue transparency snapshot for admin.
  *
- * Distinguishes gross/net rake from locked player funds. COGS remain null until
- * instrumentation is wired (Anvil → Sepolia).
+ * Distinguishes gross/net rake from locked player funds.
+ * Per-hand COGS live under WP-111 (`GET /v1/admin/economics` + agent-runtime ledger).
  */
 
 import { createPublicClient, http, type Hex } from "viem";

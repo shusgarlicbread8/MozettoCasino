@@ -107,5 +107,5 @@ Composition: **Mozetto** (hero brand) → one headline → one supporting line �
 
 - **WP-121** Home — Play Now first with real bankroll / session / leagues
 - **WP-122** Play / Find Match overlay using Button + LeagueChip
-- **WP-128** in-session trust badge → Verify (keep WP-090 deep page)
+- **WP-128** in-session trust badge → Verify (keep WP-090 deep page) — DONE (`docs/WP-128_VERIFY_UX.md`)
 - Migrate remaining `#00E676` / Geist references on app pages onto tokens as those packets land

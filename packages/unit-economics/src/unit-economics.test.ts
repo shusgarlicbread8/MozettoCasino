@@ -12,6 +12,11 @@ import {
   classifyAiCostBand,
   SEASON1_AI_COST_BANDS_USD_MICRO,
   COST_GUARD_ACTIONS,
+  COGS_PRICING_STATUS,
+  estimateGroqCostUsdMicro,
+  buildHandCostReport,
+  buildSessionCostReport,
+  serializeSessionCostReport,
 } from "./index.js";
 
 describe("Season 1 rake schedule (hypotheses)", () => {
@@ -117,5 +122,77 @@ describe("session conservation + energy cost bands", () => {
       "critical",
     );
     assert.ok(COST_GUARD_ACTIONS.includes("never_silently_reduce_seat_energy_mid_season"));
+  });
+});
+
+describe("WP-111 economics instrumentation", () => {
+  it("estimates Groq token cost as hypothesis USD micro", () => {
+    assert.equal(COGS_PRICING_STATUS, "hypothesis");
+    // 1M input @ $0.15 → 150_000 micro; 1M output @ $0.60 → 600_000 micro
+    assert.equal(
+      estimateGroqCostUsdMicro({ promptTokens: 1_000_000, completionTokens: 1_000_000 }),
+      750_000n,
+    );
+    assert.equal(estimateGroqCostUsdMicro({ promptTokens: 0, completionTokens: 0 }), 0n);
+  });
+
+  it("builds per-hand contribution with AI + chain/infra placeholders", () => {
+    const hand = buildHandCostReport({
+      sessionId: "s",
+      handId: "h",
+      rakeRevenue: 100_000n,
+      decisions: [
+        {
+          seat: 0,
+          promptTokens: 1_000_000,
+          completionTokens: 0,
+          energyDebited: 10,
+          fallbackUsed: false,
+        },
+      ],
+      placeholders: {
+        chainGasPerHand: 1_000n,
+        vrfPerHand: 1_000n,
+        relayerPerHand: 0n,
+        cloudPerHand: 2_000n,
+      },
+    });
+    assert.equal(hand.status, "hypothesis");
+    assert.equal(hand.aiCogs, 150_000n);
+    assert.equal(hand.chainCogs, 2_000n);
+    assert.equal(hand.infrastructureCogs, 2_000n);
+    assert.equal(hand.contribution.protocolContribution, 100_000n - 154_000n);
+    assert.ok(hand.notes.some((n) => n.toLowerCase().includes("hypothes")));
+  });
+
+  it("aggregates session report without freezing rake schedule", () => {
+    const session = buildSessionCostReport({
+      sessionId: "s",
+      hands: [
+        {
+          sessionId: "s",
+          handId: "h1",
+          rakeRevenue: 50_000n,
+          tokenUsage: { promptTokens: 1000, completionTokens: 10 },
+          applyPlaceholders: false,
+        },
+        {
+          sessionId: "s",
+          handId: "h2",
+          rakeRevenue: 50_000n,
+          tokenUsage: { promptTokens: 1000, completionTokens: 10 },
+          applyPlaceholders: false,
+        },
+      ],
+    });
+    assert.equal(session.workPacket, "WP-111");
+    assert.equal(session.scheduleStatus, "hypothesis");
+    assert.equal(session.season1FeePolicy, "poker_rake_only");
+    assert.equal(session.hands, 2);
+    assert.equal(session.grossRake, 100_000n);
+    assert.ok(session.notes.some((n) => n.includes("GameTemplate")));
+    const json = serializeSessionCostReport(session);
+    assert.equal(json.grossRake, "100000");
+    assert.equal(json.handReports.length, 2);
   });
 });

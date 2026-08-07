@@ -279,9 +279,28 @@ export function resolveSeatController(profileKey: string): SeatController {
   return new AgentRuntimeController();
 }
 
+/** WP-126 owner-safe cognition status from agent-runtime observe. */
+export type PublicAiCognitionStatusWire = {
+  workPacket?: "WP-126";
+  seat: number;
+  handId: string;
+  sessionId: string;
+  phase:
+    | "OBSERVING"
+    | "ANALYSING"
+    | "UPDATING_OPPONENT_MODEL"
+    | "DECISION_READY"
+    | "ACTING";
+  energyRemaining: number | null;
+  energyPerHand?: number;
+  publicCadenceMs?: number | null;
+  signalSource?: string;
+  atMs?: number;
+};
+
 /**
- * Notify agent-runtime of a public table event for continuous cognition (fire-and-forget).
- * Never sends hole cards / CoT.
+ * Notify agent-runtime of a public table event for continuous cognition.
+ * Never sends hole cards / CoT. Returns WP-126 public seat statuses when available.
  */
 export async function notifyAgentRuntimeObserve(input: {
   sessionId: string;
@@ -296,23 +315,29 @@ export async function notifyAgentRuntimeObserve(input: {
     actorSeat?: number | null;
     amount?: number | string | null;
     pot?: number | string | null;
+    /** WP-111 — hand rake on HAND_SETTLED. */
+    rake?: number | string | null;
     stacksBySeat?: Record<string, number | string>;
     activeSeats?: number[];
     boardCardCount?: number;
     summaryCode?: string;
   };
-}): Promise<void> {
-  if (process.env.AGENT_RUNTIME_OBSERVE === "0") return;
-  if (!input.seats.length || !input.sessionId || !input.handId) return;
+}): Promise<PublicAiCognitionStatusWire[]> {
+  if (process.env.AGENT_RUNTIME_OBSERVE === "0") return [];
+  if (!input.seats.length || !input.sessionId || !input.handId) return [];
   try {
-    await fetch(`${AGENT_RUNTIME_URL.replace(/\/$/, "")}/v1/observe`, {
+    const res = await fetch(`${AGENT_RUNTIME_URL.replace(/\/$/, "")}/v1/observe`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
       signal: AbortSignal.timeout(2_500),
     });
+    if (!res.ok) return [];
+    const body = (await res.json()) as { seats?: PublicAiCognitionStatusWire[] };
+    return Array.isArray(body.seats) ? body.seats : [];
   } catch (err) {
     console.warn("[wp-107] agent-runtime observe failed", err);
+    return [];
   }
 }
 
@@ -331,6 +356,26 @@ export async function notifyAgentRuntimeHandBegin(input: {
     });
   } catch (err) {
     console.warn("[wp-107] agent-runtime hand/begin failed", err);
+  }
+}
+
+/** WP-111 — close hand COGS ledger with rake contribution. */
+export async function notifyAgentRuntimeHandEnd(input: {
+  sessionId: string;
+  handId: string;
+  rakeRevenue?: number | string | null;
+}): Promise<void> {
+  if (process.env.AGENT_RUNTIME_OBSERVE === "0") return;
+  if (!input.sessionId || !input.handId) return;
+  try {
+    await fetch(`${AGENT_RUNTIME_URL.replace(/\/$/, "")}/v1/hand/end`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(2_500),
+    });
+  } catch (err) {
+    console.warn("[wp-111] agent-runtime hand/end failed", err);
   }
 }
 

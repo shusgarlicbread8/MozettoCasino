@@ -210,6 +210,7 @@ async function runHand(
   }
 
   cursor += 1;
+  // WP-111 — close COGS ledger with engine rake (may be 0 when rakePct=0 in smoke).
   await manager.observe({
     sessionId: opts.sessionId,
     handId: opts.handId,
@@ -217,10 +218,11 @@ async function runHand(
     profiles: { "0": opts.profiles[0], "1": opts.profiles[1] },
     event: {
       cursor,
-      eventType: "HAND_COMPLETE",
+      eventType: "HAND_SETTLED",
       kind: "hand_end",
       street: "settlement",
       pot: state.pot,
+      rake: state.rake,
       boardCardCount: state.board.length,
       stacksBySeat: Object.fromEntries(state.seats.map((s) => [String(s.seatIndex), s.stack])),
     },

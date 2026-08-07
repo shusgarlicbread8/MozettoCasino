@@ -1,8 +1,8 @@
 /**
- * WP-107 live-table metrics hooks (stubs + counters).
+ * WP-107 live-table metrics hooks (+ WP-111 token/COGS counters).
  *
- * Tracks illegal-action rate, fallback rate, Energy/hand, and latency.
- * Hooks are no-op-friendly for ops wiring later (WP-111 economics).
+ * Tracks illegal-action rate, fallback rate, Energy/hand, latency,
+ * and Groq token totals when the provider reports usage.
  */
 
 export interface LiveDecisionSample {
@@ -18,10 +18,15 @@ export interface LiveDecisionSample {
   energyRemaining: number;
   modelId: string;
   atMs: number;
+  /** WP-111 — prompt tokens when Groq returns usage. */
+  promptTokens?: number;
+  /** WP-111 — completion tokens when Groq returns usage. */
+  completionTokens?: number;
 }
 
 export interface LiveTableMetricsSnapshot {
   workPacket: "WP-107";
+  economicsWorkPacket: "WP-111";
   decisions: number;
   hands: number;
   fallbackCount: number;
@@ -30,6 +35,14 @@ export interface LiveTableMetricsSnapshot {
   illegalActionRate: number;
   energyDebitedTotal: number;
   energyPerHand: number;
+  /** WP-111 token aggregation (0 when mock/fallback without usage). */
+  tokens: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    promptTokensPerHand: number;
+    completionTokensPerHand: number;
+  };
   latency: {
     count: number;
     meanMs: number;
@@ -39,7 +52,14 @@ export interface LiveTableMetricsSnapshot {
   };
   byProfile: Record<
     string,
-    { decisions: number; fallbackRate: number; illegalActionRate: number; energyDebited: number }
+    {
+      decisions: number;
+      fallbackRate: number;
+      illegalActionRate: number;
+      energyDebited: number;
+      promptTokens: number;
+      completionTokens: number;
+    }
   >;
 }
 
@@ -50,9 +70,9 @@ export type LiveMetricsHook = {
     sessionId: string;
     handId: string;
     energySpent: number;
+    rakeRevenue?: string | null;
   }): void;
 };
-
 function percentile(sorted: number[], p: number): number {
   if (!sorted.length) return 0;
   if (sorted.length === 1) return sorted[0]!;
@@ -87,10 +107,19 @@ export class LiveTableMetrics {
     this.hooks.onDecision?.(sample);
   }
 
-  endHand(meta: { sessionId: string; handId: string }): void {
+  endHand(meta: {
+    sessionId: string;
+    handId: string;
+    rakeRevenue?: string | null;
+  }): void {
     const key = `${meta.sessionId}:${meta.handId}`;
     const energySpent = this.handEnergy.get(key) ?? 0;
-    this.hooks.onHandEnd?.({ ...meta, energySpent });
+    this.hooks.onHandEnd?.({
+      sessionId: meta.sessionId,
+      handId: meta.handId,
+      energySpent,
+      rakeRevenue: meta.rakeRevenue,
+    });
   }
 
   snapshot(): LiveTableMetricsSnapshot {
@@ -98,6 +127,8 @@ export class LiveTableMetrics {
     const fallbackCount = this.samples.filter((s) => s.fallbackUsed).length;
     const illegalActionCount = this.samples.filter((s) => s.illegalActionFallback).length;
     const energyDebitedTotal = this.samples.reduce((a, s) => a + s.energyDebited, 0);
+    const promptTokens = this.samples.reduce((a, s) => a + (s.promptTokens ?? 0), 0);
+    const completionTokens = this.samples.reduce((a, s) => a + (s.completionTokens ?? 0), 0);
     const latencies = this.samples.map((s) => s.providerLatencyMs).sort((a, b) => a - b);
     const meanMs = n ? latencies.reduce((a, b) => a + b, 0) / n : 0;
 
@@ -108,9 +139,13 @@ export class LiveTableMetrics {
         fallbackRate: 0,
         illegalActionRate: 0,
         energyDebited: 0,
+        promptTokens: 0,
+        completionTokens: 0,
       });
       row.decisions += 1;
       row.energyDebited += s.energyDebited;
+      row.promptTokens += s.promptTokens ?? 0;
+      row.completionTokens += s.completionTokens ?? 0;
       if (s.fallbackUsed) row.fallbackRate += 1;
       if (s.illegalActionFallback) row.illegalActionRate += 1;
     }
@@ -121,6 +156,7 @@ export class LiveTableMetrics {
 
     return {
       workPacket: "WP-107",
+      economicsWorkPacket: "WP-111",
       decisions: n,
       hands: this.hands,
       fallbackCount,
@@ -129,6 +165,13 @@ export class LiveTableMetrics {
       illegalActionRate: n ? illegalActionCount / n : 0,
       energyDebitedTotal,
       energyPerHand: this.hands ? energyDebitedTotal / this.hands : 0,
+      tokens: {
+        promptTokens,
+        completionTokens,
+        totalTokens: promptTokens + completionTokens,
+        promptTokensPerHand: this.hands ? promptTokens / this.hands : 0,
+        completionTokensPerHand: this.hands ? completionTokens / this.hands : 0,
+      },
       latency: {
         count: n,
         meanMs,

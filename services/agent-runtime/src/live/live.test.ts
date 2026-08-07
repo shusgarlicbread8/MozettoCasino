@@ -109,8 +109,15 @@ describe("WP-107 LiveSessionManager", () => {
 
     const snap = metrics.snapshot();
     assert.equal(snap.workPacket, "WP-107");
+    assert.equal(snap.economicsWorkPacket, "WP-111");
     assert.equal(snap.decisions, 1);
     assert.equal(snap.hands, 1);
+    assert.ok(snap.tokens);
+
+    await manager.endHand({ sessionId: "s1", handId: "h1", rakeRevenue: 100 });
+    const econ = manager.economics.snapshot(snap);
+    assert.equal(econ.workPacket, "WP-111");
+    assert.equal(econ.closedHands, 1);
   });
 });
 

@@ -289,7 +289,11 @@ app.get("/v1/tables/:id", async (req, reply) => {
   const table = await query(
     `select t.*, l.color as league_color, l.name as league_name,
             gv.name as variant_name,
-      (select count(*)::int from table_seats s where s.table_id = t.id and s.status = 'occupied') as seated
+      (select count(*)::int from table_seats s where s.table_id = t.id and s.status = 'occupied') as seated,
+      (select os.session_id from onchain_sessions os
+        where os.table_id = t.id
+        order by os.created_at desc nulls last
+        limit 1) as onchain_session_id
      from tables t
      join leagues l on l.id = t.league_id
      left join game_variants gv on gv.id = t.variant_id

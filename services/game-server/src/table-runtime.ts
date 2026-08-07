@@ -21,6 +21,7 @@ import {
   type HoldemState,
   buildCanonicalEvent,
   hashEvent,
+  hashEngineState,
   GENESIS_EVENT_HASH,
 } from "@mozetto/game-rules";
 import { fetchHandSeed, fallbackHandSeed } from "@mozetto/dealer/client";
@@ -62,11 +63,23 @@ import {
 import {
   hashObservation,
   notifyAgentRuntimeHandBegin,
+  notifyAgentRuntimeHandEnd,
   notifyAgentRuntimeObserve,
   resolveSeatController,
   timeoutFallbackController,
   type SeatController,
 } from "./controllers.js";
+import {
+  buildHandRootForSettledHand,
+  buildSettlementRootsFromTip,
+  deckRootFromSeedReveal,
+  persistHandRoot,
+  persistBalanceLeaves,
+  persistSessionCheckpoint,
+  requireRealRoots,
+  type SeatBalanceSnapshot,
+} from "./roots/index.js";
+import type { Address } from "viem";
 
 type Hex = `0x${string}`;
 
@@ -141,6 +154,10 @@ export class TableRuntime {
   seatControllers = new Map<number, SeatController>();
   /** Owners with a pending leave queued for the next epoch boundary (WP-042). */
   pendingLeaveOwners = new Set<string>();
+  /** WP-108: opening state hash captured at HAND_STARTED (for HandRoot). */
+  handOpeningStateHash: Hex | null = null;
+  /** WP-108: opening chip stacks (raw units ×1e6 when on-chain) keyed by seat. */
+  handOpeningStacks = new Map<number, number>();
 
   constructor(
     tableId: string,
@@ -411,7 +428,7 @@ export class TableRuntime {
     const q = client?.query.bind(client) ?? query;
     this.canonicalSequence += 1;
 
-    const useV1 = canUsePokerEventV1(eventType, this.schemaKindPrefer);
+    const useV1 = canUsePokerEventV1(eventType, this.schemaKindPrefer, publicPayload);
     if (useV1) {
       const sessionHex = sessionIdToHex(this.onchainSessionId);
       const prev =
@@ -592,6 +609,54 @@ export class TableRuntime {
     }
   }
 
+  /**
+   * WP-126 — push owner-only AI Energy / public cognition phase.
+   * Never includes CoT; only the seat owner (matching userId or seatIndex) receives it.
+   */
+  sendOwnerAiCognition(
+    seatIndex: number,
+    status: {
+      phase:
+        | "OBSERVING"
+        | "ANALYSING"
+        | "UPDATING_OPPONENT_MODEL"
+        | "DECISION_READY"
+        | "ACTING";
+      energyRemaining?: number | null;
+      energyPerHand?: number;
+      publicCadenceMs?: number | null;
+      signalSource?: string;
+      handId?: string | null;
+      sessionId?: string;
+      atMs?: number;
+    },
+  ) {
+    const ownerId = this.state.seats.find((s) => s.seatIndex === seatIndex)?.playerId;
+    if (!ownerId) return;
+    const frame = {
+      type: "ai_cognition",
+      workPacket: "WP-126",
+      seat: seatIndex,
+      handId: status.handId ?? this.state.handId,
+      sessionId: status.sessionId ?? this.sessionIdForAi(),
+      phase: status.phase,
+      energyRemaining:
+        status.energyRemaining == null || !Number.isFinite(status.energyRemaining)
+          ? null
+          : Math.max(0, Math.trunc(status.energyRemaining)),
+      energyPerHand: status.energyPerHand ?? 100,
+      publicCadenceMs: status.publicCadenceMs ?? null,
+      signalSource: status.signalSource ?? "cognition",
+      atMs: status.atMs ?? Date.now(),
+    };
+    for (const c of this.clients) {
+      const isOwner =
+        c.userId === ownerId || (c.seatIndex != null && c.seatIndex === seatIndex);
+      if (!isOwner) continue;
+      c.send(frame);
+    }
+  }
+
   async persistEvent(eventType: string, payload: Record<string, unknown>, visibility: "public" | "owner_private" | "system" = "public") {
     this.sequence += 1;
     const body = {
@@ -608,7 +673,7 @@ export class TableRuntime {
     const full: TableEvent = { ...body, eventHash, visibility };
 
     const sessionId = this.onchainSessionId ?? this.tableId;
-    const schemaKind: SchemaKind = canUsePokerEventV1(eventType, this.schemaKindPrefer)
+    const schemaKind: SchemaKind = canUsePokerEventV1(eventType, this.schemaKindPrefer, payload)
       ? "poker_event_v1"
       : "legacy_json";
 
@@ -759,6 +824,16 @@ export class TableRuntime {
       handId,
       seats,
     });
+    // WP-126: fresh hand → OBSERVING + Season 1 starting Energy (100).
+    for (const s of seats) {
+      this.sendOwnerAiCognition(s.seat, {
+        phase: "OBSERVING",
+        energyRemaining: 100,
+        energyPerHand: 100,
+        signalSource: "energy",
+        handId,
+      });
+    }
   }
 
   async notifyAiObservation(
@@ -781,7 +856,11 @@ export class TableRuntime {
         : typeof payload.actorSeat === "number"
           ? payload.actorSeat
           : null;
-    await notifyAgentRuntimeObserve({
+    const rake =
+      typeof payload.rake === "number" || typeof payload.rake === "string"
+        ? payload.rake
+        : null;
+    const statuses = await notifyAgentRuntimeObserve({
       sessionId: this.sessionIdForAi(),
       handId,
       seats,
@@ -797,6 +876,7 @@ export class TableRuntime {
             ? payload.amount
             : null,
         pot: this.state.pot,
+        rake,
         boardCardCount: this.state.board.length,
         activeSeats: this.state.seats
           .filter((s) => s.playerId && !s.folded)
@@ -807,6 +887,28 @@ export class TableRuntime {
         summaryCode: eventType,
       },
     });
+    // WP-126: forward public cognition phases + Energy to seat owners only.
+    for (const st of statuses) {
+      if (typeof st.seat !== "number" || !st.phase) continue;
+      this.sendOwnerAiCognition(st.seat, {
+        phase: st.phase,
+        energyRemaining: st.energyRemaining,
+        energyPerHand: st.energyPerHand,
+        publicCadenceMs: st.publicCadenceMs,
+        signalSource: st.signalSource ?? "cognition",
+        handId: st.handId ?? handId,
+        sessionId: st.sessionId,
+        atMs: st.atMs,
+      });
+    }
+    // WP-111 — explicit hand/end so rake is recorded even if observe mapping misses.
+    if (eventType === "HAND_SETTLED") {
+      void notifyAgentRuntimeHandEnd({
+        sessionId: this.sessionIdForAi(),
+        handId,
+        rakeRevenue: rake,
+      });
+    }
   }
 
   async join(opts: {
@@ -1480,6 +1582,11 @@ export class TableRuntime {
     }
 
     const handId = `hand_${this.tableId}_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+    // WP-108: capture opening hash/stacks before blinds mutate stacks.
+    this.handOpeningStateHash = hashEngineState(this.state);
+    this.handOpeningStacks = new Map(
+      this.state.seats.filter((s) => s.playerId).map((s) => [s.seatIndex, s.stack]),
+    );
     const { state, events } = startHand(this.state, seed, handId);
 
     // Persist hand row BEFORE exposing handId to event writers.
@@ -1654,6 +1761,12 @@ export class TableRuntime {
         turnSeconds: TURN_SECONDS,
         humanPlay: HUMAN_PLAY,
       });
+      // WP-126: owner sees ANALYSING while runtime decides (cadence signal until Energy returns).
+      this.sendOwnerAiCognition(seatIndex, {
+        phase: "ANALYSING",
+        energyRemaining: null,
+        signalSource: "cadence",
+      });
       const profile = this.agentProfiles.get(seatIndex) ?? "machine";
       const controller = this.seatControllerFor(seatIndex);
       const botDecision = await controller.decide({
@@ -1672,6 +1785,13 @@ export class TableRuntime {
         amount: botDecision.amount,
         reasonCode: botDecision.reasonCode,
       };
+      this.sendOwnerAiCognition(seatIndex, {
+        phase: "DECISION_READY",
+        energyRemaining: botDecision.energyRemaining ?? null,
+        publicCadenceMs: botDecision.publicCadenceMs ?? null,
+        signalSource:
+          botDecision.energyRemaining != null ? "cognition" : "cadence",
+      });
       try {
         const obsHash = hashObservation({
           state: this.state,
@@ -1707,11 +1827,29 @@ export class TableRuntime {
           ? 0
           : Math.max(0, botDecision.cadenceWaitMs ?? 0);
       if (cadenceWait > 0) {
+        this.sendOwnerAiCognition(seatIndex, {
+          phase: "ACTING",
+          energyRemaining: botDecision.energyRemaining ?? null,
+          publicCadenceMs: cadenceWait,
+          signalSource: "cadence",
+        });
         const remaining = Math.max(0, (this.actionDeadlineAt ?? Date.now()) - Date.now() - 250);
         await sleep(Math.min(cadenceWait, remaining, TURN_MS));
       } else if (botDecision.publicCadenceMs == null) {
         // Legacy controllers without cadence metadata.
+        this.sendOwnerAiCognition(seatIndex, {
+          phase: "ACTING",
+          energyRemaining: botDecision.energyRemaining ?? null,
+          signalSource: "inferred",
+        });
         await sleep(Math.min(400, TURN_MS / 4));
+      } else {
+        this.sendOwnerAiCognition(seatIndex, {
+          phase: "ACTING",
+          energyRemaining: botDecision.energyRemaining ?? null,
+          publicCadenceMs: botDecision.publicCadenceMs,
+          signalSource: "cadence",
+        });
       }
     } else {
       await this.persistEvent("ACTION_CLOCK", {
@@ -1743,6 +1881,14 @@ export class TableRuntime {
     if (this.pendingHuman?.seatIndex === seatIndex) {
       clearTimeout(this.pendingHuman.timer);
       this.pendingHuman = null;
+    }
+    // WP-126: after public commit, owner AI returns to OBSERVING (Energy kept if known).
+    if (this.agentProfiles.has(seatIndex)) {
+      this.sendOwnerAiCognition(seatIndex, {
+        phase: "OBSERVING",
+        energyRemaining: null,
+        signalSource: "cadence",
+      });
     }
     const { state, events } = applyAction(this.state, decided.action, decided.amount);
     this.state = state;
@@ -1781,6 +1927,13 @@ export class TableRuntime {
         `update hands set status='settled', board=$1::jsonb, pot=$2, street='settlement', seed_reveal=$3, settled_at=now() where id=$4`,
         [JSON.stringify(this.state.board), this.state.pot, ev.seedReveal, this.state.handId],
       );
+      await this.persistCanonicalRootsAfterHand(ev.seedReveal, ev.rake).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn("[wp-108] persistCanonicalRootsAfterHand failed", this.tableId, msg);
+        if (requireRealRoots()) {
+          throw err;
+        }
+      });
       return;
     }
     await this.persistEvent(ev.type, ev as unknown as Record<string, unknown>);
@@ -1793,6 +1946,130 @@ export class TableRuntime {
         this.state.handId,
       ]);
     }
+  }
+
+  /**
+   * WP-108: write hand_roots (+ optional balance_leaves / checkpoint) from PokerEventV1 tip.
+   * Production settlement path — no keccak(seed) stubs.
+   */
+  async persistCanonicalRootsAfterHand(seedReveal: string, handRake: number) {
+    if (this.arenaMode !== "onchain" || !this.onchainSessionId || !this.state.handId) return;
+    if (this.schemaKindPrefer !== "poker_event_v1") {
+      if (requireRealRoots()) {
+        throw new Error(
+          "REQUIRE_REAL_ROOTS: CANONICAL_SCHEMA_KIND=poker_event_v1 required to emit real roots",
+        );
+      }
+      return;
+    }
+
+    const tip = this.pokerV1PrevHash ?? this.canonicalPrevHash;
+    if (!tip || tip === GENESIS_EVENT_HASH) {
+      if (requireRealRoots()) {
+        throw new Error("REQUIRE_REAL_ROOTS: missing PokerEventV1 tip after hand settle");
+      }
+      return;
+    }
+
+    const opening =
+      this.handOpeningStateHash ?? hashEngineState(this.state);
+    const ending = hashEngineState(this.state);
+    const deckRoot = deckRootFromSeedReveal(seedReveal);
+    const hand = buildHandRootForSettledHand({
+      sessionId: this.onchainSessionId,
+      handNumber: this.state.handNumber,
+      eventChainTip: tip,
+      deckRoot,
+      openingStateHash: opening,
+      endingStateHash: ending,
+      handRake: BigInt(Math.max(0, Math.trunc(handRake))),
+    });
+
+    await persistHandRoot({
+      sessionId: this.onchainSessionId,
+      handId: this.state.handId,
+      handNumber: this.state.handNumber,
+      handRoot: hand.handRoot,
+      eventChainTip: tip,
+      deckRoot,
+    });
+
+    const seats = await this.loadSeatBalanceSnapshots();
+    if (seats.length === 0) return;
+
+    const roots = buildSettlementRootsFromTip({
+      sessionId: this.onchainSessionId,
+      finalEventRoot: tip,
+      finalSequence: BigInt(Math.max(0, this.pokerV1Sequence - 1)),
+      handNumber: this.state.handNumber,
+      deckRoot,
+      openingStateHash: opening,
+      endingStateHash: ending,
+      handRake: BigInt(Math.max(0, Math.trunc(handRake))),
+      seats,
+    });
+
+    await persistBalanceLeaves({
+      sessionId: this.onchainSessionId,
+      sequence: roots.finalSequence,
+      seats,
+      leafHashes: roots.balance.leaves.map((l) => l.leafHash),
+    });
+    await persistSessionCheckpoint({
+      sessionId: this.onchainSessionId,
+      sequence: roots.finalSequence,
+      handNumber: this.state.handNumber,
+      eventRoot: roots.finalEventRoot,
+      balanceRoot: roots.balanceRoot,
+    });
+  }
+
+  async loadSeatBalanceSnapshots(): Promise<SeatBalanceSnapshot[]> {
+    if (!this.onchainSessionId) return [];
+    const rows = await query<{
+      wallet_address: string;
+      seat: number | null;
+      buy_in_raw: string;
+      owner_id: string;
+    }>(
+      `select osp.wallet_address, osp.buy_in_raw::text as buy_in_raw,
+              ts.seat::int as seat,
+              coalesce(osp.profile_id::text, '') as owner_id
+       from onchain_session_players osp
+       left join lateral (
+         select seat from table_sessions
+         where table_id = $2 and owner_id = osp.profile_id
+         order by case when status = 'active' then 0 else 1 end,
+                  coalesce(ended_at, started_at) desc nulls last
+         limit 1
+       ) ts on true
+       where osp.session_id = $1`,
+      [this.onchainSessionId, this.tableId],
+    ).catch(() => ({ rows: [] as { wallet_address: string; seat: number | null; buy_in_raw: string; owner_id: string }[] }));
+
+    const out: SeatBalanceSnapshot[] = [];
+    for (let i = 0; i < rows.rows.length; i++) {
+      const row = rows.rows[i]!;
+      const seatIdx =
+        row.seat != null
+          ? Number(row.seat)
+          : this.state.seats.find((s) => s.playerId === row.owner_id)?.seatIndex ?? i;
+      const seatState = this.state.seats.find((s) => s.seatIndex === seatIdx);
+      const openingChips =
+        this.handOpeningStacks.get(seatIdx) ??
+        Number(row.buy_in_raw) / 1e6;
+      const currentChips = seatState?.stack ?? openingChips;
+      out.push({
+        wallet: row.wallet_address as Address,
+        seat: seatIdx,
+        openingBalance: BigInt(Math.round(openingChips * 1e6)),
+        currentBalance: BigInt(Math.round(currentChips * 1e6)),
+        cumulativeRake: 0n,
+      });
+    }
+    // Seat-order for leaf hash alignment with buildBalanceRoot.
+    out.sort((a, b) => a.seat - b.seat);
+    return out;
   }
 
   async syncStacks() {

@@ -43,6 +43,7 @@ import {
 import { createAgentStateStore } from "../state/factory.js";
 import type { AgentStateStore, PublicEventKind, PublicTableEvent, StreetName } from "../state/types.js";
 import { LiveTableMetrics, type LiveMetricsHook } from "./metrics.js";
+import { EconomicsLedger, enrichDecisionForEconomics } from "./economics.js";
 import {
   resolveAgentRuntimeMode,
   resolveCadenceWaitCapMs,
@@ -50,6 +51,11 @@ import {
   type CadenceWaitOwner,
   type ResolvedAgentRuntimeMode,
 } from "./mode.js";
+import {
+  buildPublicCognitionStatus,
+  mapSchedulerModeToPublicPhase,
+  type PublicAiCognitionStatus,
+} from "./public-cognition.js";
 
 export interface LiveActRequest {
   profileKey: PresetKey;
@@ -98,6 +104,9 @@ export interface LiveActResponse {
     fallbackPriorityStep?: string;
     errorClass?: string;
     schemaRepairUsed?: boolean;
+    /** WP-111 — Groq tokens when reported. */
+    promptTokens?: number;
+    completionTokens?: number;
   };
 }
 
@@ -118,6 +127,8 @@ export interface LiveObserveRequest {
     actionType?: number | null;
     amount?: string | number | null;
     pot?: string | number | null;
+    /** WP-111 — hand rake when event is HAND_SETTLED / hand_end. */
+    rake?: string | number | null;
     stacksBySeat?: Record<string, string | number>;
     activeSeats?: number[];
     boardCardCount?: number;
@@ -130,6 +141,13 @@ export interface LiveHandBeginRequest {
   sessionId: string;
   handId: string;
   seats: Array<{ seat: number; profileKey?: string }>;
+}
+
+export interface LiveHandEndRequest {
+  sessionId: string;
+  handId: string;
+  /** Gross rake for the hand (accounting units). */
+  rakeRevenue?: string | number | null;
 }
 
 function seatKey(sessionId: string, handId: string, seat: number): string {
@@ -177,6 +195,7 @@ export interface LiveSessionManagerOptions {
   energyStore?: EnergyLedgerStore;
   metrics?: LiveTableMetrics;
   metricsHooks?: LiveMetricsHook;
+  economics?: EconomicsLedger;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   /** Force resolved mode (tests). */
@@ -189,6 +208,7 @@ export class LiveSessionManager {
   readonly store: AgentStateStore;
   readonly energyStore: EnergyLedgerStore;
   readonly metrics: LiveTableMetrics;
+  readonly economics: EconomicsLedger;
   readonly cadenceWait: CadenceWaitOwner;
   readonly cadenceWaitCapMs: number;
 
@@ -208,6 +228,7 @@ export class LiveSessionManager {
     this.store = opts.store ?? createAgentStateStore({ env });
     this.energyStore = opts.energyStore ?? createEnergyLedgerStore({ env });
     this.metrics = opts.metrics ?? new LiveTableMetrics(opts.metricsHooks);
+    this.economics = opts.economics ?? new EconomicsLedger({ env, now: this.now });
     this.cadence = new PublicCadenceController({ now: this.now, sleep: this.sleep });
 
     if (opts.provider) {
@@ -303,6 +324,10 @@ export class LiveSessionManager {
       handId: req.handId,
       seats,
     });
+    this.economics.beginHand({
+      sessionId: req.sessionId,
+      handId: req.handId,
+    });
     for (const s of req.seats) {
       // Drop prior-hand schedulers for this session+seat (Energy re-granted per hand).
       for (const [k] of this.schedulers) {
@@ -329,6 +354,8 @@ export class LiveSessionManager {
     ok: true;
     notified: number;
     cursor: number;
+    /** WP-126 owner-safe status per seat (no CoT). */
+    seats: PublicAiCognitionStatus[];
   }> {
     const kind = mapEventKind(req.event.kind ?? req.event.eventType);
     const externalCursor = req.event.cursor;
@@ -337,6 +364,7 @@ export class LiveSessionManager {
 
     let notified = 0;
     let lastCursor = externalCursor;
+    const seats: PublicAiCognitionStatus[] = [];
     for (const seat of req.seats) {
       const profileKey = req.profiles?.[String(seat)] ?? "machine";
       const scheduler = await this.ensureScheduler(
@@ -365,17 +393,77 @@ export class LiveSessionManager {
       };
       const near = event.actorSeat === seat;
       scheduler.setProximityToOwnTurn(Boolean(near));
-      await scheduler.onPublicEvent(event);
+      const result = await scheduler.onPublicEvent(event);
       await this.persistLedger(scheduler);
       lastCursor = localCursor;
       notified += 1;
+      seats.push(
+        buildPublicCognitionStatus({
+          seat,
+          handId: req.handId,
+          sessionId: req.sessionId,
+          phase: mapSchedulerModeToPublicPhase(result.selection.mode),
+          energyRemaining: result.ledger.remainingEnergy,
+          publicCadenceMs: req.event.publicCadenceMs ?? null,
+          signalSource: "cognition",
+          atMs: this.now(),
+        }),
+      );
     }
 
     if (kind === "hand_end") {
-      this.metrics.endHand({ sessionId: req.sessionId, handId: req.handId });
+      await this.endHand({
+        sessionId: req.sessionId,
+        handId: req.handId,
+        rakeRevenue: req.event.rake ?? null,
+      });
     }
 
-    return { ok: true, notified, cursor: lastCursor };
+    return { ok: true, notified, cursor: lastCursor, seats };
+  }
+
+  /** WP-111 — close hand economics with optional rake contribution. */
+  async endHand(req: LiveHandEndRequest): Promise<{
+    ok: true;
+    handReport: import("@mozetto/unit-economics").HandCostBreakdown | null;
+  }> {
+    const rakeStr =
+      req.rakeRevenue != null && req.rakeRevenue !== ""
+        ? String(req.rakeRevenue)
+        : null;
+    this.metrics.endHand({
+      sessionId: req.sessionId,
+      handId: req.handId,
+      rakeRevenue: rakeStr,
+    });
+    const handReport = this.economics.endHand({
+      sessionId: req.sessionId,
+      handId: req.handId,
+      rakeRevenue: req.rakeRevenue,
+    });
+    return { ok: true, handReport };
+  }
+
+  /**
+   * WP-126 — owner-safe Energy / phase snapshot for a seat (no CoT).
+   * Returns null when the hand scheduler is not hydrated.
+   */
+  publicCognitionStatus(
+    sessionId: string,
+    handId: string,
+    seat: number,
+  ): PublicAiCognitionStatus | null {
+    const scheduler = this.schedulers.get(seatKey(sessionId, handId, seat));
+    if (!scheduler) return null;
+    return buildPublicCognitionStatus({
+      seat,
+      handId,
+      sessionId,
+      phase: "OBSERVING",
+      energyRemaining: scheduler.getLedger().remainingEnergy,
+      signalSource: "energy",
+      atMs: this.now(),
+    });
   }
 
   async act(req: LiveActRequest): Promise<LiveActResponse> {
@@ -492,7 +580,9 @@ export class LiveSessionManager {
       decision.errorClass === "illegal_action" ||
       decision.reasonCode === REASON_CODE.ILLEGAL_ACTION_FALLBACK;
 
-    this.metrics.recordDecision({
+    const promptTokens = decision.tokenUsage?.promptTokens ?? 0;
+    const completionTokens = decision.tokenUsage?.completionTokens ?? 0;
+    const decisionSample = {
       sessionId,
       handId,
       seat,
@@ -505,7 +595,11 @@ export class LiveSessionManager {
       energyRemaining: final.ledger.remainingEnergy,
       modelId: this.provider.modelId,
       atMs: this.now(),
-    });
+      promptTokens,
+      completionTokens,
+    };
+    this.metrics.recordDecision(decisionSample);
+    this.economics.recordDecision(enrichDecisionForEconomics(decisionSample, decision.tokenUsage));
 
     return {
       action,
@@ -529,6 +623,8 @@ export class LiveSessionManager {
         fallbackPriorityStep: decision.fallbackPriorityStep,
         errorClass: decision.errorClass,
         schemaRepairUsed: decision.schemaRepairUsed,
+        promptTokens,
+        completionTokens,
       },
     };
   }

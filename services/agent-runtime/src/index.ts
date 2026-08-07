@@ -34,6 +34,7 @@ const ObserveBodySchema = z.object({
     actionType: z.number().int().nullable().optional(),
     amount: z.union([z.string(), z.number()]).nullable().optional(),
     pot: z.union([z.string(), z.number()]).nullable().optional(),
+    rake: z.union([z.string(), z.number()]).nullable().optional(),
     stacksBySeat: z.record(z.union([z.string(), z.number()])).optional(),
     activeSeats: z.array(z.number().int()).optional(),
     boardCardCount: z.number().int().optional(),
@@ -79,6 +80,7 @@ app.get("/health", async () => {
   return {
     ok: true,
     workPacket: "WP-107",
+    economicsWorkPacket: "WP-111",
     ...cfg,
     modeResolved: manager.mode,
     modelId: manager.provider.modelId,
@@ -87,13 +89,73 @@ app.get("/health", async () => {
   };
 });
 
-app.get("/v1/metrics", async () => manager.metrics.snapshot());
+app.get("/v1/metrics", async () => {
+  const live = manager.metrics.snapshot();
+  const economics = manager.economics.snapshot(live);
+  return { ...live, economics };
+});
+
+/** WP-111 — per-hand / session COGS + contribution report. */
+app.get("/v1/economics", async (req) => {
+  const q = req.query as { sessionId?: string };
+  const snap = manager.economics.snapshot(manager.metrics.snapshot());
+  if (q.sessionId) {
+    const { serializeSessionCostReport } = await import("@mozetto/unit-economics");
+    return {
+      ...snap,
+      sessionReport: serializeSessionCostReport(
+        manager.economics.sessionReport(q.sessionId),
+      ),
+    };
+  }
+  return snap;
+});
+
+/** WP-126 — owner-safe Energy / phase (no CoT / private AgentState). */
+app.get<{
+  Params: { sessionId: string; handId: string; seat: string };
+}>("/v1/public-cognition/:sessionId/:handId/:seat", async (req, reply) => {
+  const seat = Number(req.params.seat);
+  if (!Number.isInteger(seat) || seat < 0) {
+    return reply.code(400).send({ error: "invalid_seat" });
+  }
+  const status = manager.publicCognitionStatus(
+    req.params.sessionId,
+    req.params.handId,
+    seat,
+  );
+  if (!status) {
+    return reply.code(404).send({
+      error: "not_found",
+      workPacket: "WP-126",
+      signalSource: "unavailable",
+    });
+  }
+  return status;
+});
 
 app.post("/v1/hand/begin", async (req, reply) => {
   const parsed = HandBeginSchema.safeParse(req.body);
   if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
   const result = await manager.beginHand(parsed.data);
   return result;
+});
+
+const HandEndSchema = z.object({
+  sessionId: z.string().min(1),
+  handId: z.string().min(1),
+  rakeRevenue: z.union([z.string(), z.number()]).optional().nullable(),
+});
+
+app.post("/v1/hand/end", async (req, reply) => {
+  const parsed = HandEndSchema.safeParse(req.body);
+  if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+  const result = await manager.endHand(parsed.data);
+  const { serializeHandCostReport } = await import("@mozetto/unit-economics");
+  return {
+    ok: true,
+    handReport: result.handReport ? serializeHandCostReport(result.handReport) : null,
+  };
 });
 
 app.post("/v1/observe", async (req, reply) => {

@@ -32,3 +32,26 @@ export {
   classifyAiCostBand,
   type CostBandLevel,
 } from "./energy-bands.js";
+
+export {
+  COGS_PRICING_STATUS,
+  SEASON1_GROQ_TOKEN_PRICING_USD_MICRO_PER_MTOK,
+  SEASON1_CHAIN_INFRA_PLACEHOLDERS_USD_MICRO,
+  estimateGroqCostUsdMicro,
+  estimateChainCogsUsdMicro,
+  estimateInfraCogsUsdMicro,
+  placeholdersFromEnv,
+  type TokenUsage,
+  type CogsPlaceholderOverrides,
+} from "./pricing.js";
+
+export {
+  buildHandCostReport,
+  buildSessionCostReport,
+  serializeHandCostReport,
+  serializeSessionCostReport,
+  type HandCostDecisionSample,
+  type HandCostInput,
+  type HandCostBreakdown,
+  type SessionCostReport,
+} from "./hand-cost.js";

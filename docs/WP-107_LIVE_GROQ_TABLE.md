@@ -124,7 +124,7 @@ Metrics: `GET http://localhost:4002/v1/metrics` → illegal-action rate, fallbac
 | Energy / hand | `energyPerHand` |
 | Latency | `latency.meanMs` / `p50Ms` / `p95Ms` |
 
-Injectable `LiveMetricsHook.onDecision` / `onHandBegin` / `onHandEnd` for WP-111 economics later.
+Injectable `LiveMetricsHook.onDecision` / `onHandBegin` / `onHandEnd`. WP-111 wires token/COGS via `EconomicsLedger` — see `docs/WP-111_ECONOMICS_INSTRUMENTATION.md`.
 
 ---
 
@@ -142,5 +142,5 @@ Injectable `LiveMetricsHook.onDecision` / `onHandBegin` / `onHandEnd` for WP-111
 - Spec / golden vector mutations
 - WP-106 full Anvil browser golden path
 - WP-108 real settlement roots (separate packet)
-- WP-111 empirical COGS instrumentation beyond metric stubs
 - Committing `GROQ_API_KEY`
+- Calibrated Sepolia COGS rates (WP-111 hypotheses until traces)

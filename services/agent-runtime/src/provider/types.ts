@@ -47,6 +47,13 @@ export interface DecisionRequest {
  * ControllerResponseV1-shaped decision (Plan 08 / CONTROLLER_V1 §6).
  * Only `actionType` + legal `amount` affect poker.
  */
+/** Provider token usage (WP-111 COGS). Absent on mock/fallback. */
+export type ProviderTokenUsage = {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+};
+
 export interface DecisionResult {
   actionType: ActionTypeCode;
   /** Chips-added; "0" when N/A (fold/check). */
@@ -62,6 +69,8 @@ export interface DecisionResult {
   fallbackUsed: boolean;
   /** Observability only — must not drive public tells. */
   providerLatencyMs?: number;
+  /** WP-111 — Groq usage when the live provider returns it. */
+  tokenUsage?: ProviderTokenUsage;
   schemaRepairUsed?: boolean;
   errorClass?: ProviderErrorClass;
   /**
@@ -175,6 +184,8 @@ export interface BackgroundCognitionResult {
   statePatch?: BackgroundStatePatch;
   providerRequestId?: string;
   providerLatencyMs?: number;
+  /** WP-111 — Groq usage when background cognition hits the provider. */
+  tokenUsage?: ProviderTokenUsage;
   /** True when aborted/preempted before completion — scheduler MUST NOT debit. */
   cancelled?: boolean;
 }

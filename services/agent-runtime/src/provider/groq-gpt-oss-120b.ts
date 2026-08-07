@@ -44,6 +44,7 @@ import type {
   ModelHealth,
   PokerModelProvider,
   ProviderErrorClass,
+  ProviderTokenUsage,
 } from "./types.js";
 
 /** Season 1 hypothesis — shorter token budget for background patches. */
@@ -51,7 +52,24 @@ const BACKGROUND_MAX_OUTPUT_TOKENS = 192;
 
 interface GroqChatResponse {
   choices?: Array<{ message?: { content?: string | null } }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
   error?: { message?: string; code?: string };
+}
+
+function parseTokenUsage(usage: GroqChatResponse["usage"]): ProviderTokenUsage | undefined {
+  if (!usage) return undefined;
+  const promptTokens = Math.max(0, Math.floor(Number(usage.prompt_tokens ?? 0)));
+  const completionTokens = Math.max(0, Math.floor(Number(usage.completion_tokens ?? 0)));
+  const totalTokens = Math.max(
+    0,
+    Math.floor(Number(usage.total_tokens ?? promptTokens + completionTokens)),
+  );
+  if (promptTokens === 0 && completionTokens === 0 && totalTokens === 0) return undefined;
+  return { promptTokens, completionTokens, totalTokens };
 }
 
 /**
@@ -229,6 +247,7 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
         statePatch,
         providerRequestId: requestId,
         providerLatencyMs: this.now() - started,
+        tokenUsage: parseTokenUsage(json.usage),
       };
     } catch (err) {
       if (input.signal?.aborted || (err instanceof Error && err.name === "AbortError")) {
@@ -378,6 +397,7 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
           return this.finishFallback(input, started, attempt, "invalid_schema", {
             schemaRepairUsed,
             statusCode: lastStatus,
+            tokenUsage: httpResult.tokenUsage,
           });
         }
 
@@ -389,6 +409,7 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
           return this.finishFallback(input, started, attempt, "illegal_action", {
             schemaRepairUsed,
             statusCode: lastStatus,
+            tokenUsage: httpResult.tokenUsage,
           });
         }
 
@@ -402,6 +423,7 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
           responseNonce: this.createNonce(),
           fallbackUsed: false,
           providerLatencyMs: latencyMs,
+          tokenUsage: httpResult.tokenUsage,
           schemaRepairUsed,
           errorClass: "none",
         };
@@ -447,7 +469,11 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
     started: number,
     attempt: number,
     errorClass: ProviderErrorClass,
-    extra?: { schemaRepairUsed?: boolean; statusCode?: number },
+    extra?: {
+      schemaRepairUsed?: boolean;
+      statusCode?: number;
+      tokenUsage?: ProviderTokenUsage;
+    },
   ): DecisionResult {
     const fb = this.fallback.decide(input);
     const latencyMs = this.now() - started;
@@ -462,6 +488,8 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
       fallbackSelectionReasonCode: fb.fallbackSelectionReasonCode ?? fb.reasonCode,
       fallbackUsed: true,
       providerLatencyMs: latencyMs,
+      // Retain usage from failed/illegal Groq attempts for COGS (WP-111).
+      tokenUsage: extra?.tokenUsage ?? fb.tokenUsage,
       schemaRepairUsed: extra?.schemaRepairUsed,
       errorClass,
     };
@@ -481,8 +509,21 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
     input: DecisionRequest,
     opts: { repair: boolean; started: number },
   ): Promise<
-    | { kind: "ok"; payload: unknown; attempt: number; statusCode?: number; errorClass: ProviderErrorClass }
-    | { kind: "exhausted"; attempt: number; statusCode?: number; errorClass: ProviderErrorClass }
+    | {
+        kind: "ok";
+        payload: unknown;
+        attempt: number;
+        statusCode?: number;
+        errorClass: ProviderErrorClass;
+        tokenUsage?: ProviderTokenUsage;
+      }
+    | {
+        kind: "exhausted";
+        attempt: number;
+        statusCode?: number;
+        errorClass: ProviderErrorClass;
+        tokenUsage?: ProviderTokenUsage;
+      }
   > {
     let attempt = 0;
     let lastStatus: number | undefined;
@@ -558,18 +599,38 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
         }
 
         const json = (await res.json()) as GroqChatResponse;
+        const tokenUsage = parseTokenUsage(json.usage);
         const content = json.choices?.[0]?.message?.content;
         if (typeof content !== "string" || !content.trim()) {
           lastError = "invalid_schema";
-          return { kind: "exhausted", attempt, statusCode: res.status, errorClass: "invalid_schema" };
+          return {
+            kind: "exhausted",
+            attempt,
+            statusCode: res.status,
+            errorClass: "invalid_schema",
+            tokenUsage,
+          };
         }
         let payload: unknown;
         try {
           payload = JSON.parse(content);
         } catch {
-          return { kind: "exhausted", attempt, statusCode: res.status, errorClass: "invalid_schema" };
+          return {
+            kind: "exhausted",
+            attempt,
+            statusCode: res.status,
+            errorClass: "invalid_schema",
+            tokenUsage,
+          };
         }
-        return { kind: "ok", payload, attempt, statusCode: res.status, errorClass: "none" };
+        return {
+          kind: "ok",
+          payload,
+          attempt,
+          statusCode: res.status,
+          errorClass: "none",
+          tokenUsage,
+        };
       } catch (err) {
         const name = err instanceof Error ? err.name : "";
         lastError = name === "TimeoutError" || name === "AbortError" ? "timeout" : "network";

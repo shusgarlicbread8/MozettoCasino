@@ -15,6 +15,7 @@ import {
 } from "./admin-ops.js";
 import { buildChainOpsSnapshot, buildSolvencySnapshot } from "./admin-solvency.js";
 import { buildTreasuryRevenueSnapshot } from "./admin-treasury.js";
+import { buildEconomicsInstrumentationSnapshot } from "./admin-economics.js";
 import { requireAdmin, requestMeta } from "./admin-auth.js";
 
 export { requireAdmin } from "./admin-auth.js";
@@ -120,6 +121,24 @@ export function registerAdminRoutes(app: FastifyInstance) {
     } catch (err) {
       return reply.code(500).send({
         error: "treasury_snapshot_failed",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  /** WP-111 — COGS instrumentation + contribution margin (GET only; hypotheses labeled). */
+  app.get("/v1/admin/economics", async (req, reply) => {
+    if (!requireAdmin(req, reply, "read")) return;
+    const q = req.query as { chainId?: string };
+    const chainId = q.chainId != null && q.chainId !== "" ? Number(q.chainId) : undefined;
+    if (chainId != null && !Number.isFinite(chainId)) {
+      return reply.code(400).send({ error: "invalid_chain_id" });
+    }
+    try {
+      return await buildEconomicsInstrumentationSnapshot({ chainId });
+    } catch (err) {
+      return reply.code(500).send({
+        error: "economics_snapshot_failed",
         message: err instanceof Error ? err.message : String(err),
       });
     }
