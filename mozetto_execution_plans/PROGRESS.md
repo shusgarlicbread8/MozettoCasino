@@ -2,7 +2,7 @@
 
 **Authority:** Follows `00_READ_ME_FIRST.md`, `01_MASTER_EXECUTION_ROADMAP.md`, `16_AGENT_WORK_PACKETS.md`, `17_FINAL_DEFINITION_OF_DONE.md`.  
 **Rule:** Protocol V3 specs are **frozen** (WP-010–015). Implementations MUST match `/specs` and fail CI if vectors diverge. Do not invent new encodings.  
-**Last updated:** 2026-08-07 (WP-124 Wallet / ArenaAccount DONE; WP-122–123 + WP-121 + WP-120 DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
+**Last updated:** 2026-08-07 (WP-130 Rankings / profile DONE; WP-120–124 + WP-130 DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
 
 ---
 
@@ -21,7 +21,7 @@
 | Field | Value |
 |---|---|
 | **Active wave** | **Wave 11 Production Integration** + **Wave 12 Consumer UX** (parallel) |
-| **Active packets** | WP-106–113 (Track A/C), WP-125–132 (Track B; WP-120–124 DONE); Sepolia Stage A blocked until WP-106–112 green |
+| **Active packets** | WP-106–113 (Track A/C), WP-125–132 (Track B; WP-120–124 + WP-130 DONE); Sepolia Stage A blocked until WP-106–112 green |
 | **Architecture status** | Protocol architecture largely built (~component-complete). Remaining work is integration, productization, hosted staging — **not** “ops only.” |
 | **Blocked until (Sepolia Stage A)** | WP-106–112 green on Anvil release candidate; then funded Sepolia deploy |
 | **Hard stop** | No new architecture invention; live AWS Nitro during Stage A; Plan 15 expansion stays deferred |
@@ -31,7 +31,7 @@
 | **Plan 11 note** | Rake/treasury code DONE; Season 1 schedule = hypotheses until WP-111 empirical COGS |
 | **Plan 12 note** | Ratings / anti-cheat DONE — ML collusion deferred |
 | **Plan 19 note** | Schema map DONE; hosted cutover **WP-110 DONE** (GRANTs `030`, scheduler persist, WS dual-accept) |
-| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120–124 DONE → WP-125+); Plan 20B cinematic 3D remains DEFERRED |
+| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120–124 + WP-130 DONE → WP-125+); Plan 20B cinematic 3D remains DEFERRED |
 | **Anvil release candidate** | Normal user can Find Match → Groq AI session → verify → withdraw with **zero GAPs** (WP-106–112) |
 
 ---
@@ -247,7 +247,7 @@
 | WP-127 | Result / replay | `IN_PROGRESS` |
 | WP-128 | Verify UX (trust badge → deep verify) | `IN_PROGRESS` |
 | WP-129 | Watch / spectator | `NOT_STARTED` |
-| WP-130 | Rankings / profile | `IN_PROGRESS` |
+| WP-130 | Rankings / profile | `DONE` |
 | WP-131 | Mobile / performance | `NOT_STARTED` |
 | WP-132 | 3D event adapter (no art dependency) | `IN_PROGRESS` |
 
@@ -260,6 +260,23 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 ---
 
 ## Session log
+
+### 2026-08-07 — WP-130 Rankings / profile (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- Rebuilt `/rankings` on WP-120 tokens — live Glicko ladder from `/v1/rankings`, user-owned rating, no mock fallback
+- Rebuilt `/profile/:handle` — rating, aggression, W/L, bankroll results; agents as loadouts; real rating history only
+- Wired `/v1/profiles/:handle` + optional `/v1/profiles/:id/style-metrics`
+- Docs: `docs/WP-130_RANKINGS_PROFILE.md`
+
+**Commands / evidence:**
+- `pnpm --filter @mozetto/web typecheck` — pass (WP-130 files); pre-existing `/table` variant prop error unrelated
+
+**Out of scope:** Spec mutations; six-max rating math; WP-131 mobile density; trophy productization.
+
+**Follow-up:** WP-131 Mobile / performance; Classic/Omaha ladders as pools settle.
 
 ### 2026-08-07 — WP-124 Wallet / onboarding (ArenaAccount) (DONE)
 
