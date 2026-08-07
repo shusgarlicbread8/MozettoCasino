@@ -50,7 +50,7 @@ describe("WP-107 LiveSessionManager", () => {
       ],
     });
 
-    await manager.observe({
+    const observed = await manager.observe({
       sessionId: "s1",
       handId: "h1",
       seats: [0, 1],
@@ -65,6 +65,14 @@ describe("WP-107 LiveSessionManager", () => {
         activeSeats: [0, 1],
       },
     });
+    assert.equal(observed.seats.length, 2);
+    assert.equal(observed.seats[0]!.workPacket, "WP-126");
+    assert.ok(typeof observed.seats[0]!.energyRemaining === "number");
+    assert.ok(
+      ["OBSERVING", "ANALYSING", "UPDATING_OPPONENT_MODEL", "DECISION_READY", "ACTING"].includes(
+        observed.seats[0]!.phase,
+      ),
+    );
 
     const decision = await manager.act({
       profileKey: "shark",

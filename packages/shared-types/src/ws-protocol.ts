@@ -48,6 +48,8 @@ export const WS_SERVER_LEGACY_TO_V2: Record<string, string> = {
   session_lifecycle: "session_lifecycle_v2",
   energy_summary: "energy_summary_v1",
   verification_update: "verification_update_v1",
+  /** WP-126 owner-only AI Energy + public cognition phase. */
+  ai_cognition: "ai_cognition_v1",
 };
 
 export type GameWsEmitMode = "legacy" | "v2";
