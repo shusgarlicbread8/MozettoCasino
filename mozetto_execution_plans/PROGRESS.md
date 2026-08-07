@@ -23,7 +23,7 @@
 | **Active wave** | **Wave 11 Production Integration** + **Wave 12 Consumer UX** (parallel) |
 | **Active packets** | Wave 11 Anvil RC gate met (WP-106–113 DONE); Wave 12 DONE; Sepolia Stage A unblocked pending ops |
 | **Architecture status** | Protocol architecture largely built (~component-complete). Remaining work is integration, productization, hosted staging — **not** “ops only.” |
-| **Blocked until (Sepolia Stage A)** | Wave 11 Anvil RC green (WP-106–112); next = funded Sepolia deploy ops |
+| **Blocked until (Sepolia Stage A)** | Funded Base Sepolia deployer → `pnpm sepolia:deploy` → verify → VRF → 3-of-N attestors → `pnpm testnet:stage-a-gate` PASS |
 | **Hard stop** | No new architecture invention; live AWS Nitro during Stage A; Plan 15 expansion stays deferred |
 | **WP-100 correction** | WP-100 = `PASS_WITH_GAPS` only. Gaps reopened as WP-106–108 (sealAndFund, API match, live AI hands, real roots). |
 | **Wave 0 note** | Packets DONE; `baseline-v2` tag optional (create only when user requests) |
@@ -51,7 +51,7 @@
 | 8 | Continuous cognition + 100 Energy | `DONE` | WP-072–076 DONE (scheduler + Energy + cadence + fallback) |
 | 9 | Full Anvil protocol integration | `DONE` | WP-100 `PASS_WITH_GAPS` closed by WP-106 golden `PASS` (FAIL=0 GAP=0) |
 | 10 | Operations, admin, public verification | `DONE` | WP-090–095 DONE — Wave 9 product integrity gate met |
-| 11 | Base Sepolia deployment | `BLOCKED` | Recipes ready; Stage A gated on Wave 11 WP-106–112 |
+| 11 | Base Sepolia deployment | `IN_PROGRESS` | Anvil RC green; Stage A blocked only on funded deployer + live `pnpm sepolia:deploy` |
 | 12 | Adversarial program and audits | `BLOCKED` | Program/register scaffolds DONE; live A/B/C after Anvil RC + Sepolia deploy |
 | 13 | Restricted Base Mainnet | `BLOCKED` | WP-105 recipes/gates DONE; `finalGateApproval=false` |
 | 14 | Consumer product UX (Plan 20A) | `DONE` | Wave 12 WP-120–132 DONE; 3D production (20B) deferred; spectator delay enforced |
@@ -229,7 +229,7 @@
 | WP-112 | Hosted proof pipeline | `DONE` | Continuous CheckpointSource → publisher → SQL proofs → Verify page |
 | WP-113 | Live chaos completeness | `DONE` | Multi-container Redis/RPC/VRF/dealer/worker/settlement failure drills (`CHAOS_LIVE=1`) |
 
-**Wave 11 gate:** WP-106–112 green ⇒ Anvil release candidate. Do **not** open Sepolia Stage A before this gate.
+**Wave 11 gate:** **MET** (WP-106–113 DONE; golden `PASS` FAIL=0 GAP=0). Sepolia Stage A is ops-unblocked.
 
 **Golden path (WP-106):** Web/API → Find Match → random allocation → SeatTicket V3 → atomic `sealAndFundSession` → SessionLifecycle → dealer commit → VRF (Anvil mock OK) → deck → real game-server → Groq AI → canonical events → roots → proof batch → replay → attestors → Hub V3 → FeeVault → ArenaAccounts → Verify Game. One command. Fail anywhere = FAIL.
 
