@@ -155,9 +155,17 @@ export function buildV3Proposal(input: BuildV3ProposalInput): V3Proposal {
   };
 }
 
-/** Map on-chain / DB roots into typed Hex fields. */
+/** Map on-chain / DB roots into typed Hex fields. Stub fallback refused under REQUIRE_REAL_ROOTS. */
 export function normalizeRoot(raw: string | undefined, fallbackSeed: string): Hex {
   if (raw) return toBytes32(raw);
+  const gated =
+    process.env.REQUIRE_REAL_ROOTS === "1" ||
+    process.env.REQUIRE_REAL_ROOTS === "true" ||
+    process.env.MOZETTO_GOLDEN === "1" ||
+    process.env.MOZETTO_GOLDEN === "true";
+  if (gated) {
+    throw new Error(`REQUIRE_REAL_ROOTS: missing root (refused stub seed ${fallbackSeed})`);
+  }
   return keccak256(toBytes(fallbackSeed));
 }
 

@@ -200,6 +200,16 @@ describe("WP-081 schema_kind flags", () => {
   it("maps poker engine events when poker_event_v1 preferred", () => {
     assert.equal(mapEventTypeCode("FOLD"), EVENT_TYPE.ACTION_FOLD);
     assert.equal(mapEventTypeCode("ACTION_CLOCK"), null);
+    assert.equal(mapEventTypeCode("HAND_STARTED"), EVENT_TYPE.HAND_START);
+    assert.equal(mapEventTypeCode("HAND_SETTLED"), EVENT_TYPE.HAND_END);
+    assert.equal(
+      mapEventTypeCode("PLAYER_ACTED", { action: "raise", seatIndex: 0, amount: 300 }),
+      EVENT_TYPE.ACTION_RAISE,
+    );
+    assert.equal(
+      mapEventTypeCode("STREET_DEALT", { street: "flop", cards: [1, 2, 3] }),
+      EVENT_TYPE.STREET_FLOP,
+    );
     assert.equal(canUsePokerEventV1("FOLD", "poker_event_v1"), true);
     assert.equal(canUsePokerEventV1("FOLD", "legacy_json"), false);
     assert.equal(canUsePokerEventV1("JOIN_QUEUED", "poker_event_v1"), false);

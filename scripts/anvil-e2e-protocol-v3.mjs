@@ -756,11 +756,13 @@ async function main() {
   }
 
   // ─── 10. Hands ──────────────────────────────────────────────────────────
+  // WP-107 live Groq path exists; WP-108 exposes buildCanonicalSettlementRoots +
+  // REQUIRE_REAL_ROOTS=1. WP-106 should wire gameplay → roots (no keccak stubs).
   record(
     "hands",
     "AI-only hands / continuous cognition",
     "GAP",
-    "Not wired end-to-end: needs live game-server + agent-runtime + dealer deal path (WP-083/084). Settlement uses stub roots.",
+    "WP-106: wire live game-server + agent-runtime; consume WP-108 buildCanonicalSettlementRoots / REQUIRE_REAL_ROOTS=1 (this E2E still settles with synthetic roots).",
   );
 
   // ─── 11. Proof batch (compose WP-062) ───────────────────────────────────
@@ -819,6 +821,14 @@ async function main() {
   if (hubIsV3) {
     try {
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
+      // Synthetic roots for Hub ABI smoke only. WP-106 golden: REQUIRE_REAL_ROOTS=1 +
+      // buildCanonicalSettlementRoots(@mozetto/root-builder) from live PokerEventV1 tip
+      // (see docs/WP-108_REAL_CANONICAL_ROOTS.md). Do not treat these as protocol roots.
+      if (process.env.REQUIRE_REAL_ROOTS === "1" || process.env.MOZETTO_GOLDEN === "1") {
+        throw new Error(
+          "REQUIRE_REAL_ROOTS/MOZETTO_GOLDEN set — refuse stub settlement roots; wire WP-108 buildCanonicalSettlementRoots",
+        );
+      }
       const settlement = {
         sessionId,
         finalSequence: 1n,

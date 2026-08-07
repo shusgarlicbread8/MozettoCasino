@@ -45,6 +45,17 @@ export {
   ZERO32,
 } from "./merkle.js";
 
+/** WP-108 — session settlement roots (no stub seeds). */
+export {
+  buildCanonicalSettlementRoots,
+  requireRealRoots,
+  assertRealRoot,
+  StubRootError,
+  type HandRootBuildInput,
+  type BuildCanonicalSettlementRootsInput,
+  type CanonicalSettlementRoots,
+} from "./session-roots.js";
+
 /** Re-export frozen encoders used by root builders. */
 export {
   balanceLeaf,

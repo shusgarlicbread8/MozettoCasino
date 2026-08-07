@@ -205,19 +205,47 @@ async function buildProposalV2(session: SessionRow) {
   ).catch(() => ({ rows: [] as { sequence: string; event_hash: string }[] }));
 
   const finalSequence = BigInt(canonical.rows[0]?.sequence ?? 0);
-  const eventRoot = canonical.rows[0]?.event_hash
-    ? toBytes32(canonical.rows[0].event_hash)
-    : keccakLike(`events:${session.session_id}:${finalSequence}`);
 
   const handRootRow = await query<{ hand_root: string }>(
     `select hand_root from hand_roots where session_id = $1 order by created_at desc limit 1`,
     [session.session_id],
   ).catch(() => ({ rows: [] as { hand_root: string }[] }));
-  const handRoot = handRootRow.rows[0]?.hand_root
-    ? toBytes32(handRootRow.rows[0].hand_root)
-    : keccakLike(`hands:${session.session_id}`);
 
-  const balanceRoot = keccakLike(`balances:${session.session_id}:${finalSequence}`);
+  // WP-108: refuse keccak stub roots when REQUIRE_REAL_ROOTS / MOZETTO_GOLDEN.
+  const { resolveSettlementRoots, StubRootError, requireRealRoots } = await import(
+    "./v3/real-roots.js"
+  );
+  let eventRoot: Hex;
+  let handRoot: Hex;
+  let balanceRoot: Hex;
+  try {
+    const roots = resolveSettlementRoots({
+      sessionId: session.session_id,
+      storedEventRoot: canonical.rows[0]?.event_hash,
+      storedHandRoot: handRootRow.rows[0]?.hand_root,
+      finalSequence,
+    });
+    eventRoot = roots.finalEventRoot;
+    handRoot = roots.handRoot;
+    balanceRoot = roots.balanceRoot;
+    if (roots.usedStub) {
+      console.warn(
+        "[settlement-worker] using stub roots (set REQUIRE_REAL_ROOTS=1 to hard-fail)",
+        session.session_id,
+      );
+    }
+  } catch (e) {
+    if (e instanceof StubRootError || requireRealRoots()) {
+      console.error(
+        "[settlement-worker] real roots required — skip proposal",
+        session.session_id,
+        e instanceof Error ? e.message : e,
+      );
+      return null;
+    }
+    throw e;
+  }
+
   const balances: Record<string, number> = {};
   let startTotal = 0;
   let endTotal = 0;

@@ -1,6 +1,6 @@
 import { query } from "@mozetto/database";
 import type { Address, Hex } from "viem";
-import { chainClients, keccakLike, toBytes32 } from "../chain.js";
+import { chainClients, sessionIdToBytes32 } from "../chain.js";
 import {
   buildV3Proposal,
   collectV3Attestations,
@@ -9,6 +9,12 @@ import {
   toHubSettlementArg,
   type V3Proposal,
 } from "./index.js";
+import {
+  balanceLeavesFromPlayers,
+  requireRealRoots,
+  resolveSettlementRoots,
+  StubRootError,
+} from "./real-roots.js";
 import { maybeRateOnchainSession } from "../rating.js";
 
 const ARENA_VAULT_FEE_ABI = [
@@ -102,17 +108,17 @@ export async function buildProposalV3FromDb(
   ).catch(() => ({ rows: [] as { sequence: string; event_hash: string }[] }));
 
   const finalSequence = BigInt(canonical.rows[0]?.sequence ?? 0);
-  const finalEventRoot = canonical.rows[0]?.event_hash
-    ? toBytes32(canonical.rows[0].event_hash)
-    : keccakLike(`events:${session.session_id}:${finalSequence}`);
 
   const handRootRow = await query<{ hand_root: string }>(
     `select hand_root from hand_roots where session_id = $1 order by created_at desc limit 1`,
     [session.session_id],
   ).catch(() => ({ rows: [] as { hand_root: string }[] }));
-  const handRoot = handRootRow.rows[0]?.hand_root
-    ? toBytes32(handRootRow.rows[0].hand_root)
-    : keccakLike(`hands:${session.session_id}`);
+
+  const checkpointBal = await query<{ balance_root: string }>(
+    `select balance_root from session_checkpoints
+     where session_id = $1 order by sequence desc limit 1`,
+    [session.session_id],
+  ).catch(() => ({ rows: [] as { balance_root: string }[] }));
 
   const players = stacks.map((row, i) => {
     const startLocked = BigInt(row.buy_in_raw);
@@ -125,14 +131,52 @@ export async function buildProposalV3FromDb(
     };
   });
 
+  let roots;
+  try {
+    roots = resolveSettlementRoots({
+      sessionId: session.session_id,
+      storedEventRoot: canonical.rows[0]?.event_hash,
+      storedHandRoot: handRootRow.rows[0]?.hand_root,
+      storedBalanceRoot: checkpointBal.rows[0]?.balance_root,
+      finalSequence,
+      balanceLeaves: balanceLeavesFromPlayers({
+        sessionId: sessionIdToBytes32(session.session_id),
+        finalSequence,
+        players,
+      }),
+    });
+    if (roots.usedStub) {
+      console.warn(
+        "[settlement-worker:v3] using stub roots (set REQUIRE_REAL_ROOTS=1 to hard-fail)",
+        session.session_id,
+      );
+    }
+  } catch (e) {
+    if (e instanceof StubRootError || requireRealRoots()) {
+      console.error(
+        "[settlement-worker:v3] real roots required — skip proposal",
+        session.session_id,
+        e instanceof Error ? e.message : e,
+      );
+      return null;
+    }
+    console.warn(
+      "[settlement-worker:v3] root resolve failed",
+      session.session_id,
+      e instanceof Error ? e.message : e,
+    );
+    return null;
+  }
+
   let v3: V3Proposal;
   try {
     v3 = buildV3Proposal({
       sessionId: session.session_id,
       finalSequence,
-      finalEventRoot,
-      handRoot,
+      finalEventRoot: roots.finalEventRoot,
+      handRoot: roots.handRoot,
       players,
+      balanceRoot: roots.balanceRoot,
       chainId: BigInt(chainId),
       verifyingContract: hub,
     });

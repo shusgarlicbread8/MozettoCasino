@@ -32,3 +32,14 @@ export {
   encodeSettleV3CallArgs,
   type SubmitV3Result,
 } from "./submit.js";
+
+/** WP-108 — real canonical roots (REQUIRE_REAL_ROOTS / MOZETTO_GOLDEN). */
+export {
+  resolveSettlementRoots,
+  balanceLeavesFromPlayers,
+  requireRealRoots,
+  assertRealRoot,
+  StubRootError,
+  type ResolveRootsInput,
+  type ResolvedRoots,
+} from "./real-roots.js";

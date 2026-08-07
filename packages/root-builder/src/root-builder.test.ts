@@ -7,7 +7,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import { getAddress, keccak256, toBytes, type Hex, type Address } from "viem";
-import { EventHashChain, EVENT_TYPE, protocolV3EngineHash } from "@mozetto/event-store";
+import {
+  EventHashChain,
+  EVENT_TYPE,
+  hashActionPayload,
+  hashBlindPayload,
+  protocolV3EngineHash,
+  ZERO_EVENT_HASH,
+} from "@mozetto/event-store";
 import {
   buildBalanceRoot,
   encodeBalanceLeaf,
@@ -25,6 +32,10 @@ import {
   RootBuilderError,
   deriveHandId,
   ZERO32,
+  buildCanonicalSettlementRoots,
+  requireRealRoots,
+  assertRealRoot,
+  StubRootError,
 } from "./index.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -521,5 +532,206 @@ describe("hand root + event store integration", () => {
       handRake: 0n,
     });
     assert.equal(fromArray.handRoot, hand.handRoot);
+  });
+});
+
+describe("WP-108 — buildCanonicalSettlementRoots matches fixture event log", () => {
+  it("eventRoot == chain tip; handRoot encodes that tip; balanceRoot from seats", () => {
+    const sessionId = sessionId6();
+    const engineHash = protocolV3EngineHash();
+    const alice = getAddress("0xa111111111111111111111111111111111111111");
+    const bob = getAddress("0xb222222222222222222222222222222222222222");
+
+    // Minimal HU fold-win: HAND_START → POST_BLIND×2 → ACTION_FOLD → HAND_END
+    const chain = new EventHashChain(sessionId, 0n);
+    const specs = [
+      {
+        eventType: EVENT_TYPE.HAND_START,
+        hasActorSeat: false,
+        actorSeat: 0,
+        publicPayloadHash: keccak256(toBytes("hand-start-wp108")),
+        elapsedMs: 0n,
+      },
+      {
+        eventType: EVENT_TYPE.POST_BLIND,
+        hasActorSeat: true,
+        actorSeat: 0,
+        publicPayloadHash: hashBlindPayload(0, 50n),
+        elapsedMs: 1n,
+      },
+      {
+        eventType: EVENT_TYPE.POST_BLIND,
+        hasActorSeat: true,
+        actorSeat: 1,
+        publicPayloadHash: hashBlindPayload(1, 100n),
+        elapsedMs: 2n,
+      },
+      {
+        eventType: EVENT_TYPE.ACTION_FOLD,
+        hasActorSeat: true,
+        actorSeat: 0,
+        publicPayloadHash: hashActionPayload(0, EVENT_TYPE.ACTION_FOLD, 0n),
+        elapsedMs: 100n,
+      },
+      {
+        eventType: EVENT_TYPE.HAND_END,
+        hasActorSeat: false,
+        actorSeat: 0,
+        publicPayloadHash: keccak256(toBytes("hand-end-wp108")),
+        elapsedMs: 110n,
+      },
+    ] as const;
+
+    for (const s of specs) {
+      chain.append({
+        sessionId,
+        epoch: 0n,
+        handNumber: 1n,
+        eventType: s.eventType,
+        hasActorSeat: s.hasActorSeat,
+        actorSeat: s.actorSeat,
+        publicPayloadHash: s.publicPayloadHash,
+        privatePayloadCommitment: ZERO_EVENT_HASH,
+        elapsedMs: s.elapsedMs,
+        engineHash,
+      });
+    }
+    assert.equal(chain.verify().ok, true);
+
+    const events = chain.events().map((r) => ({
+      eventHash: r.eventHash,
+      handNumber: r.event.handNumber,
+      sequence: r.event.sequence,
+    }));
+
+    const opening = 10_000n;
+    const roots = buildCanonicalSettlementRoots({
+      sessionId,
+      epoch: 0n,
+      chain,
+      events,
+      hands: [
+        {
+          handNumber: 1n,
+          deckRoot: keccak256(toBytes("deck-wp108")),
+          openingStateHash: keccak256(toBytes("open-wp108")),
+          endingStateHash: keccak256(toBytes("end-wp108")),
+          handRake: 0n,
+        },
+      ],
+      balances: [
+        {
+          sessionId,
+          epoch: 0n,
+          arenaAccount: alice,
+          seat: 0,
+          openingBalance: opening,
+          currentBalance: opening - 50n,
+          cumulativeRake: 0n,
+          lastSequence: BigInt(events.length - 1),
+        },
+        {
+          sessionId,
+          epoch: 0n,
+          arenaAccount: bob,
+          seat: 1,
+          openingBalance: opening,
+          currentBalance: opening + 50n,
+          cumulativeRake: 0n,
+          lastSequence: BigInt(events.length - 1),
+        },
+      ],
+    });
+
+    assert.equal(roots.finalEventRoot, chain.tip);
+    assert.equal(roots.handRoots[0]!.eventChainTip, chain.tip);
+    assert.equal(roots.handRoot, roots.handRoots[0]!.handRoot);
+    assert.notEqual(roots.handRoot, ZERO32);
+    assert.notEqual(roots.balanceRoot, ZERO32);
+    assert.equal(roots.finalSequence, BigInt(events.length - 1));
+
+    // Rebuilding from the same event hashes must be deterministic.
+    const again = buildCanonicalSettlementRoots({
+      sessionId,
+      epoch: 0n,
+      chain: { eventHashes: events.map((e) => e.eventHash) },
+      events,
+      hands: [
+        {
+          handNumber: 1n,
+          deckRoot: keccak256(toBytes("deck-wp108")),
+          openingStateHash: keccak256(toBytes("open-wp108")),
+          endingStateHash: keccak256(toBytes("end-wp108")),
+          handRake: 0n,
+        },
+      ],
+      balances: [
+        {
+          sessionId,
+          epoch: 0n,
+          arenaAccount: alice,
+          seat: 0,
+          openingBalance: opening,
+          currentBalance: opening - 50n,
+          cumulativeRake: 0n,
+          lastSequence: BigInt(events.length - 1),
+        },
+        {
+          sessionId,
+          epoch: 0n,
+          arenaAccount: bob,
+          seat: 1,
+          openingBalance: opening,
+          currentBalance: opening + 50n,
+          cumulativeRake: 0n,
+          lastSequence: BigInt(events.length - 1),
+        },
+      ],
+    });
+    assert.equal(again.finalEventRoot, roots.finalEventRoot);
+    assert.equal(again.handRoot, roots.handRoot);
+    assert.equal(again.balanceRoot, roots.balanceRoot);
+  });
+
+  it("requireRealRoots / assertRealRoot gate stub injection", () => {
+    assert.equal(requireRealRoots({}), false);
+    assert.equal(requireRealRoots({ REQUIRE_REAL_ROOTS: "1" }), true);
+    assert.equal(requireRealRoots({ MOZETTO_GOLDEN: "true" }), true);
+    assert.throws(() => assertRealRoot(ZERO32, "handRoot"), StubRootError);
+    assert.throws(() => assertRealRoot(undefined, "eventRoot"), StubRootError);
+    const ok = assertRealRoot(("0x" + "ab".repeat(32)) as Hex, "eventRoot");
+    assert.match(ok, /^0xab/);
+  });
+
+  it("refuses empty chain (no stub tip)", () => {
+    assert.throws(
+      () =>
+        buildCanonicalSettlementRoots({
+          sessionId: sessionId6(),
+          chain: { eventHashes: [] },
+          hands: [
+            {
+              handNumber: 1n,
+              deckRoot: keccak256(toBytes("d")),
+              openingStateHash: keccak256(toBytes("o")),
+              endingStateHash: keccak256(toBytes("e")),
+              handRake: 0n,
+            },
+          ],
+          balances: [
+            {
+              sessionId: sessionId6(),
+              epoch: 0n,
+              arenaAccount: getAddress("0xa111111111111111111111111111111111111111"),
+              seat: 0,
+              openingBalance: 1n,
+              currentBalance: 1n,
+              cumulativeRake: 0n,
+              lastSequence: 0n,
+            },
+          ],
+        }),
+      /empty event chain/,
+    );
   });
 });

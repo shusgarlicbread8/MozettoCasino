@@ -416,3 +416,63 @@ describe("policy constants", () => {
     );
   });
 });
+
+describe("WP-108 resolveSettlementRoots", () => {
+  it("uses stored roots and Merkle balance when present", async () => {
+    const { resolveSettlementRoots, balanceLeavesFromPlayers } = await import(
+      "./v3/real-roots.js"
+    );
+    const sessionId = ("0x" + "11".repeat(32)) as Hex;
+    const alice = getAddress("0xa111111111111111111111111111111111111111");
+    const tip = ("0x" + "22".repeat(32)) as Hex;
+    const hand = ("0x" + "33".repeat(32)) as Hex;
+    const roots = resolveSettlementRoots({
+      sessionId,
+      storedEventRoot: tip,
+      storedHandRoot: hand,
+      finalSequence: 5n,
+      balanceLeaves: balanceLeavesFromPlayers({
+        sessionId,
+        finalSequence: 5n,
+        players: [
+          { user: alice, seat: 0, startLocked: 100n, endBalance: 90n },
+          {
+            user: getAddress("0xb222222222222222222222222222222222222222"),
+            seat: 1,
+            startLocked: 100n,
+            endBalance: 110n,
+          },
+        ],
+      }),
+      env: {},
+    });
+    assert.equal(roots.finalEventRoot, tip);
+    assert.equal(roots.handRoot, hand);
+    assert.equal(roots.usedStub, false);
+    assert.match(roots.balanceRoot, /^0x[0-9a-f]{64}$/i);
+  });
+
+  it("hard-fails stub injection when REQUIRE_REAL_ROOTS=1", async () => {
+    const { resolveSettlementRoots, StubRootError } = await import("./v3/real-roots.js");
+    assert.throws(
+      () =>
+        resolveSettlementRoots({
+          sessionId: "sess-missing",
+          finalSequence: 0n,
+          env: { REQUIRE_REAL_ROOTS: "1" },
+        }),
+      StubRootError,
+    );
+  });
+
+  it("allows stub fallbacks when gate off (legacy Anvil demos)", async () => {
+    const { resolveSettlementRoots } = await import("./v3/real-roots.js");
+    const roots = resolveSettlementRoots({
+      sessionId: "demo-sess",
+      finalSequence: 1n,
+      env: {},
+    });
+    assert.equal(roots.usedStub, true);
+    assert.match(roots.finalEventRoot, /^0x[0-9a-f]{64}$/i);
+  });
+});

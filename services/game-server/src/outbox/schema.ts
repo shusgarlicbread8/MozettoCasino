@@ -25,6 +25,7 @@ export function preferredSchemaKind(
 
 const STRING_TO_CODE: Record<string, EventTypeCode> = {
   HAND_START: EVENT_TYPE.HAND_START,
+  HAND_STARTED: EVENT_TYPE.HAND_START,
   POST_BLIND: EVENT_TYPE.POST_BLIND,
   DEAL_HOLE: EVENT_TYPE.DEAL_HOLE,
   HOLE_CARDS_DEALT: EVENT_TYPE.DEAL_HOLE,
@@ -47,17 +48,64 @@ const STRING_TO_CODE: Record<string, EventTypeCode> = {
   STREET_RIVER: EVENT_TYPE.STREET_RIVER,
   RIVER: EVENT_TYPE.STREET_RIVER,
   SHOWDOWN: EVENT_TYPE.SHOWDOWN,
+  SHOWDOWN_REVEALED: EVENT_TYPE.SHOWDOWN,
   HAND_END: EVENT_TYPE.HAND_END,
   HAND_COMPLETE: EVENT_TYPE.HAND_END,
+  HAND_SETTLED: EVENT_TYPE.HAND_END,
   HAND_ABORT: EVENT_TYPE.HAND_ABORT,
 };
 
-export function mapEventTypeCode(eventType: string): EventTypeCode | null {
-  return STRING_TO_CODE[eventType] ?? null;
+const ACTION_STRING_TO_CODE: Record<string, EventTypeCode> = {
+  fold: EVENT_TYPE.ACTION_FOLD,
+  check: EVENT_TYPE.ACTION_CHECK,
+  call: EVENT_TYPE.ACTION_CALL,
+  bet: EVENT_TYPE.ACTION_BET,
+  raise: EVENT_TYPE.ACTION_RAISE,
+  all_in: EVENT_TYPE.ACTION_ALL_IN,
+  allin: EVENT_TYPE.ACTION_ALL_IN,
+  "all-in": EVENT_TYPE.ACTION_ALL_IN,
+};
+
+const STREET_STRING_TO_CODE: Record<string, EventTypeCode> = {
+  flop: EVENT_TYPE.STREET_FLOP,
+  turn: EVENT_TYPE.STREET_TURN,
+  river: EVENT_TYPE.STREET_RIVER,
+};
+
+/**
+ * Map live engine / outbox event type strings → PokerEventV1 codes.
+ * Supports engine envelopes (PLAYER_ACTED, STREET_DEALT, BLINDS_POSTED) via payload.
+ */
+export function mapEventTypeCode(
+  eventType: string,
+  publicPayload?: Record<string, unknown>,
+): EventTypeCode | null {
+  const direct = STRING_TO_CODE[eventType];
+  if (direct != null) return direct;
+
+  if (eventType === "PLAYER_ACTED" && publicPayload) {
+    const action = String(publicPayload.action ?? "").toLowerCase();
+    return ACTION_STRING_TO_CODE[action] ?? null;
+  }
+  if (eventType === "STREET_DEALT" && publicPayload) {
+    const street = String(publicPayload.street ?? "").toLowerCase();
+    return STREET_STRING_TO_CODE[street] ?? null;
+  }
+  // Multi-blind posts stay legacy unless a single seat/amount is present.
+  if (eventType === "BLINDS_POSTED" && publicPayload) {
+    const seat = publicPayload.seatIndex ?? publicPayload.seat;
+    const amount = publicPayload.amount;
+    if (seat != null && amount != null) return EVENT_TYPE.POST_BLIND;
+  }
+  return null;
 }
 
-export function canUsePokerEventV1(eventType: string, prefer: SchemaKind): boolean {
-  return prefer === "poker_event_v1" && mapEventTypeCode(eventType) != null;
+export function canUsePokerEventV1(
+  eventType: string,
+  prefer: SchemaKind,
+  publicPayload?: Record<string, unknown>,
+): boolean {
+  return prefer === "poker_event_v1" && mapEventTypeCode(eventType, publicPayload) != null;
 }
 
 export type PokerV1EncodeInput = {
@@ -163,7 +211,7 @@ export function encodePokerEventV1PublicHash(
 
 /** Hash PokerEventV1 fields for a single append (tip provided by caller). */
 export function encodeSinglePokerEventV1(input: PokerV1EncodeInput): PokerV1EncodeResult | null {
-  const code = mapEventTypeCode(input.eventType);
+  const code = mapEventTypeCode(input.eventType, input.publicPayload);
   if (code == null) return null;
 
   const { publicPayloadHash, hasActorSeat, actorSeat } = encodePokerEventV1PublicHash(
