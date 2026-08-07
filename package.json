@@ -3,7 +3,7 @@
   "private": true,
   "packageManager": "pnpm@9.15.0",
   "scripts": {
-    "dev": "pnpm -r --parallel --filter @mozetto/web --filter @mozetto/api --filter @mozetto/game-server --filter @mozetto/agent-runtime --filter @mozetto/chain-indexer --filter @mozetto/dealer --filter @mozetto/replay-verifier run dev",
+    "dev": "pnpm -r --parallel --filter @mozetto/web --filter @mozetto/api --filter @mozetto/game-server --filter @mozetto/agent-runtime --filter @mozetto/chain-indexer --filter @mozetto/dealer --filter @mozetto/replay-verifier --filter @mozetto/settlement-worker run dev",
     "dev:web": "pnpm --filter @mozetto/web dev",
     "dev:api": "pnpm --filter @mozetto/api dev",
     "dev:game": "pnpm --filter @mozetto/game-server dev",
@@ -18,6 +18,7 @@
     "smoke:custody": "node ./scripts/anvil-custody-smoke.mjs",
     "smoke:custody:run": "node ./scripts/anvil-custody-smoke.mjs --run",
     "e2e:instant": "node ./scripts/anvil-e2e-instant-match.mjs",
+    "e2e:arena-account": "node ./scripts/anvil-e2e-arena-account.mjs",
     "test:db": "pnpm --filter @mozetto/database test"
   },
   "devDependencies": {

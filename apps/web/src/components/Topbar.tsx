@@ -155,7 +155,14 @@ export function Topbar() {
             <div style={{ font: "400 9px var(--font-geist-mono), monospace", letterSpacing: ".1em", color: "#4A4A4A" }}>
               AT TABLES
             </div>
-            <div style={{ font: "500 13px var(--font-geist-mono), monospace", color: "#FFB020" }}>
+            <div
+              title={
+                balances.pendingSettlement > 0
+                  ? `Live at tables. ${balances.pendingSettlement.toFixed(0)} still unlocking on-chain.`
+                  : "Live chips at your active seats"
+              }
+              style={{ font: "500 13px var(--font-geist-mono), monospace", color: "#FFB020" }}
+            >
               <SplitFlapNumber value={balances.displayLocked} color="#FFB020" fontSize={13} />
             </div>
           </div>

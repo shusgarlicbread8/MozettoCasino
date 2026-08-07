@@ -4,10 +4,12 @@ Do **not** deploy real-money Base Mainnet until every item is complete.
 
 ## Audits & review
 
-- [ ] Independent smart-contract audit (vault, hub, registry, randomness)
+- [ ] Independent smart-contract audit (ArenaAccount, factory, ArenaVaultV2, hub, registry, randomness)
+- [ ] GamePermission threat model review (signer compromise blast radius, revoke/expiry)
 - [ ] Independent poker-engine review (determinism, side pots, rake)
 - [ ] Penetration test of API, game-server, indexer, admin
 - [ ] Attestor-separation / key-custody review
+- [ ] MetaMask + Coinbase Wallet (EOA) signup / fund / seamless-play / match E2E on Base Sepolia
 
 ## Keys & governance
 

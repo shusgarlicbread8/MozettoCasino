@@ -26,8 +26,12 @@ export type ChainConfig = {
   deploymentBlock: bigint;
   contracts: {
     arenaVault: `0x${string}` | null;
+    arenaVaultV1: `0x${string}` | null;
+    arenaAccountFactory: `0x${string}` | null;
+    arenaAccountImplementation: `0x${string}` | null;
     tableRegistry: `0x${string}` | null;
     settlementHub: `0x${string}` | null;
+    settlementHubV1: `0x${string}` | null;
     checkpointRegistry: `0x${string}` | null;
     randomnessCoordinator: `0x${string}` | null;
     feeTreasury: `0x${string}` | null;
@@ -85,8 +89,12 @@ export function getChainConfig(env?: ChainEnv): ChainConfig {
     deploymentBlock: m.deploymentBlock,
     contracts: {
       arenaVault: m.arenaVault,
+      arenaVaultV1: m.arenaVaultV1 ?? null,
+      arenaAccountFactory: m.arenaAccountFactory ?? null,
+      arenaAccountImplementation: m.arenaAccountImplementation ?? null,
       tableRegistry: m.tableRegistry,
       settlementHub: m.settlementHub,
+      settlementHubV1: m.settlementHubV1 ?? null,
       checkpointRegistry: m.checkpointRegistry,
       randomnessCoordinator: m.randomnessCoordinator,
       feeTreasury: m.feeTreasury,
@@ -346,6 +354,7 @@ export const PERMIT_TYPES = {
 export type ArenaMode = "demo" | "onchain";
 
 /** EIP-712 domain for ArenaVault SeatTicket (name/version must match Solidity). */
+/** @deprecated V1 SeatTicket — use SEAT_TICKET_V2_TYPES */
 export const SEAT_TICKET_TYPES = {
   SeatTicket: [
     { name: "player", type: "address" },
@@ -359,6 +368,22 @@ export const SEAT_TICKET_TYPES = {
   ],
 } as const;
 
+export const SEAT_TICKET_V2_TYPES = {
+  SeatTicket: [
+    { name: "player", type: "address" },
+    { name: "gameTemplateId", type: "bytes32" },
+    { name: "buyIn", type: "uint256" },
+    { name: "controllerHash", type: "bytes32" },
+    { name: "agentProfileHash", type: "bytes32" },
+    { name: "expiresAt", type: "uint64" },
+    { name: "nonce", type: "uint256" },
+    { name: "matchmakingPool", type: "bytes32" },
+    { name: "leagueBit", type: "uint32" },
+    { name: "rated", type: "bool" },
+  ],
+} as const;
+
+/** @deprecated V1 domain */
 export function seatTicketDomain(chainId: number, verifyingContract: `0x${string}`) {
   return {
     name: "MozettoArenaVault",
@@ -368,6 +393,16 @@ export function seatTicketDomain(chainId: number, verifyingContract: `0x${string
   } as const;
 }
 
+export function seatTicketV2Domain(chainId: number, verifyingContract: `0x${string}`) {
+  return {
+    name: "MozettoArenaVault",
+    version: "2",
+    chainId,
+    verifyingContract,
+  } as const;
+}
+
+/** @deprecated InstantPermission — use GAME_PERMISSION_TYPES on ArenaAccount */
 export const INSTANT_PERMISSION_TYPES = {
   InstantPermission: [
     { name: "player", type: "address" },
@@ -383,3 +418,301 @@ export const INSTANT_PERMISSION_TYPES = {
 export function instantPermissionDomain(chainId: number, verifyingContract: `0x${string}`) {
   return seatTicketDomain(chainId, verifyingContract);
 }
+
+export const GAME_PERMISSION_TYPES = {
+  GamePermission: [
+    { name: "account", type: "address" },
+    { name: "sessionSigner", type: "address" },
+    { name: "usdc", type: "address" },
+    { name: "vault", type: "address" },
+    { name: "gameTemplateId", type: "bytes32" },
+    { name: "leagueMask", type: "uint32" },
+    { name: "lifetimeCommittedCap", type: "uint256" },
+    { name: "maxTotalAtRisk", type: "uint256" },
+    { name: "maxSingleBuyIn", type: "uint256" },
+    { name: "validUntil", type: "uint64" },
+    { name: "maxConcurrentGames", type: "uint16" },
+    { name: "ratedOnly", type: "bool" },
+    { name: "nonce", type: "uint256" },
+    { name: "enabled", type: "bool" },
+  ],
+} as const;
+
+export function gamePermissionDomain(chainId: number, arenaAccount: `0x${string}`) {
+  return {
+    name: "MozettoArenaAccount",
+    version: "1",
+    chainId,
+    verifyingContract: arenaAccount,
+  } as const;
+}
+
+export const LEAGUE_BITS = {
+  bronze: 1,
+  silver: 2,
+  gold: 4,
+  platinum: 8,
+} as const;
+
+export function leagueBit(leagueId: string): number {
+  return (LEAGUE_BITS as Record<string, number>)[leagueId] ?? 0;
+}
+
+export const ALL_LEAGUE_MASK = 15; // bronze|silver|gold|platinum
+
+export const arenaAccountFactoryAbi = [
+  {
+    type: "function",
+    name: "createAccount",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [{ type: "address" }],
+  },
+  {
+    type: "function",
+    name: "predictAddress",
+    stateMutability: "view",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [{ type: "address" }],
+  },
+  {
+    type: "function",
+    name: "accountOf",
+    stateMutability: "view",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [{ type: "address" }],
+  },
+  {
+    type: "function",
+    name: "ownerOf",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ type: "address" }],
+  },
+  {
+    type: "function",
+    name: "getOrPredict",
+    stateMutability: "view",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [
+      { name: "account", type: "address" },
+      { name: "deployed", type: "bool" },
+    ],
+  },
+] as const;
+
+export const arenaAccountAbi = [
+  {
+    type: "function",
+    name: "owner",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "address" }],
+  },
+  {
+    type: "function",
+    name: "gameAuthNonce",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "gameAuth",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      { name: "sessionSigner", type: "address" },
+      { name: "usdc", type: "address" },
+      { name: "vault", type: "address" },
+      { name: "gameTemplateId", type: "bytes32" },
+      { name: "leagueMask", type: "uint32" },
+      { name: "lifetimeCommittedCap", type: "uint256" },
+      { name: "lifetimeCommitted", type: "uint256" },
+      { name: "maxTotalAtRisk", type: "uint256" },
+      { name: "activeAtRisk", type: "uint256" },
+      { name: "maxSingleBuyIn", type: "uint256" },
+      { name: "validUntil", type: "uint64" },
+      { name: "maxConcurrentGames", type: "uint16" },
+      { name: "activeGames", type: "uint16" },
+      { name: "ratedOnly", type: "bool" },
+      { name: "enabled", type: "bool" },
+    ],
+  },
+  {
+    type: "function",
+    name: "remainingLifetimeCap",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "remainingAtRiskCap",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "setGamePermission",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "sessionSigner", type: "address" },
+      { name: "usdc", type: "address" },
+      { name: "vault", type: "address" },
+      { name: "gameTemplateId", type: "bytes32" },
+      { name: "leagueMask", type: "uint32" },
+      { name: "lifetimeCommittedCap", type: "uint256" },
+      { name: "maxTotalAtRisk", type: "uint256" },
+      { name: "maxSingleBuyIn", type: "uint256" },
+      { name: "validUntil", type: "uint64" },
+      { name: "maxConcurrentGames", type: "uint16" },
+      { name: "ratedOnly", type: "bool" },
+      { name: "nonce", type: "uint256" },
+      { name: "enabled", type: "bool" },
+      { name: "signature", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "withdraw",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "to", type: "address" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+/** ArenaVaultV2 ABI (primary custody vault). */
+export const arenaVaultV2Abi = [
+  {
+    type: "function",
+    name: "openSession",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "config",
+        type: "tuple",
+        components: [
+          { name: "sessionId", type: "bytes32" },
+          { name: "gameTemplateId", type: "bytes32" },
+          { name: "dealerRoot", type: "bytes32" },
+          { name: "engineHash", type: "bytes32" },
+          { name: "profileSetHash", type: "bytes32" },
+          { name: "emergencyExitDelay", type: "uint64" },
+        ],
+      },
+      {
+        name: "tickets",
+        type: "tuple[]",
+        components: [
+          { name: "player", type: "address" },
+          { name: "gameTemplateId", type: "bytes32" },
+          { name: "buyIn", type: "uint256" },
+          { name: "controllerHash", type: "bytes32" },
+          { name: "agentProfileHash", type: "bytes32" },
+          { name: "expiresAt", type: "uint64" },
+          { name: "nonce", type: "uint256" },
+          { name: "matchmakingPool", type: "bytes32" },
+          { name: "leagueBit", type: "uint32" },
+          { name: "rated", type: "bool" },
+        ],
+      },
+      { name: "signatures", type: "bytes[]" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "topUpSession",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "sessionId", type: "bytes32" },
+      {
+        name: "ticket",
+        type: "tuple",
+        components: [
+          { name: "player", type: "address" },
+          { name: "gameTemplateId", type: "bytes32" },
+          { name: "buyIn", type: "uint256" },
+          { name: "controllerHash", type: "bytes32" },
+          { name: "agentProfileHash", type: "bytes32" },
+          { name: "expiresAt", type: "uint64" },
+          { name: "nonce", type: "uint256" },
+          { name: "matchmakingPool", type: "bytes32" },
+          { name: "leagueBit", type: "uint32" },
+          { name: "rated", type: "bool" },
+        ],
+      },
+      { name: "signature", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "totalLocked",
+    stateMutability: "view",
+    inputs: [{ name: "user", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "lockedBySession",
+    stateMutability: "view",
+    inputs: [
+      { name: "sessionId", type: "bytes32" },
+      { name: "player", type: "address" },
+    ],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "event",
+    name: "SessionOpened",
+    inputs: [
+      { name: "sessionId", type: "bytes32", indexed: true },
+      { name: "templateId", type: "bytes32", indexed: true },
+      { name: "playerCount", type: "uint256", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "SessionToppedUp",
+    inputs: [
+      { name: "sessionId", type: "bytes32", indexed: true },
+      { name: "player", type: "address", indexed: true },
+      { name: "amount", type: "uint256", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "BuyInLocked",
+    inputs: [
+      { name: "sessionId", type: "bytes32", indexed: true },
+      { name: "player", type: "address", indexed: true },
+      { name: "amount", type: "uint256", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "SessionSettled",
+    inputs: [
+      { name: "sessionId", type: "bytes32", indexed: true },
+      { name: "rake", type: "uint256", indexed: false },
+      { name: "playerCount", type: "uint256", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "SessionPayout",
+    inputs: [
+      { name: "sessionId", type: "bytes32", indexed: true },
+      { name: "player", type: "address", indexed: true },
+      { name: "amount", type: "uint256", indexed: false },
+    ],
+  },
+] as const;

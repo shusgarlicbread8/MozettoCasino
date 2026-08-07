@@ -53,8 +53,8 @@ const HOUSE: [string, string, string, string, string, string, string, string, st
 const TIER_COLOR: Record<string, string> = { EXEMPLARY: "#00E676", STRONG: "#8FE3D2", STEADY: "#8A8A8A", VOLATILE: "#FFB020" };
 
 const TABS = [
-  { k: "HU HOLD'EM", house: false },
-  { k: "6-MAX HOLD'EM", house: false },
+  { k: "TEXAS HOLD'EM", house: false },
+  { k: "POKER (CLASSIC)", house: false },
   { k: "OMAHA", house: false },
   { k: "SHORT DECK", house: false },
   { k: "TOURNAMENTS", house: false },

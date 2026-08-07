@@ -15,8 +15,12 @@ export type ChainManifestEntry = {
   isTestAsset: boolean;
   faucetEnabled: boolean;
   arenaVault: HexAddress | null;
+  arenaVaultV1: HexAddress | null;
+  arenaAccountFactory: HexAddress | null;
+  arenaAccountImplementation: HexAddress | null;
   tableRegistry: HexAddress | null;
   settlementHub: HexAddress | null;
+  settlementHubV1: HexAddress | null;
   checkpointRegistry: HexAddress | null;
   randomnessCoordinator: HexAddress | null;
   feeTreasury: HexAddress | null;
@@ -30,19 +34,23 @@ export type ChainManifestEntry = {
 export const chainManifest = {
   anvil: {
     chainId: 31337,
-    usdc: "0x41219a0a9C0b86ED81933c788a6B63Dfef8f17eE" as HexAddress,
+    usdc: "0xCdCBFF2C6f683C0b1abB4926d6B2c1d1e61c0957" as HexAddress,
     symbol: "mUSDC",
     decimals: 6,
     isTestAsset: true,
     faucetEnabled: true,
-    arenaVault: "0xeA8AE08513f8230cAA8d031D28cB4Ac8CE720c68" as HexAddress,
-    tableRegistry: "0x776D6996c8180838dC0587aE0DE5D614b1350f37" as HexAddress,
-    settlementHub: "0x6431AF84d34F0522cAA58b221d94A150B5AdAC69" as HexAddress,
-    checkpointRegistry: "0x3A906C603F080D96dc08f81CF2889dAB6FF299dE" as HexAddress,
-    randomnessCoordinator: "0x820638ecd57B55e51CE6EaD7D137962E7A201dD9" as HexAddress,
+    arenaVault: "0xcBB68c20A78161F2C36e933fAC3E423e3fB1Acd3" as HexAddress,
+    arenaVaultV1: "0x5714006E0EC833FF343d12DA5B2a3e45353c3A16" as HexAddress,
+    arenaAccountFactory: "0xF2e0C0bEb91aD58de1bb043F3bC7fe0186cC0C6A" as HexAddress,
+    arenaAccountImplementation: "0x536A0B4d69378223aBF8EB3549eA6677B2aBD67f" as HexAddress,
+    tableRegistry: "0x51b48084Ebe0229B053916E46631Eff428D4d6a9" as HexAddress,
+    settlementHub: "0x9F1d9FfbeF0DF39055Fb269f5e3724520Cc96EeA" as HexAddress,
+    settlementHubV1: "0x2Be4A6Ea1639e9dDD8343069FA94dbdbd7fEC548" as HexAddress,
+    checkpointRegistry: "0xFbcB595923306ea343A4E72C427F849b644B951a" as HexAddress,
+    randomnessCoordinator: "0xE1763d472a5E4797C3add16F372A8f2465E3Ae7c" as HexAddress,
     feeTreasury: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" as HexAddress,
-    deploymentBlock: BigInt(16544),
-    protocolVersion: "1.0.0-anvil",
+    deploymentBlock: BigInt(48528),
+    protocolVersion: "2.0.0-anvil",
     vrfCoordinator: null,
     vrfKeyHash: null,
   },
@@ -54,8 +62,12 @@ export const chainManifest = {
     isTestAsset: false,
     faucetEnabled: false,
     arenaVault: null,
+    arenaVaultV1: null,
+    arenaAccountFactory: null,
+    arenaAccountImplementation: null,
     tableRegistry: null,
     settlementHub: null,
+    settlementHubV1: null,
     checkpointRegistry: null,
     randomnessCoordinator: null,
     feeTreasury: null,
@@ -72,8 +84,12 @@ export const chainManifest = {
     isTestAsset: false,
     faucetEnabled: false,
     arenaVault: null,
+    arenaVaultV1: null,
+    arenaAccountFactory: null,
+    arenaAccountImplementation: null,
     tableRegistry: null,
     settlementHub: null,
+    settlementHubV1: null,
     checkpointRegistry: null,
     randomnessCoordinator: null,
     feeTreasury: null,

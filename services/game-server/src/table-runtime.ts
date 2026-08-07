@@ -70,6 +70,8 @@ type Client = {
 export class TableRuntime {
   tableId: string;
   arenaMode: "demo" | "onchain" = "demo";
+  /** game_variants.id — nlhe_hu (Texas Hold'em) or nlhe_6max (Poker Classic). */
+  variantId = "nlhe_6max";
   state: HoldemState;
   sequence = 0;
   prevHash: string | null = null;
@@ -119,13 +121,22 @@ export class TableRuntime {
     );
     if (!t.rows[0]) throw new Error("table not found");
     const row = t.rows[0];
+    const variantId = String(row.variant_id ?? "");
+    const maxSeats = Number(row.max_seats) || 6;
+    if (variantId === "nlhe_hu" && maxSeats !== 2) {
+      throw new Error(`Texas Hold'em table ${tableId} must have max_seats=2 (got ${maxSeats})`);
+    }
+    if (variantId === "nlhe_6max" && maxSeats > 6) {
+      throw new Error(`Poker Classic table ${tableId} max_seats=${maxSeats} exceeds 6`);
+    }
     const rt = new TableRuntime(tableId, {
       smallBlind: Number(row.small_blind),
       bigBlind: Number(row.big_blind),
       rakePct: Number(row.rake_pct),
       rakeCap: row.rake_cap != null ? Number(row.rake_cap) : null,
-      maxSeats: Number(row.max_seats) || 6,
+      maxSeats,
     });
+    rt.variantId = variantId;
     rt.arenaMode = row.arena_mode === "onchain" ? "onchain" : "demo";
     if (rt.arenaMode === "onchain") {
       await rt.loadOnchainSession();
@@ -196,11 +207,12 @@ export class TableRuntime {
     }
   }
 
-  isBotSeat(seatIndex: number): boolean {
+  isBotSeat(_seatIndex: number): boolean {
     if (!HUMAN_PLAY) return true;
-    const seat = this.state.seats.find((s) => s.seatIndex === seatIndex);
-    if (!seat?.playerId) return false;
-    return !this.clients.some((c) => c.userId === seat.playerId && c.role === "player");
+    // HUMAN_PLAY: every occupied seat waits for a human action (or timeout fold).
+    // Never AI-auto when the WS hasn't bound yet — that yields YOUR TURN +
+    // "No action pending" with a dead clock.
+    return false;
   }
 
   seatControllerFor(seatIndex: number): SeatController {
@@ -633,6 +645,15 @@ export class TableRuntime {
     const [opponentId, opponentSessionId] = others[0];
     if (!opponentId || !opponentSessionId) return;
 
+    // Texas Hold'em → HU pool. Poker Classic → 6-max pool only for degenerate HU sessions.
+    const poolId =
+      this.variantId === "nlhe_hu"
+        ? "hu_holdem_standard"
+        : this.variantId === "nlhe_6max"
+          ? "nlhe_6max_standard"
+          : null;
+    if (!poolId) return;
+
     const startHand = this.sessionStartHand.get(sessionId) ?? this.state.handNumber;
     const hands = Math.max(0, this.state.handNumber - startHand);
     if (hands < 1) return; // never actually played a hand together
@@ -650,7 +671,7 @@ export class TableRuntime {
     const scoreA: 0 | 0.5 | 1 = myProfit > theirProfit ? 1 : myProfit < theirProfit ? 0 : 0.5;
 
     await settleRatedMatch({
-      poolId: "hu_holdem_standard",
+      poolId,
       ownerA: userId,
       ownerB: opponentId,
       agentA: agentId ?? null,
@@ -829,6 +850,7 @@ export class TableRuntime {
           /* ignore */
         }
         this.resetToWaiting();
+        this.broadcastSnapshots();
         await sleep(1500);
       }
     }
@@ -837,6 +859,43 @@ export class TableRuntime {
   async beginHand() {
     const seated = this.state.seats.filter((s) => !s.sitOut && s.playerId && s.stack > 0);
     if (seated.length < 2) return;
+
+    // On-chain: hard-gate first deal on confirmed V2 custody locks (not ledger mirror alone).
+    if (this.arenaMode === "onchain") {
+      if (!this.onchainSessionId) await this.loadOnchainSession();
+      if (!this.onchainSessionId) {
+        console.warn("[table-runtime] beginHand blocked — no onchain session", this.tableId);
+        return;
+      }
+      const oc = await query<{ status: string; player_count: string; lock_count: string }>(
+        `select os.status,
+                (select count(*)::text from onchain_session_players osp where osp.session_id = os.session_id) as player_count,
+                (select count(*)::text from onchain_seat_locks osl
+                  where osl.session_id = os.session_id and osl.status in ('locked','opened','active')) as lock_count
+         from onchain_sessions os
+         where os.session_id = $1
+         limit 1`,
+        [this.onchainSessionId],
+      ).catch(() => ({ rows: [] as { status: string; player_count: string; lock_count: string }[] }));
+      const row = oc.rows[0];
+      if (!row || !["opened", "playing"].includes(row.status)) {
+        console.warn("[table-runtime] beginHand blocked — custody not ready", this.tableId, row?.status);
+        return;
+      }
+      const players = Number(row.player_count ?? 0);
+      const locks = Number(row.lock_count ?? 0);
+      // Prefer seat-lock rows when present; otherwise trust opened status after openSession receipt.
+      if (locks > 0 && locks < Math.min(players, 2)) {
+        console.warn("[table-runtime] beginHand blocked — incomplete V2 locks", this.tableId, {
+          players,
+          locks,
+        });
+        return;
+      }
+      if (row.status === "opened") {
+        await markOnchainSessionPlaying(this.onchainSessionId).catch(() => undefined);
+      }
+    }
 
     // Always continue from DB so restarts / failed inserts cannot collide.
     const hn = await query(`select coalesce(max(hand_number), 0)::int as m from hands where table_id = $1`, [
@@ -983,18 +1042,50 @@ export class TableRuntime {
       return;
     }
 
-    this.actionDeadlineAt = Date.now() + TURN_MS;
-    await this.persistEvent("ACTION_CLOCK", {
-      seatIndex,
-      deadlineAt: this.actionDeadlineAt,
-      turnSeconds: TURN_SECONDS,
-      humanPlay: HUMAN_PLAY,
-    });
-
     let decided: { action: PokerAction; amount?: number; reasonCode: string };
     const useController = !HUMAN_PLAY || this.isBotSeat(seatIndex);
 
-    if (useController) {
+    this.actionDeadlineAt = Date.now() + TURN_MS;
+
+    if (!useController && HUMAN_PLAY) {
+      // Arm pendingHuman BEFORE broadcasting ACTION_CLOCK so clients can act as soon as
+      // they see YOUR TURN (avoids "No action pending — wait for your clock").
+      const humanWait = new Promise<{ action: PokerAction; amount?: number; reasonCode: string }>((resolve) => {
+        if (this.pendingHuman) this.clearPendingHuman("replaced");
+        const timer = setTimeout(async () => {
+          if (this.pendingHuman?.seatIndex !== seatIndex) return;
+          const pending = this.pendingHuman;
+          this.pendingHuman = null;
+          const timeoutDecision = await timeoutFallbackController.decide({
+            state: this.state,
+            seatIndex,
+            profileKey: this.agentProfiles.get(seatIndex) ?? "machine",
+            computeRemainingMs: 0,
+            sessionId: this.onchainSessionId ?? undefined,
+            handId: this.state.handId,
+          });
+          pending.resolve({
+            action: timeoutDecision.action,
+            amount: timeoutDecision.amount,
+            reasonCode: timeoutDecision.reasonCode,
+          });
+        }, TURN_MS);
+        this.pendingHuman = { seatIndex, legal, resolve, timer };
+      });
+      await this.persistEvent("ACTION_CLOCK", {
+        seatIndex,
+        deadlineAt: this.actionDeadlineAt,
+        turnSeconds: TURN_SECONDS,
+        humanPlay: HUMAN_PLAY,
+      });
+      decided = await humanWait;
+    } else if (useController) {
+      await this.persistEvent("ACTION_CLOCK", {
+        seatIndex,
+        deadlineAt: this.actionDeadlineAt,
+        turnSeconds: TURN_SECONDS,
+        humanPlay: HUMAN_PLAY,
+      });
       const profile = this.agentProfiles.get(seatIndex) ?? "machine";
       const controller = this.seatControllerFor(seatIndex);
       const botDecision = await controller.decide({
@@ -1039,31 +1130,13 @@ export class TableRuntime {
         console.warn("agent_invocations insert failed", this.tableId, err);
       }
       await sleep(Math.min(400, TURN_MS / 4));
-    } else if (HUMAN_PLAY) {
-      decided = await new Promise((resolve) => {
-        // Replace any stranded waiter from a previous turn.
-        if (this.pendingHuman) this.clearPendingHuman("replaced");
-        const timer = setTimeout(async () => {
-          if (this.pendingHuman?.seatIndex !== seatIndex) return;
-          const pending = this.pendingHuman;
-          this.pendingHuman = null;
-          const timeoutDecision = await timeoutFallbackController.decide({
-            state: this.state,
-            seatIndex,
-            profileKey: this.agentProfiles.get(seatIndex) ?? "machine",
-            computeRemainingMs: 0,
-            sessionId: this.onchainSessionId ?? undefined,
-            handId: this.state.handId,
-          });
-          pending.resolve({
-            action: timeoutDecision.action,
-            amount: timeoutDecision.amount,
-            reasonCode: timeoutDecision.reasonCode,
-          });
-        }, TURN_MS);
-        this.pendingHuman = { seatIndex, legal, resolve, timer };
-      });
     } else {
+      await this.persistEvent("ACTION_CLOCK", {
+        seatIndex,
+        deadlineAt: this.actionDeadlineAt,
+        turnSeconds: TURN_SECONDS,
+        humanPlay: HUMAN_PLAY,
+      });
       const fold = legal.find((l) => l.action === "fold");
       const check = legal.find((l) => l.action === "check");
       const fallback = fold ?? check ?? legal[0];

@@ -18,6 +18,8 @@ export type SessionMe = {
     profileKind?: ProfileKind;
     chainId?: number | null;
     walletAddress?: string | null;
+    ownerAddress?: string | null;
+    arenaAccountAddress?: string | null;
   } | null;
   profile: {
     id: string;
@@ -44,11 +46,15 @@ export type SessionMe = {
   arenaMode?: ProfileKind;
   chainId?: number | null;
   walletAddress?: string | null;
+  ownerAddress?: string | null;
+  arenaAccountAddress?: string | null;
   available: number;
   atTables: number;
 };
 
 export type PlatformStats = {
+  arenaMode?: "demo" | "onchain";
+  chainId?: number | null;
   activeTables: number;
   occupiedSeats: number;
   activeSessions: number;
@@ -87,8 +93,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void refresh();
-    // Keep wallet / seated / live tables fresh while the app is open.
-    const t = setInterval(() => void refresh(), 4000);
+    // Keep wallet / seated / live tables near real-time while the app is open.
+    const t = setInterval(() => void refresh(), 2000);
     const onFocus = () => void refresh();
     const onVis = () => {
       if (document.visibilityState === "visible") void refresh();

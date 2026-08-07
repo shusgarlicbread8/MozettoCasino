@@ -40,6 +40,13 @@ set("USDC_ADDRESS", anvil.usdc);
 set("NEXT_PUBLIC_USDC_ADDRESS", anvil.usdc);
 set("ARENA_VAULT_ADDRESS", anvil.arenaVault);
 set("NEXT_PUBLIC_ARENA_VAULT_ADDRESS", anvil.arenaVault);
+if (anvil.arenaAccountFactory) {
+  set("ARENA_ACCOUNT_FACTORY_ADDRESS", anvil.arenaAccountFactory);
+  set("NEXT_PUBLIC_ARENA_ACCOUNT_FACTORY_ADDRESS", anvil.arenaAccountFactory);
+}
+if (anvil.arenaAccountImplementation) {
+  set("ARENA_ACCOUNT_IMPLEMENTATION_ADDRESS", anvil.arenaAccountImplementation);
+}
 set("TABLE_REGISTRY_ADDRESS", anvil.tableRegistry);
 set("SETTLEMENT_HUB_ADDRESS", anvil.settlementHub);
 set("CHECKPOINT_REGISTRY_ADDRESS", anvil.checkpointRegistry);
@@ -52,6 +59,7 @@ fs.writeFileSync(envPath, env);
 console.log("Synced .env.local from anvil.json");
 console.log("  mUSDC", anvil.usdc);
 console.log("  vault", anvil.arenaVault);
+console.log("  factory", anvil.arenaAccountFactory || "(none)");
 NODE
 
   # Validate token metadata on-chain

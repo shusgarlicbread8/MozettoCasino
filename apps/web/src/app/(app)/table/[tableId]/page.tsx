@@ -412,6 +412,13 @@ export default function ArenaPage() {
                 setSeatMeta(r.seats || []);
               })
               .catch(() => null);
+            // Keep navbar AT TABLES / live counts in sync when anyone leaves.
+            void refresh();
+            balances.refetch();
+          }
+          if (et === "HAND_SETTLED" || et === "HAND_COMPLETE" || et === "STACKS_UPDATED") {
+            void refresh();
+            balances.refetch();
           }
           if (et === "PLAYER_JOINED") {
             api<{ table: any; seats: any[] }>(`/v1/tables/${tableId}`)
@@ -806,6 +813,7 @@ export default function ArenaPage() {
     { k: "Leave table", bg: "rgba(255,82,82,.08)", border: "rgba(255,82,82,.3)", fg: "#FF8A8A" },
   ];
   const seatedCount = live?.seats?.filter((s) => s.playerId && !s.sitOut && Number(s.stack) > 0).length ?? 0;
+  // AT TABLES = live stacks across seats (nav-synced). Not vault custody lock.
   const session = [
     { k: "TABLE BALANCE", v: myLiveSeat ? money(myLiveSeat.stack) : "—", color: "#EDEDED" },
     { k: "AT TABLES", v: money(balances.displayLocked), color: "#FFB020" },
@@ -878,6 +886,7 @@ export default function ArenaPage() {
       return;
     }
     await refresh();
+    balances.refetch();
     window.location.href = "/poker";
   }
   const myTurn = liveMode && mySeatIndex != null && live?.actingIndex === mySeatIndex;
@@ -893,6 +902,7 @@ export default function ArenaPage() {
     }
     setActingBusy(true);
     setActionError(null);
+    const prevLegal = legal;
     // Hide buttons immediately so double-clicks can't fire stale actions.
     setLive((prev) => (prev ? { ...prev, legalActions: [] } : prev));
     try {
@@ -928,6 +938,12 @@ export default function ArenaPage() {
       }
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Action failed");
+      // Restore buttons so a transient clock race doesn't soft-lock the turn.
+      setLive((prev) =>
+        prev && prev.actingIndex === mySeatIndex && (!prev.legalActions || prev.legalActions.length === 0)
+          ? { ...prev, legalActions: prevLegal }
+          : prev,
+      );
     } finally {
       setActingBusy(false);
     }
@@ -1025,7 +1041,8 @@ export default function ArenaPage() {
               </div>
             </div>
             <div style={{ font: `400 11px ${FONT_MONO}`, color: "#5A5A5A" }}>
-              6-MAX NLHE · ${Number(meta?.small_blind ?? 25)}/${Number(meta?.big_blind ?? 50)} · BUY-IN $
+              {String(meta?.display_game || (Number(meta?.max_seats) === 2 ? "TEXAS HOLD'EM · HEADS-UP" : "POKER (CLASSIC) · 6-MAX"))}{" "}
+              · ${Number(meta?.small_blind ?? 25)}/{Number(meta?.big_blind ?? 50)} · BUY-IN $
               {Number(meta?.min_buy_in ?? 1000).toLocaleString()}–${Number(meta?.max_buy_in ?? 10000).toLocaleString()} ·{" "}
               {connecting ? "CONNECTING" : "LIVE ENGINE"} · 15s CLOCK
             </div>

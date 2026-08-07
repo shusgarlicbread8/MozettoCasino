@@ -2,12 +2,13 @@ import { randomUUID } from "node:crypto";
 import { getPool, query } from "./client.js";
 import {
   ARENA_LEAGUES,
+  arenaFormatConfig,
   stakesForBuyIn,
+  type ArenaFormat,
   type ArenaLeagueId,
 } from "./matchmaking.js";
 import type { ArenaMode } from "./arena-mode.js";
 
-const HU_SEATS = 2;
 const USDC_DECIMALS = 6;
 
 export function leagueBuyInRaw(leagueId: string): bigint {
@@ -60,16 +61,23 @@ export async function insertSeatTicket(opts: {
   nonce: bigint;
   matchmakingPool: string;
   signature: string;
+  arenaAccountAddress?: string;
+  ownerAddress?: string;
+  leagueBit?: number;
+  rated?: boolean;
 }) {
+  const arena = (opts.arenaAccountAddress ?? opts.walletAddress).toLowerCase();
+  const owner = (opts.ownerAddress ?? opts.walletAddress).toLowerCase();
   const res = await query<{ id: string }>(
     `insert into seat_tickets
        (profile_id, wallet_address, chain_id, game_template_id, buy_in,
-        controller_hash, agent_profile_hash, expires_at, nonce, matchmaking_pool, signature, status)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'queued')
+        controller_hash, agent_profile_hash, expires_at, nonce, matchmaking_pool, signature, status,
+        arena_account_address, owner_address, league_bit, rated)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'queued',$12,$13,$14,$15)
      returning id::text`,
     [
       opts.profileId,
-      opts.walletAddress.toLowerCase(),
+      arena, // wallet_address column stores money identity (ArenaAccount)
       opts.chainId,
       opts.gameTemplateId,
       opts.buyInUsdc,
@@ -79,6 +87,10 @@ export async function insertSeatTicket(opts: {
       opts.nonce.toString(),
       opts.matchmakingPool,
       opts.signature,
+      arena,
+      owner,
+      opts.leagueBit ?? null,
+      opts.rated ?? true,
     ],
   );
   return res.rows[0]!.id;
@@ -96,6 +108,10 @@ export async function getQueuedTicketForProfile(profileId: string, chainId: numb
     matchmaking_pool: string;
     signature: string;
     game_template_id: string;
+    arena_account_address: string | null;
+    owner_address: string | null;
+    league_bit: number | null;
+    rated: boolean | null;
   }>(
     `select * from seat_tickets
      where profile_id = $1 and chain_id = $2 and matchmaking_pool = $3
@@ -104,6 +120,24 @@ export async function getQueuedTicketForProfile(profileId: string, chainId: numb
     [profileId, chainId, matchmakingPool],
   );
   return res.rows[0] ?? null;
+}
+
+/** True when this profile's ticket was claimed but the pairer has not linked a session yet. */
+export async function hasInFlightMatchedTicket(
+  profileId: string,
+  chainId: number,
+  matchmakingPool: string,
+): Promise<boolean> {
+  const res = await query<{ id: string }>(
+    `select id::text
+     from seat_tickets
+     where profile_id = $1 and chain_id = $2 and matchmaking_pool = $3
+       and status = 'matched' and expires_at > now()
+     order by created_at desc
+     limit 1`,
+    [profileId, chainId, matchmakingPool],
+  );
+  return Boolean(res.rows[0]);
 }
 
 export type SeatTicketRow = {
@@ -118,6 +152,10 @@ export type SeatTicketRow = {
   matchmaking_pool: string;
   signature: string;
   game_template_id: string;
+  arena_account_address?: string | null;
+  owner_address?: string | null;
+  league_bit?: number | null;
+  rated?: boolean | null;
 };
 
 /** Atomically claim self + opponent queued tickets for HU pairing. */
@@ -134,7 +172,8 @@ export async function claimTicketPair(opts: {
 
     const selfRes = await client.query(
       `select id::text, profile_id::text, wallet_address, buy_in::text, controller_hash, agent_profile_hash,
-              expires_at, nonce::text, matchmaking_pool, signature, game_template_id
+              expires_at, nonce::text, matchmaking_pool, signature, game_template_id,
+              arena_account_address, owner_address, league_bit, rated
        from seat_tickets
        where id = $1 and profile_id = $2 and status = 'queued' and expires_at > now()
        for update`,
@@ -148,7 +187,8 @@ export async function claimTicketPair(opts: {
 
     const oppRes = await client.query(
       `select id::text, profile_id::text, wallet_address, buy_in::text, controller_hash, agent_profile_hash,
-              expires_at, nonce::text, matchmaking_pool, signature, game_template_id
+              expires_at, nonce::text, matchmaking_pool, signature, game_template_id,
+              arena_account_address, owner_address, league_bit, rated
        from seat_tickets
        where status = 'queued' and chain_id = $1 and matchmaking_pool = $2
          and buy_in = $3 and profile_id <> $4 and expires_at > now()
@@ -175,6 +215,188 @@ export async function claimTicketPair(opts: {
   } finally {
     client.release();
   }
+}
+
+/**
+ * Atomically reserve the fullest compatible open on-chain table for one queued
+ * ticket. The player row is inserted in the same transaction, so concurrent
+ * find-match requests cannot overfill a heads-up table.
+ */
+export async function claimOpenOnchainSession(opts: {
+  selfTicketId: string;
+  profileId: string;
+  chainId: number;
+  leagueId: string;
+  buyInUsdc: number;
+  format?: ArenaFormat;
+}): Promise<
+  | {
+      ticket: SeatTicketRow;
+      sessionId: string;
+      tableId: string;
+      tableName: string;
+      seat: number;
+    }
+  | null
+> {
+  const cfg = arenaFormatConfig(opts.format ?? "hu");
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const ticketRes = await client.query(
+      `select id::text, profile_id::text, wallet_address, buy_in::text, controller_hash, agent_profile_hash,
+              expires_at, nonce::text, matchmaking_pool, signature, game_template_id,
+              arena_account_address, owner_address, league_bit, rated
+       from seat_tickets
+       where id = $1 and profile_id = $2 and status = 'queued' and expires_at > now()
+       for update`,
+      [opts.selfTicketId, opts.profileId],
+    );
+    const ticket = ticketRes.rows[0] as SeatTicketRow | undefined;
+    if (!ticket) {
+      await client.query("rollback");
+      return null;
+    }
+
+    const candidateRes = await client.query(
+      `select os.session_id, os.table_id, t.name as table_name, t.max_seats,
+              array(
+                select osp.seat from onchain_session_players osp
+                where osp.session_id = os.session_id and osp.seat is not null
+              ) as used_seats
+       from onchain_sessions os
+       join tables t on t.id = os.table_id
+       where os.chain_id = $1
+         and os.status = 'opened'
+         and t.is_active = true
+         and t.arena_mode = 'onchain'
+         and t.league_id = $2
+         and t.min_buy_in = $3
+         and t.max_seats = $5
+         and t.variant_id = $6
+         and not exists (
+           select 1 from onchain_session_players mine
+           where mine.session_id = os.session_id and mine.profile_id = $4
+         )
+         and not exists (
+           select 1 from table_sessions done
+           where done.table_id = os.table_id and done.status = 'completed'
+         )
+         and (select count(*) from onchain_session_players osp where osp.session_id = os.session_id) < $5
+       order by (
+         select count(*) from onchain_session_players osp where osp.session_id = os.session_id
+       ) desc, os.created_at asc
+       limit 1
+       for update of os skip locked`,
+      [opts.chainId, opts.leagueId, opts.buyInUsdc, opts.profileId, cfg.maxSeats, cfg.variantId],
+    );
+    const candidate = candidateRes.rows[0] as
+      | { session_id: string; table_id: string; table_name: string; max_seats: number; used_seats: number[] }
+      | undefined;
+    if (!candidate) {
+      await client.query("rollback");
+      return null;
+    }
+
+    const used = new Set((candidate.used_seats ?? []).map(Number));
+    let seat = -1;
+    for (let i = 0; i < cfg.maxSeats; i++) {
+      if (!used.has(i)) {
+        seat = i;
+        break;
+      }
+    }
+    if (seat < 0) {
+      await client.query("rollback");
+      return null;
+    }
+    const arena = (ticket.arena_account_address ?? ticket.wallet_address).toLowerCase();
+    const owner = (ticket.owner_address ?? ticket.wallet_address).toLowerCase();
+    await client.query(
+      `insert into onchain_session_players
+         (session_id, profile_id, wallet_address, buy_in_raw, seat, controller_hash, agent_profile_hash,
+          arena_account_address, owner_address)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        candidate.session_id,
+        ticket.profile_id,
+        arena,
+        BigInt(Math.round(Number(ticket.buy_in) * 1e6)).toString(),
+        seat,
+        ticket.controller_hash,
+        ticket.agent_profile_hash,
+        arena,
+        owner,
+      ],
+    );
+    await client.query(
+      `update seat_tickets
+       set status = 'matched', session_id = $2
+       where id = $1`,
+      [ticket.id, candidate.session_id],
+    );
+    await client.query("commit");
+    return {
+      ticket,
+      sessionId: candidate.session_id,
+      tableId: candidate.table_id,
+      tableName: candidate.table_name,
+      seat,
+    };
+  } catch (e) {
+    await client.query("rollback");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/** Claim a queued ticket for creating a new one-player table/session. */
+export async function claimSingleTicket(
+  ticketId: string,
+  profileId: string,
+): Promise<SeatTicketRow | null> {
+  const res = await query<SeatTicketRow>(
+    `update seat_tickets
+     set status = 'matched'
+     where id = $1 and profile_id = $2 and status = 'queued' and expires_at > now()
+     returning id::text, profile_id::text, wallet_address, buy_in::text, controller_hash,
+               agent_profile_hash, expires_at, nonce::text, matchmaking_pool, signature,
+               game_template_id, arena_account_address, owner_address, league_bit, rated`,
+    [ticketId, profileId],
+  );
+  return res.rows[0] ?? null;
+}
+
+/** Undo a failed add-player claim so the player can match again. */
+export async function releaseOpenSessionClaim(ticketId: string, sessionId: string, profileId: string) {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    await client.query(
+      `delete from onchain_session_players where session_id = $1 and profile_id = $2`,
+      [sessionId, profileId],
+    );
+    await client.query(
+      `update seat_tickets set status = 'queued', session_id = null
+       where id = $1 and session_id = $2 and status = 'matched'`,
+      [ticketId, sessionId],
+    );
+    await client.query("commit");
+  } catch (e) {
+    await client.query("rollback");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+export async function markTicketOpened(ticketId: string, sessionId: string) {
+  await query(
+    `update seat_tickets set status = 'opened', session_id = $2
+     where id = $1 and status in ('matched', 'opened')`,
+    [ticketId, sessionId],
+  );
 }
 
 export async function createMatchmakingBatch(opts: {
@@ -279,23 +501,32 @@ export async function insertOnchainSessionPlayers(
     seat: number;
     controllerHash: string;
     agentProfileHash: string;
+    arenaAccountAddress?: string;
+    ownerAddress?: string;
   }>,
 ) {
   for (const p of players) {
+    const arena = (p.arenaAccountAddress ?? p.walletAddress).toLowerCase();
+    const owner = (p.ownerAddress ?? p.walletAddress).toLowerCase();
     await query(
       `insert into onchain_session_players
-         (session_id, profile_id, wallet_address, buy_in_raw, seat, controller_hash, agent_profile_hash)
-       values ($1,$2,$3,$4,$5,$6,$7)
+         (session_id, profile_id, wallet_address, buy_in_raw, seat, controller_hash, agent_profile_hash,
+          arena_account_address, owner_address)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        on conflict (session_id, wallet_address) do update
-         set seat = excluded.seat, buy_in_raw = excluded.buy_in_raw`,
+         set seat = excluded.seat, buy_in_raw = excluded.buy_in_raw,
+             arena_account_address = excluded.arena_account_address,
+             owner_address = excluded.owner_address`,
       [
         sessionId,
         p.profileId,
-        p.walletAddress.toLowerCase(),
+        arena,
         p.buyInRaw.toString(),
         p.seat,
         p.controllerHash,
         p.agentProfileHash,
+        arena,
+        owner,
       ],
     );
   }
@@ -306,7 +537,9 @@ export async function createOnchainArenaTable(opts: {
   buyIn: number;
   createdBy: string;
   chainId: number;
+  format?: ArenaFormat;
 }) {
+  const cfg = arenaFormatConfig(opts.format ?? "hu");
   const { smallBlind, bigBlind, minBuyIn, maxBuyIn } = stakesForBuyIn(opts.buyIn);
   const short = randomUUID().replace(/-/g, "").slice(0, 6).toUpperCase();
   const league = ARENA_LEAGUES.find((l) => l.id === opts.leagueId);
@@ -317,24 +550,35 @@ export async function createOnchainArenaTable(opts: {
     `insert into tables
        (id, name, variant_id, league_id, small_blind, big_blind, min_buy_in, max_buy_in,
         max_seats, rake_pct, rake_cap, privacy, pace, is_active, created_by, arena_mode, chain_id)
-     values ($1,$2,'nlhe_6max',$3,$4,$5,$6,$7,$8,0.025,null,'public','normal',true,$9,'onchain',$10)`,
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,0.025,null,'public','normal',true,$10,'onchain',$11)`,
     [
       id,
       name,
+      cfg.variantId,
       opts.leagueId,
       smallBlind,
       bigBlind,
       minBuyIn,
       maxBuyIn,
-      HU_SEATS,
+      cfg.maxSeats,
       opts.createdBy,
       opts.chainId,
     ],
   );
-  for (let i = 0; i < HU_SEATS; i++) {
+  for (let i = 0; i < cfg.maxSeats; i++) {
     await query(`insert into table_seats (table_id, seat_index, status) values ($1,$2,'empty')`, [id, i]);
   }
-  return { id, name, smallBlind, bigBlind, minBuyIn, maxBuyIn };
+  return {
+    id,
+    name,
+    smallBlind,
+    bigBlind,
+    minBuyIn,
+    maxBuyIn,
+    format: cfg.format,
+    variantId: cfg.variantId,
+    maxSeats: cfg.maxSeats,
+  };
 }
 
 export async function getOnchainSessionForTable(tableId: string) {
@@ -345,10 +589,15 @@ export async function getOnchainSessionForTable(tableId: string) {
   return res.rows[0] ?? null;
 }
 
-export async function getActiveOnchainTableForProfile(profileId: string, chainId: number) {
+export async function getActiveOnchainTableForProfile(
+  profileId: string,
+  chainId: number,
+  format: ArenaFormat = "hu",
+) {
+  const cfg = arenaFormatConfig(format);
   // Return a live custody match the player still owes a join (or is seated at).
-  // - Include players listed on an opened session who have not completed a table_session
-  //   yet (waiting opponent must discover tableId after openSession).
+  // - Include players listed on an opened/playing session who have not completed a table_session
+  //   yet (waiting opponent must discover tableId after pairing / openSession).
   // - Exclude sessions where they already completed/left, so leave does not sticky-loop.
   const res = await query<{
     table_id: string;
@@ -370,6 +619,8 @@ export async function getActiveOnchainTableForProfile(profileId: string, chainId
      join tables t on t.id = os.table_id
      where osp.profile_id = $1 and os.chain_id = $2
        and t.is_active = true
+       and t.max_seats = $3
+       and t.variant_id = $4
        and (
          -- Still seated at the table
          exists (
@@ -378,9 +629,9 @@ export async function getActiveOnchainTableForProfile(profileId: string, chainId
              and ts.owner_id = osp.profile_id
              and ts.status = 'active'
          )
-         -- Or matched/opened and nobody has cashed out yet (safe to join)
+         -- Or matched/opened/playing and nobody has cashed out yet (safe to join)
          or (
-           os.status in ('pending', 'opened')
+           os.status in ('pending', 'opened', 'playing')
            and not exists (
              select 1 from table_sessions ts
              where ts.table_id = os.table_id and ts.status = 'completed'
@@ -389,7 +640,52 @@ export async function getActiveOnchainTableForProfile(profileId: string, chainId
        )
      order by os.created_at desc
      limit 1`,
-    [profileId, chainId],
+    [profileId, chainId, cfg.maxSeats, cfg.variantId],
+  );
+  return res.rows[0] ?? null;
+}
+
+/**
+ * Discover a match that claimed this player's ticket but may not have inserted
+ * onchain_session_players yet (or player is mid openSession). Prevents minting
+ * a second ticket while the pairer is still opening the custody session.
+ */
+export async function getPendingMatchForProfile(
+  profileId: string,
+  chainId: number,
+  format: ArenaFormat = "hu",
+) {
+  const cfg = arenaFormatConfig(format);
+  const res = await query<{
+    table_id: string;
+    table_name: string;
+    session_status: string;
+    ticket_status: string;
+    session_id: string;
+  }>(
+    `select os.table_id,
+            t.name as table_name,
+            os.status as session_status,
+            st.status as ticket_status,
+            os.session_id
+     from seat_tickets st
+     join onchain_sessions os on os.session_id = st.session_id
+     join tables t on t.id = os.table_id
+     where st.profile_id = $1
+       and st.chain_id = $2
+       and st.status in ('matched', 'opened')
+       and st.session_id is not null
+       and t.is_active = true
+       and t.max_seats = $3
+       and t.variant_id = $4
+       and os.status in ('pending', 'opened', 'playing')
+       and not exists (
+         select 1 from table_sessions ts
+         where ts.table_id = os.table_id and ts.status = 'completed'
+       )
+     order by st.created_at desc
+     limit 1`,
+    [profileId, chainId, cfg.maxSeats, cfg.variantId],
   );
   return res.rows[0] ?? null;
 }

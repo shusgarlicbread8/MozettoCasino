@@ -171,8 +171,10 @@ export default function OnchainPortalPage() {
       // Keep the same user-gesture chain so the wallet popup surfaces.
       const signature = await signMessageAsync({ message: nonceRes.message });
       const res = await api<{
-        user?: { displayName?: string };
+        user?: { displayName?: string; arenaAccountAddress?: string | null };
         isNewAccount?: boolean;
+        arenaAccountAddress?: string | null;
+        arenaAccountDeployed?: boolean;
         welcomeFaucet?: number;
       }>("/v1/auth/wallet/verify", {
         method: "POST",
@@ -186,8 +188,13 @@ export default function OnchainPortalPage() {
       });
       setAuthed(true);
       const signedInName = res.user?.displayName || walletAccount.displayName || name;
-      const funded = res.welcomeFaucet ? ` Funded with $${res.welcomeFaucet.toLocaleString()} test chips.` : "";
-      setStatus(`${res.isNewAccount ? "Account created" : "Welcome back"}, ${signedInName}.${funded} Entering arena…`);
+      const aa = res.arenaAccountAddress || res.user?.arenaAccountAddress;
+      const aaNote = aa
+        ? ` Your Arena Account is ready (${aa.slice(0, 6)}…${aa.slice(-4)}).`
+        : "";
+      setStatus(
+        `${res.isNewAccount ? "Account created" : "Welcome back"}, ${signedInName}.${aaNote} Entering arena…`,
+      );
       // Soft navigate — hard reload drops Coinbase SDK connection state.
       router.push("/home");
     } catch (e) {

@@ -96,6 +96,21 @@ export async function getEscrowBalance(userId: string, mode?: ArenaMode): Promis
   return Number(res.rows[0]?.balance ?? 0);
 }
 
+/**
+ * Live chips currently in front of the player at active tables.
+ * Prefer this for chrome "AT TABLES" — updates with wins/losses/leave, unlike
+ * vault.totalLocked which stays at buy-in until custody settlement finishes.
+ */
+export async function getActiveTableStackBalance(userId: string): Promise<number> {
+  const res = await query<{ stack: string }>(
+    `select coalesce(sum(stack), 0)::text as stack
+     from table_sessions
+     where owner_id = $1 and status = 'active'`,
+    [userId],
+  );
+  return Number(res.rows[0]?.stack ?? 0);
+}
+
 async function accountId(userId: string | null, kind: string, label: string, mode: ArenaMode) {
   if (userId) await ensureModeAccounts(userId, mode);
   const res = await query<{ id: string }>(

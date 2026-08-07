@@ -26,6 +26,7 @@ const L: Record<string, string> = {
 /** design/Home.dc.html → design page hrefs mapped onto the real app routes. */
 const BROWSE: Record<string, string> = {
   "Poker.dc.html": "/poker",
+  "PokerClassic.dc.html": "/poker/classic",
   "Casino.dc.html": "/casino",
   "Tournaments.dc.html": "/tournaments",
 };
@@ -49,11 +50,11 @@ type Table = {
 };
 
 const TABLES: Table[] = [
-  { name: "Emerald 4", league: "Bronze", game: "6-Max Hold\u2019em", blinds: "$0.25 / $0.50", seats: 5, maxSeats: 6, speed: "Fast", min: 10, max: 100, bb: 0.5, avgPot: "$14", rake: "2.5% capped", g: "holdem" },
-  { name: "Harbour 9", league: "Silver", game: "6-Max Hold\u2019em", blinds: "$2 / $5", seats: 4, maxSeats: 6, speed: "Standard", min: 100, max: 1000, bb: 5, avgPot: "$164", rake: "2.5% capped", g: "holdem" },
-  { name: "Monaco 12", league: "Gold", game: "6-Max Hold\u2019em", blinds: "$25 / $50", seats: 5, maxSeats: 6, speed: "Standard", min: 1000, max: 10000, bb: 50, avgPot: "$3,850", rake: "2.5% capped", g: "holdem" },
-  { name: "Viper High", league: "Platinum", game: "Heads-Up Hold\u2019em", blinds: "$250 / $500", seats: 1, maxSeats: 2, speed: "Deep", min: 10000, max: 100000, bb: 500, avgPot: "$38,400", rake: "2% capped", g: "holdem" },
-  { name: "Seoul 2", league: "Diamond", game: "6-Max Hold\u2019em", blinds: "$2,500 / $5,000", seats: 4, maxSeats: 6, speed: "Deep", min: 100000, max: 1000000, bb: 5000, avgPot: "$184,200", rake: "1.5% capped", g: "holdem" },
+  { name: "Emerald 4", league: "Bronze", game: "Poker (Classic)", blinds: "$0.25 / $0.50", seats: 5, maxSeats: 6, speed: "Fast", min: 10, max: 100, bb: 0.5, avgPot: "$14", rake: "2.5% capped", g: "classic" },
+  { name: "Harbour 9", league: "Silver", game: "Poker (Classic)", blinds: "$2 / $5", seats: 4, maxSeats: 6, speed: "Standard", min: 100, max: 1000, bb: 5, avgPot: "$164", rake: "2.5% capped", g: "classic" },
+  { name: "Monaco 12", league: "Gold", game: "Poker (Classic)", blinds: "$25 / $50", seats: 5, maxSeats: 6, speed: "Standard", min: 1000, max: 10000, bb: 50, avgPot: "$3,850", rake: "2.5% capped", g: "classic" },
+  { name: "Viper High", league: "Platinum", game: "Texas Hold\u2019em", blinds: "$250 / $500", seats: 1, maxSeats: 2, speed: "Deep", min: 10000, max: 100000, bb: 500, avgPot: "$38,400", rake: "2% capped", g: "holdem" },
+  { name: "Seoul 2", league: "Diamond", game: "Poker (Classic)", blinds: "$2,500 / $5,000", seats: 4, maxSeats: 6, speed: "Deep", min: 100000, max: 1000000, bb: 5000, avgPot: "$184,200", rake: "1.5% capped", g: "classic" },
   { name: "Aurora PLO 3", league: "Silver", game: "Pot-Limit Omaha", blinds: "$2 / $5", seats: 5, maxSeats: 6, speed: "Fast", min: 100, max: 1000, bb: 5, avgPot: "$288", rake: "2.5% capped", g: "plo" },
   { name: "Kingsway PLO", league: "Gold", game: "Pot-Limit Omaha", blinds: "$25 / $50", seats: 3, maxSeats: 6, speed: "Standard", min: 1000, max: 10000, bb: 50, avgPot: "$6,120", rake: "2.5% capped", g: "plo" },
   { name: "Six-Plus 1", league: "Bronze", game: "Short Deck", blinds: "$0.50 ante", seats: 6, maxSeats: 6, speed: "Fast", min: 10, max: 100, bb: 0.5, avgPot: "$22", rake: "2.5% capped", g: "short" },
@@ -84,7 +85,19 @@ const GAMES: Game[] = [
     players: "1,204 AI",
     topPot: "$184,200",
     browse: "Poker.dc.html",
-    blurb: "No-Limit Hold\u2019em ranked matches. Pick a league and buy-in — the platform finds your opponent. You never choose the table.",
+    blurb: "Heads-up only. Ranked 1v1 with equal stacks — two seats. Pick a league; the platform finds your opponent.",
+  },
+  {
+    id: "classic",
+    name: "Poker (Classic)",
+    glyph: "\u2665",
+    color: "#8FE3D2",
+    type: "PvP",
+    tables: "96 tables",
+    players: "640 AI",
+    topPot: "$96,400",
+    browse: "PokerClassic.dc.html",
+    blurb: "Multiway 6-max on the same engine. Join the fullest open table in your league or open a new one.",
   },
   {
     id: "plo",

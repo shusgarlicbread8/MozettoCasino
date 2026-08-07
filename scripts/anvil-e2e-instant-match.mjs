@@ -416,7 +416,7 @@ async function main() {
     warn("No usable table status snapshot");
   }
 
-  // Without a WebSocket client, seats are AI-controlled (HUMAN_PLAY + isBotSeat).
+  // Without a WebSocket client under HUMAN_PLAY, seats wait for timeout fold (not AI).
   // Assert the engine advances instead of HTTP human actions.
   const handAtStart = snap?.handNumber ?? 0;
   const streetAtStart = snap?.street ?? "waiting";

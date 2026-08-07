@@ -1,7 +1,7 @@
 -- Seed reference data + demo owner (VELVET) with fake USDC ledger
 
 insert into games (id, name, category, status, sort_order) values
-  ('holdem', 'No-Limit Hold''em', 'poker', 'enabled', 1),
+  ('holdem', 'Poker', 'poker', 'enabled', 1),
   ('plo', 'Pot-Limit Omaha', 'poker', 'coming_soon', 2),
   ('shortdeck', 'Short Deck', 'poker', 'coming_soon', 3),
   ('blackjack', 'Blackjack', 'casino', 'coming_soon', 4),
@@ -10,12 +10,13 @@ insert into games (id, name, category, status, sort_order) values
 on conflict (id) do update set status = excluded.status, name = excluded.name;
 
 insert into game_variants (id, game_id, name, status, max_seats, metadata) values
-  ('nlhe_6max', 'holdem', '6-Max NLHE', 'enabled', 6, '{"format":"6-max"}'),
+  ('nlhe_6max', 'holdem', 'Poker (Classic)', 'enabled', 6, '{"format":"6-max","product":"poker_classic"}'),
+  ('nlhe_hu', 'holdem', 'Texas Hold''em', 'enabled', 2, '{"format":"hu","product":"texas_holdem"}'),
   ('plo_6max', 'plo', '6-Max PLO', 'coming_soon', 6, '{}'),
   ('shortdeck_6max', 'shortdeck', 'Short Deck', 'coming_soon', 6, '{}'),
   ('bj_standard', 'blackjack', 'Blackjack', 'coming_soon', 1, '{}'),
   ('tcp_standard', 'three_card_poker', 'Three Card Poker', 'coming_soon', 1, '{}')
-on conflict (id) do update set status = excluded.status;
+on conflict (id) do update set status = excluded.status, name = excluded.name, max_seats = excluded.max_seats, metadata = excluded.metadata;
 
 insert into leagues (id, name, color, min_buy_in, sort_order) values
   ('bronze', 'Bronze', '#B87333', 10, 1),

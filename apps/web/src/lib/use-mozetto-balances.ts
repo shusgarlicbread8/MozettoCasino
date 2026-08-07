@@ -8,20 +8,31 @@ import { arenaVaultAbi, erc20Abi, getChainAsset, preferredChainId, type ChainAss
 export type MozettoBalances = {
   isOnchain: boolean;
   address: `0x${string}` | undefined;
+  ownerAddress: `0x${string}` | undefined;
+  arenaAccountAddress: `0x${string}` | undefined;
   chainId: number;
   asset: ChainAsset | null;
-  /** ERC-20 wallet balance (human units). */
+  /** Arena Account ERC-20 balance (playable). */
   wallet: number;
-  /** Vault totalLocked (human units). */
+  /** Owner EOA ERC-20 (not playable for matches). */
+  ownerWallet: number;
+  /** Vault totalLocked for Arena Account (human units) — custody until settle. */
   locked: number;
-  /** Legacy idle vault available (human units). */
+  /** Live chips at active seats from /v1/me (wins/losses/leave). */
+  liveAtTables: number;
+  /** Legacy idle vault available (human units) — usually 0 on V2. */
   legacyMozetto: number;
-  /** wallet + locked + legacy. */
+  /** arena + locked + legacy. */
   netWorth: number;
   /** Wallet for chrome; demo falls back to session available. */
   displayWallet: number;
-  /** At tables for chrome; demo falls back to session atTables. */
+  /**
+   * At tables for chrome: live seat stacks from session, not vault lock.
+   * Leaves / busts clear immediately; vault may still show locked until settle.
+   */
   displayLocked: number;
+  /** Custody still locked on-chain after leave (pending settlement). */
+  pendingSettlement: number;
   loading: boolean;
   refetch: () => void;
 };
@@ -29,8 +40,8 @@ export type MozettoBalances = {
 const POLL_MS = 2_000;
 
 /**
- * Single live balance source for on-chain profiles.
- * Wallet = ERC-20; At Tables = vault totalLocked; net worth includes legacy idle.
+ * Live balances for on-chain profiles.
+ * Playable = Arena Account USDC; At Tables = vault totalLocked(arenaAccount).
  */
 export function useMozettoBalances(): MozettoBalances {
   const { me } = useSession();
@@ -40,20 +51,45 @@ export function useMozettoBalances(): MozettoBalances {
   const isOnchain = (me?.profileKind ?? me?.arenaMode) === "onchain";
   const chainId = isConnected && address ? connectedChainId : (me?.chainId ?? preferredChainId);
   const asset = getChainAsset(chainId);
-  const readAddress = (address ?? (me?.walletAddress as `0x${string}` | undefined)) || undefined;
-  const enabled = Boolean(isOnchain && readAddress && asset?.usdc);
+  const ownerAddress =
+    (address ??
+      (me?.ownerAddress as `0x${string}` | undefined) ??
+      (me?.walletAddress as `0x${string}` | undefined)) ||
+    undefined;
+  const arenaAccountAddress =
+    (me?.arenaAccountAddress as `0x${string}` | undefined) ||
+    (me?.session?.arenaAccountAddress as `0x${string}` | undefined) ||
+    undefined;
+  const playableAddress = arenaAccountAddress ?? ownerAddress;
+  const enabled = Boolean(isOnchain && playableAddress && asset?.usdc);
 
   const {
-    data: walletBal,
-    isLoading: walletLoading,
-    refetch: refetchWallet,
+    data: arenaBal,
+    isLoading: arenaLoading,
+    refetch: refetchArena,
   } = useReadContract({
     address: asset?.usdc,
     abi: erc20Abi,
     functionName: "balanceOf",
-    args: readAddress ? [readAddress] : undefined,
+    args: playableAddress ? [playableAddress] : undefined,
     query: {
       enabled,
+      refetchInterval: POLL_MS,
+      refetchOnWindowFocus: true,
+    },
+  });
+
+  const {
+    data: ownerBal,
+    isLoading: ownerLoading,
+    refetch: refetchOwner,
+  } = useReadContract({
+    address: asset?.usdc,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: ownerAddress ? [ownerAddress] : undefined,
+    query: {
+      enabled: Boolean(isOnchain && ownerAddress && asset?.usdc),
       refetchInterval: POLL_MS,
       refetchOnWindowFocus: true,
     },
@@ -67,7 +103,7 @@ export function useMozettoBalances(): MozettoBalances {
     address: asset?.vault || undefined,
     abi: arenaVaultAbi,
     functionName: "totalLocked",
-    args: readAddress ? [readAddress] : undefined,
+    args: playableAddress ? [playableAddress] : undefined,
     query: {
       enabled: Boolean(enabled && asset?.vault),
       refetchInterval: POLL_MS,
@@ -83,7 +119,7 @@ export function useMozettoBalances(): MozettoBalances {
     address: asset?.vault || undefined,
     abi: arenaVaultAbi,
     functionName: "available",
-    args: readAddress ? [readAddress] : undefined,
+    args: playableAddress ? [playableAddress] : undefined,
     query: {
       enabled: Boolean(enabled && asset?.vault),
       refetchInterval: POLL_MS,
@@ -92,31 +128,41 @@ export function useMozettoBalances(): MozettoBalances {
   });
 
   const decimals = asset?.decimals ?? 6;
-  const wallet =
-    walletBal != null ? Number(formatUnits(walletBal as bigint, decimals)) : 0;
+  const wallet = arenaBal != null ? Number(formatUnits(arenaBal as bigint, decimals)) : 0;
+  const ownerWallet = ownerBal != null ? Number(formatUnits(ownerBal as bigint, decimals)) : 0;
   const locked =
     totalLocked != null ? Number(formatUnits(totalLocked as bigint, decimals)) : 0;
   const legacyMozetto =
     vaultAvailable != null ? Number(formatUnits(vaultAvailable as bigint, decimals)) : 0;
   const netWorth = wallet + locked + legacyMozetto;
 
+  const liveAtTables = Number(me?.atTables ?? 0);
   const demoAvailable = me?.available ?? 0;
-  const demoAtTables = me?.atTables ?? 0;
+  // Chrome AT TABLES follows live seat stacks (API), so leave/bust clears immediately.
+  const displayLocked = me != null ? liveAtTables : isOnchain ? locked : 0;
+  const pendingSettlement =
+    isOnchain && liveAtTables <= 0 && locked > 0.000001 ? locked : 0;
 
   return {
     isOnchain,
-    address: readAddress,
+    address: playableAddress,
+    ownerAddress,
+    arenaAccountAddress,
     chainId,
     asset,
     wallet,
+    ownerWallet,
     locked,
+    liveAtTables,
     legacyMozetto,
     netWorth,
     displayWallet: isOnchain ? wallet : demoAvailable,
-    displayLocked: isOnchain ? locked : demoAtTables,
-    loading: Boolean(enabled && (walletLoading || lockedLoading || availLoading)),
+    displayLocked,
+    pendingSettlement,
+    loading: Boolean(enabled && (arenaLoading || lockedLoading || availLoading || ownerLoading)),
     refetch: () => {
-      void refetchWallet();
+      void refetchArena();
+      void refetchOwner();
       void refetchLocked();
       void refetchAvail();
     },

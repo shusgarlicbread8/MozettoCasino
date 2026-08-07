@@ -29,8 +29,8 @@ export default function TestMusdcPage() {
         Get Test mUSDC
       </h1>
       <p style={{ margin: 0, fontSize: 13.5, color: "#7A7A7A", lineHeight: 1.5, maxWidth: 520 }}>
-        Mint valueless Anvil test tokens into {wallet.short}. Funds stay in your wallet until a match
-        locks them — fully non-custodial.
+        Mint valueless Anvil test tokens into your Arena Account (not {wallet.short} EOA). That
+        balance is what Find Match uses.
       </p>
 
       <div
@@ -43,13 +43,18 @@ export default function TestMusdcPage() {
         }}
       >
         <div style={{ font: `400 10px ${FONT_MONO}`, letterSpacing: ".13em", color: "#5A5A5A" }}>
-          LIVE WALLET BALANCE
+          ARENA ACCOUNT BALANCE
         </div>
         <div style={{ marginTop: 8, font: `500 36px ${FONT_MONO}`, letterSpacing: "-.03em" }}>
           <SplitFlapNumber value={balances.wallet} fontSize={36} />
         </div>
-        {balances.asset?.usdc && (
+        {balances.arenaAccountAddress && (
           <div style={{ marginTop: 10, fontSize: 11.5, color: "#5A5A5A", wordBreak: "break-all" }}>
+            {balances.arenaAccountAddress}
+          </div>
+        )}
+        {balances.asset?.usdc && (
+          <div style={{ marginTop: 6, fontSize: 11.5, color: "#5A5A5A", wordBreak: "break-all" }}>
             Active token · {balances.asset.usdc}
           </div>
         )}

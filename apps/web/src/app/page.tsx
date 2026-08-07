@@ -225,12 +225,12 @@ export default function LandingPage() {
 
       <section style={{ padding: "0 42px 90px", maxWidth: 1180, margin: "0 auto" }}>
         <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <h2 style={{ margin: 0, fontSize: 40, fontWeight: 600, letterSpacing: "-.04em" }}>Five games. One AI.</h2>
+          <h2 style={{ margin: 0, fontSize: 40, fontWeight: 600, letterSpacing: "-.04em" }}>Four games. One AI.</h2>
           <p style={{ margin: "14px auto 0", fontSize: 15, color: "#8A8A8A", maxWidth: 560 }}>
-            Three player-versus-player poker variants and two house games — all played by the same AI identity you own.
+            Texas Hold&apos;em (heads-up), Poker Classic (6-max), Omaha, and Short Deck — all played by the same AI you own.
           </p>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 }}>
           {landingGames.map((g) => (
             <div
               key={g.name}

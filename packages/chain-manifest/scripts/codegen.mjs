@@ -65,8 +65,12 @@ function load(network) {
     isTestAsset,
     faucetEnabled,
     arenaVault: hex(file.arenaVault),
+    arenaVaultV1: hex(file.arenaVaultV1),
+    arenaAccountFactory: hex(file.arenaAccountFactory),
+    arenaAccountImplementation: hex(file.arenaAccountImplementation),
     tableRegistry: hex(file.tableRegistry),
     settlementHub: hex(file.settlementHub),
+    settlementHubV1: hex(file.settlementHubV1),
     checkpointRegistry: hex(file.checkpointRegistry),
     randomnessCoordinator: hex(file.randomnessCoordinator),
     feeTreasury: hex(file.feeTreasury),
@@ -92,8 +96,12 @@ const blocks = networks
     isTestAsset: ${e.isTestAsset},
     faucetEnabled: ${e.faucetEnabled},
     arenaVault: ${addr(e.arenaVault)},
+    arenaVaultV1: ${addr(e.arenaVaultV1)},
+    arenaAccountFactory: ${addr(e.arenaAccountFactory)},
+    arenaAccountImplementation: ${addr(e.arenaAccountImplementation)},
     tableRegistry: ${addr(e.tableRegistry)},
     settlementHub: ${addr(e.settlementHub)},
+    settlementHubV1: ${addr(e.settlementHubV1)},
     checkpointRegistry: ${addr(e.checkpointRegistry)},
     randomnessCoordinator: ${addr(e.randomnessCoordinator)},
     feeTreasury: ${addr(e.feeTreasury)},
@@ -122,8 +130,12 @@ export type ChainManifestEntry = {
   isTestAsset: boolean;
   faucetEnabled: boolean;
   arenaVault: HexAddress | null;
+  arenaVaultV1: HexAddress | null;
+  arenaAccountFactory: HexAddress | null;
+  arenaAccountImplementation: HexAddress | null;
   tableRegistry: HexAddress | null;
   settlementHub: HexAddress | null;
+  settlementHubV1: HexAddress | null;
   checkpointRegistry: HexAddress | null;
   randomnessCoordinator: HexAddress | null;
   feeTreasury: HexAddress | null;

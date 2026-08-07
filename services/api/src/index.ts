@@ -4,6 +4,7 @@ import cookie from "@fastify/cookie";
 import { randomUUID } from "node:crypto";
 import {
   query,
+  getActiveTableStackBalance,
   getAvailableBalance,
   getEscrowBalance,
   listLedger,
@@ -20,6 +21,7 @@ import {
   getUserArenaMode,
   ensureModeAccounts,
   getProfileKind,
+  type ArenaFormat,
 } from "@mozetto/database";
 import { getChainConfig } from "@mozetto/blockchain";
 import { corsOriginCheck } from "@mozetto/server-env";
@@ -52,21 +54,64 @@ registerVerifyRoutes(app);
 
 app.get("/health", async () => ({ ok: true }));
 
-app.get("/v1/stats", async () => {
-  // Live counts from seats/sessions — not stale "is_active" table rows with nobody seated.
-  // PLAYERS = registered accounts only (linked auth user), not seed/system rows.
-  const stats = await query(`
+app.get("/v1/stats", async (req) => {
+  // Scope live counts to the caller's world (demo vs on-chain). Never mix the two.
+  const session = await readSession(req);
+  const q = (req.query as { mode?: string } | undefined)?.mode;
+  const mode =
+    q === "demo" || q === "onchain"
+      ? q
+      : session?.profileKind === "onchain"
+        ? "onchain"
+        : "demo";
+  const chainId = mode === "onchain" ? (session?.chainId ?? null) : null;
+
+  // Scrub ghost seats / idle empties so topbar matches reality.
+  await closeIdleArenaTables().catch(() => null);
+
+  const stats = await query(
+    `
     select
-      (select count(distinct s.table_id)::int from table_seats s where s.status = 'occupied') as active_tables,
-      (select count(*)::int from table_seats where status = 'occupied') as occupied_seats,
-      (select count(*)::int from table_sessions where status = 'active') as active_sessions,
-      (select count(*)::int from hands where status = 'settled') as settled_hands,
+      (select count(distinct ts.table_id)::int
+         from table_sessions ts
+         join tables t on t.id = ts.table_id
+        where ts.status = 'active'
+          and t.arena_mode = $1::arena_mode
+          and ($2::int is null or t.chain_id = $2)
+      ) as active_tables,
+      (select count(*)::int
+         from table_sessions ts
+         join tables t on t.id = ts.table_id
+        where ts.status = 'active'
+          and t.arena_mode = $1::arena_mode
+          and ($2::int is null or t.chain_id = $2)
+      ) as occupied_seats,
+      (select count(*)::int
+         from table_sessions ts
+         join tables t on t.id = ts.table_id
+        where ts.status = 'active'
+          and t.arena_mode = $1::arena_mode
+          and ($2::int is null or t.chain_id = $2)
+      ) as active_sessions,
+      (select count(*)::int
+         from hands h
+         join tables t on t.id = h.table_id
+        where (h.status = 'settled' or h.settled_at is not null)
+          and t.arena_mode = $1::arena_mode
+          and ($2::int is null or t.chain_id = $2 or t.chain_id is null)
+      ) as settled_hands,
       (select count(*)::int from profiles
-        where auth_user_id is not null and handle <> 'system') as profiles
-  `);
+        where auth_user_id is not null and handle <> 'system'
+          and coalesce(profile_kind::text, 'demo') = $1::text
+      ) as profiles
+  `,
+    [mode, chainId],
+  );
   const row = stats.rows[0] ?? {};
   const players = Number(row.profiles ?? 0);
   return {
+    arenaMode: mode,
+    chainId,
     activeTables: Number(row.active_tables ?? 0),
     occupiedSeats: Number(row.occupied_seats ?? 0),
     activeSessions: Number(row.active_sessions ?? 0),
@@ -102,6 +147,8 @@ app.get("/v1/me", async (req, reply) => {
       profileKind,
       chainId: session.chainId,
       walletAddress: session.walletAddress,
+      ownerAddress: session.ownerAddress ?? session.walletAddress,
+      arenaAccountAddress: session.arenaAccountAddress,
     },
     profile: profile.rows[0],
     agent: agent.rows[0],
@@ -110,8 +157,11 @@ app.get("/v1/me", async (req, reply) => {
     arenaMode,
     chainId: session.chainId,
     walletAddress: session.walletAddress,
+    ownerAddress: session.ownerAddress ?? session.walletAddress,
+    arenaAccountAddress: session.arenaAccountAddress,
     available: await getAvailableBalance(userId, arenaMode),
-    atTables: await getEscrowBalance(userId, arenaMode),
+    // Live stacks at active seats — not vault lock / ledger escrow (those lag leave).
+    atTables: await getActiveTableStackBalance(userId),
     chain: publicChainConfig(
       session.chainId === 8453 ? "base" : session.chainId === 84532 ? "base-sepolia" : undefined,
     ),
@@ -234,11 +284,26 @@ app.get("/v1/tables/:id", async (req, reply) => {
   const id = (req.params as { id: string }).id;
   const table = await query(
     `select t.*, l.color as league_color, l.name as league_name,
+            gv.name as variant_name,
       (select count(*)::int from table_seats s where s.table_id = t.id and s.status = 'occupied') as seated
-     from tables t join leagues l on l.id = t.league_id where t.id = $1`,
+     from tables t
+     join leagues l on l.id = t.league_id
+     left join game_variants gv on gv.id = t.variant_id
+     where t.id = $1`,
     [id],
   );
   if (!table.rows[0]) return reply.code(404).send({ error: "not_found" });
+  const row = table.rows[0] as Record<string, unknown>;
+  const maxSeats = Number(row.max_seats ?? 6);
+  const variantId = String(row.variant_id ?? "");
+  const productLabel =
+    variantId === "nlhe_hu" || maxSeats === 2
+      ? "Texas Hold'em"
+      : variantId === "nlhe_6max"
+        ? "Poker (Classic)"
+        : String(row.variant_name ?? "Poker");
+  const formatLabel =
+    variantId === "nlhe_hu" || maxSeats === 2 ? "HEADS-UP" : maxSeats <= 6 ? "6-MAX" : `${maxSeats}-MAX`;
   const seats = await query(
     `select s.*, a.handle as agent_handle, a.display_name as agent_display_name, a.glyph, a.color as agent_color, a.current_version,
             p.handle as owner_handle, p.display_name as owner_display_name
@@ -248,7 +313,15 @@ app.get("/v1/tables/:id", async (req, reply) => {
      where s.table_id = $1 order by s.seat_index`,
     [id],
   );
-  return { table: table.rows[0], seats: seats.rows };
+  return {
+    table: {
+      ...row,
+      product_label: productLabel,
+      format_label: formatLabel,
+      display_game: `${productLabel.toUpperCase()} · ${formatLabel}`,
+    },
+    seats: seats.rows,
+  };
 });
 
 app.post("/v1/tables", async (req, reply) => {
@@ -271,8 +344,9 @@ app.post("/v1/tables", async (req, reply) => {
   const id = `tbl_${randomUUID().slice(0, 8)}`;
   const invite = body.privacy === "invite_only" ? randomUUID().slice(0, 8).toUpperCase() : null;
   await query(
-    `insert into tables (id, name, variant_id, league_id, small_blind, big_blind, min_buy_in, max_buy_in, privacy, invite_code, created_by)
-     values ($1,$2,'nlhe_6max',$3,$4,$5,$6,$7,$8,$9,$10)`,
+    `insert into tables (id, name, variant_id, league_id, small_blind, big_blind, min_buy_in, max_buy_in,
+        max_seats, privacy, invite_code, created_by)
+     values ($1,$2,'nlhe_6max',$3,$4,$5,$6,$7,6,$8,$9,$10)`,
     [
       id,
       body.name.trim(),
@@ -393,7 +467,7 @@ app.get("/v1/wallet", async (req, reply) => {
   const profileKind = session.profileKind;
   const arenaMode = profileKind === "onchain" ? "onchain" : "demo";
   const available = await getAvailableBalance(userId, arenaMode);
-  const atTables = await getEscrowBalance(userId, arenaMode);
+  const atTables = await getActiveTableStackBalance(userId);
   const ledger = await listLedger(userId, 40, arenaMode);
   const sessions = await query(
     `select s.*, t.name as table_name, t.arena_mode::text as arena_mode from table_sessions s
@@ -700,16 +774,19 @@ app.get("/v1/leagues", async () => {
   return { leagues: leagues.rows };
 });
 
-/** Ranked Arena lobby — leagues, buy-in ladders, live occupancy. No public table list. */
-app.get("/v1/arena", async (req) => {
-  const session = await readSession(req);
-  const mode = session?.profileKind === "onchain" ? "onchain" : "demo";
-  const chainId = session?.chainId ?? null;
-  const stats = await arenaLobbyStats(mode, chainId);
+function arenaLobbyPayload(
+  mode: "demo" | "onchain",
+  chainId: number | null,
+  profileKind: string | null | undefined,
+  format: ArenaFormat,
+  stats: { league_id: string; tables: number; seated: number }[],
+) {
   const byLeague = Object.fromEntries(stats.map((s) => [s.league_id, s]));
   return {
     arenaMode: mode,
-    profileKind: session?.profileKind ?? null,
+    format,
+    product: format === "classic" ? "poker_classic" : "texas_holdem",
+    profileKind: profileKind ?? null,
     chainId,
     leagues: ARENA_LEAGUES.map((l) => ({
       ...l,
@@ -717,16 +794,71 @@ app.get("/v1/arena", async (req) => {
       seated: byLeague[l.id]?.seated ?? 0,
     })),
   };
+}
+
+/** Texas Hold'em Ranked Arena lobby — heads-up only. */
+app.get("/v1/arena", async (req) => {
+  const session = await readSession(req);
+  const mode = session?.profileKind === "onchain" ? "onchain" : "demo";
+  const chainId = session?.chainId ?? null;
+  const stats = await arenaLobbyStats(mode, chainId, "hu");
+  return arenaLobbyPayload(mode, chainId, session?.profileKind, "hu", stats);
 });
 
+/** Poker (Classic) Arena lobby — 6-max multiway. */
+app.get("/v1/arena/classic", async (req) => {
+  const session = await readSession(req);
+  const mode = session?.profileKind === "onchain" ? "onchain" : "demo";
+  const chainId = session?.chainId ?? null;
+  const stats = await arenaLobbyStats(mode, chainId, "classic");
+  return arenaLobbyPayload(mode, chainId, session?.profileKind, "classic", stats);
+});
+
+async function persistAiProfile(
+  profileId: string,
+  profileKey: string | null,
+  risk: string,
+) {
+  if (!profileKey) return;
+  const agent = await query(`select id from agent_identities where owner_id = $1 limit 1`, [profileId]);
+  if (!agent.rows[0]) return;
+  const agentId = agent.rows[0].id as string;
+  await query(`update agent_configs set is_active = false where agent_id = $1`, [agentId]);
+  await query(
+    `insert into agent_configs (agent_id, profile_key, risk, instruction, is_active)
+     values ($1,$2,$3,null,true)`,
+    [agentId, profileKey, risk],
+  );
+}
+
+async function joinGameTable(
+  req: { headers: { authorization?: string; cookie?: string } },
+  tableId: string,
+  buyIn: number,
+) {
+  const auth = req.headers.authorization;
+  const cookie = req.headers.cookie;
+  const res = await fetch(`${GAME_HTTP}/v1/tables/${tableId}/join`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(auth ? { authorization: auth } : {}),
+      ...(cookie ? { cookie } : {}),
+    },
+    body: JSON.stringify({ buyIn }),
+  });
+  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  return { res, data };
+}
+
 /**
- * Ranked Arena matchmaking.
- * Body: { leagueId, profileKey? }
- * Buy-in is never sent by the client — it's the league's fixed amount.
- * Finds an open seat at the same league or creates a new HU table, then
- * joins the caller via the game-server.
+ * Shared find-match for Texas Hold'em (HU) and Poker Classic (6-max).
  */
-app.post("/v1/arena/find-match", async (req, reply) => {
+async function executeArenaFindMatch(
+  req: Parameters<typeof requireUser>[0],
+  reply: Parameters<typeof requireUser>[1],
+  format: ArenaFormat,
+) {
   const session = await requireUser(req, reply);
   if (!session) return;
   const body = req.body as {
@@ -739,29 +871,20 @@ app.post("/v1/arena/find-match", async (req, reply) => {
     return reply.code(400).send({ error: "invalid_request", message: "leagueId required" });
   }
 
-  // Persist AI profile before seating so the game-server reads the right loadout.
   const allowed = ["shark", "professor", "fox", "machine"];
   const profileKey = body.profileKey && allowed.includes(body.profileKey) ? body.profileKey : null;
-  if (profileKey) {
-    const agent = await query(`select id from agent_identities where owner_id = $1 limit 1`, [session.profileId]);
-    if (agent.rows[0]) {
-      const agentId = agent.rows[0].id as string;
-      await query(`update agent_configs set is_active = false where agent_id = $1`, [agentId]);
-      await query(
-        `insert into agent_configs (agent_id, profile_key, risk, instruction, is_active)
-         values ($1,$2,$3,null,true)`,
-        [agentId, profileKey, body.risk ?? "balanced"],
-      );
-    }
-  }
+  await persistAiProfile(session.profileId, profileKey, body.risk ?? "balanced");
 
   const arenaMode = session.profileKind === "onchain" ? "onchain" : "demo";
 
   if (arenaMode === "onchain") {
-    const onchain = await handleOnchainFindMatch(req, reply, session, leagueId, profileKey);
+    const onchain = await handleOnchainFindMatch(req, reply, session, leagueId, profileKey, format);
     if (!onchain || reply.sent) return;
     if ("status" in onchain && onchain.status === "waiting") {
       return onchain;
+    }
+    if ("status" in onchain && onchain.status === "matching") {
+      return { ...onchain, joined: false };
     }
     if (onchain.alreadySeated) {
       return { ...onchain, joined: true };
@@ -770,23 +893,11 @@ app.post("/v1/arena/find-match", async (req, reply) => {
       return { ...onchain, joined: false };
     }
 
-    // Join with retries — Instant mirrors / session opened may land a moment after openSession.
-    const auth = req.headers.authorization;
-    const cookie = req.headers.cookie;
     const joinDeadline = Date.now() + 25_000;
     let lastErr: Record<string, unknown> = {};
     while (Date.now() < joinDeadline) {
       try {
-        const res = await fetch(`${GAME_HTTP}/v1/tables/${onchain.tableId}/join`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            ...(auth ? { authorization: auth } : {}),
-            ...(cookie ? { cookie } : {}),
-          },
-          body: JSON.stringify({ buyIn: onchain.buyIn }),
-        });
-        const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        const { res, data } = await joinGameTable(req, onchain.tableId, onchain.buyIn);
         if (res.ok) {
           return {
             ...onchain,
@@ -817,7 +928,6 @@ app.post("/v1/arena/find-match", async (req, reply) => {
       await new Promise((r) => setTimeout(r, 800));
     }
 
-    // Session is on-chain; client can keep polling Find Match / table until seated.
     return {
       ...onchain,
       joined: false,
@@ -835,6 +945,7 @@ app.post("/v1/arena/find-match", async (req, reply) => {
       leagueId,
       arenaMode,
       chainId: session.chainId,
+      format,
     });
   } catch (e) {
     if (e instanceof InsufficientFundsError) {
@@ -854,19 +965,8 @@ app.post("/v1/arena/find-match", async (req, reply) => {
     return { ...match, joined: true };
   }
 
-  const auth = req.headers.authorization;
-  const cookie = req.headers.cookie;
   try {
-    const res = await fetch(`${GAME_HTTP}/v1/tables/${match.tableId}/join`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(auth ? { authorization: auth } : {}),
-        ...(cookie ? { cookie } : {}),
-      },
-      body: JSON.stringify({ buyIn: match.buyIn }),
-    });
-    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    const { res, data } = await joinGameTable(req, match.tableId, match.buyIn);
     if (!res.ok) {
       return reply.code(res.status).send({
         error: "join_failed",
@@ -888,7 +988,15 @@ app.post("/v1/arena/find-match", async (req, reply) => {
       match,
     });
   }
-});
+}
+
+/** Texas Hold'em Ranked Arena — heads-up find match. */
+app.post("/v1/arena/find-match", async (req, reply) => executeArenaFindMatch(req, reply, "hu"));
+
+/** Poker (Classic) — 6-max find match (join fullest open table or open one). */
+app.post("/v1/arena/classic/find-match", async (req, reply) =>
+  executeArenaFindMatch(req, reply, "classic"),
+);
 
 app.get("/v1/sessions", async (req, reply) => {
   const session = await requireUser(req, reply);

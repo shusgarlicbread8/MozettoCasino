@@ -42,9 +42,36 @@ export const ARENA_LEAGUES = [
 
 export type ArenaLeagueId = (typeof ARENA_LEAGUES)[number]["id"];
 
+/** Texas Hold'em — heads-up only. */
+export const VARIANT_TEXAS_HU = "nlhe_hu";
+/** Poker (Classic) — multiway 6-max. */
+export const VARIANT_POKER_CLASSIC = "nlhe_6max";
+export const HU_SEATS = 2;
+export const CLASSIC_SEATS = 6;
+
+export type ArenaFormat = "hu" | "classic";
+
+export function arenaFormatConfig(format: ArenaFormat) {
+  if (format === "classic") {
+    return {
+      format: "classic" as const,
+      variantId: VARIANT_POKER_CLASSIC,
+      maxSeats: CLASSIC_SEATS,
+      productLabel: "Poker (Classic)",
+      ratingPoolId: "nlhe_6max_standard",
+    };
+  }
+  return {
+    format: "hu" as const,
+    variantId: VARIANT_TEXAS_HU,
+    maxSeats: HU_SEATS,
+    productLabel: "Texas Hold'em",
+    ratingPoolId: "hu_holdem_standard",
+  };
+}
+
 const IDLE_MINUTES = 10;
 const MAX_PAIR_MATCHES_PER_DAY = 5;
-const HU_SEATS = 2;
 
 /** Big blind is engraved as 10% of buy-in, small blind as 5% — never a range. */
 const BIG_BLIND_PCT = 0.1;
@@ -69,23 +96,44 @@ export class InsufficientFundsError extends Error {
   }
 }
 
-/** Deactivate ranked tables that have been empty for IDLE_MINUTES. */
+/**
+ * Clear ghost seats, then deactivate ranked tables with nobody seated for IDLE_MINUTES.
+ * Covers both Texas Hold'em (2) and Poker Classic (6).
+ */
 export async function closeIdleArenaTables() {
+  await query(
+    `update table_seats s
+     set status = 'empty', agent_id = null, owner_id = null, stack = 0, updated_at = now()
+     where s.status = 'occupied'
+       and not exists (
+         select 1 from table_sessions ts
+         where ts.table_id = s.table_id
+           and ts.status = 'active'
+           and (s.owner_id is null or ts.owner_id = s.owner_id)
+       )`,
+  );
+
   const res = await query(
     `update tables t set is_active = false
      where t.is_active = true
        and t.privacy = 'public'
-       and t.max_seats = $1
+       and t.max_seats in ($1, $2)
+       and t.variant_id in ($3, $4)
+       and not exists (
+         select 1 from table_sessions ts
+         where ts.table_id = t.id and ts.status = 'active'
+       )
        and not exists (
          select 1 from table_seats s
          where s.table_id = t.id and s.status = 'occupied'
        )
        and coalesce(
+         (select max(ts.ended_at) from table_sessions ts where ts.table_id = t.id),
          (select max(s.updated_at) from table_seats s where s.table_id = t.id),
          t.created_at
-       ) < now() - ($2::int * interval '1 minute')
+       ) < now() - ($5::int * interval '1 minute')
      returning t.id`,
-    [HU_SEATS, IDLE_MINUTES],
+    [HU_SEATS, CLASSIC_SEATS, VARIANT_TEXAS_HU, VARIANT_POKER_CLASSIC, IDLE_MINUTES],
   );
   return (res.rows as { id: string }[]).map((r) => r.id);
 }
@@ -109,7 +157,6 @@ async function pairCappedToday(ownerA: string, ownerB: string): Promise<boolean>
   );
   if (Number(rated.rows[0]?.n ?? 0) >= MAX_PAIR_MATCHES_PER_DAY) return true;
 
-  // Also count recent completed sessions that overlapped (covers unrated stretches).
   const sessions = await query(
     `select count(*)::int as n from table_sessions sa
      join table_sessions sb on sb.table_id = sa.table_id and sb.owner_id = $2
@@ -128,7 +175,9 @@ async function createArenaTable(opts: {
   createdBy: string;
   arenaMode: ArenaMode;
   chainId?: number | null;
+  format: ArenaFormat;
 }) {
+  const cfg = arenaFormatConfig(opts.format);
   const { smallBlind, bigBlind, minBuyIn, maxBuyIn } = stakesForBuyIn(opts.buyIn);
   const short = randomUUID().replace(/-/g, "").slice(0, 6).toUpperCase();
   const league = ARENA_LEAGUES.find((l) => l.id === opts.leagueId);
@@ -141,45 +190,43 @@ async function createArenaTable(opts: {
     `insert into tables
        (id, name, variant_id, league_id, small_blind, big_blind, min_buy_in, max_buy_in,
         max_seats, rake_pct, rake_cap, privacy, pace, is_active, created_by, arena_mode, chain_id)
-     values ($1,$2,'nlhe_6max',$3,$4,$5,$6,$7,$8,0.025,null,'public','normal',true,$9,$10::arena_mode,$11)`,
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,0.025,null,'public','normal',true,$10,$11::arena_mode,$12)`,
     [
       id,
       name,
+      cfg.variantId,
       opts.leagueId,
       smallBlind,
       bigBlind,
       minBuyIn,
       maxBuyIn,
-      HU_SEATS,
+      cfg.maxSeats,
       opts.createdBy,
       opts.arenaMode,
       chainId,
     ],
   );
-  for (let i = 0; i < HU_SEATS; i++) {
+  for (let i = 0; i < cfg.maxSeats; i++) {
     await query(`insert into table_seats (table_id, seat_index, status) values ($1,$2,'empty')`, [id, i]);
   }
-  return { id, name, smallBlind, bigBlind, minBuyIn, maxBuyIn };
+  return { id, name, smallBlind, bigBlind, minBuyIn, maxBuyIn, format: opts.format, variantId: cfg.variantId };
 }
 
 /**
- * Ranked Arena matchmaking:
- * 1. If already seated at an active table → return that table.
- * 2. Prefer an existing open seat at the same league (avoid over-matched pairs).
- * 3. Otherwise create a fresh HU table.
- *
- * Buy-in is never typed by the player — it is the league's fixed amount.
- * If the wallet can't cover it, we throw InsufficientFundsError so the
- * caller can prompt a top-up instead of silently failing.
+ * Arena matchmaking for Texas Hold'em (HU) or Poker Classic (6-max).
+ * Buy-in is the league's fixed amount.
  */
 export async function findArenaMatch(opts: {
   userId: string;
   leagueId: string;
   arenaMode?: ArenaMode;
   chainId?: number | null;
+  format?: ArenaFormat;
 }) {
   await closeIdleArenaTables();
 
+  const format = opts.format ?? "hu";
+  const cfg = arenaFormatConfig(format);
   const arenaMode = opts.arenaMode ?? (await getUserArenaMode(opts.userId));
   const chainId = arenaMode === "onchain" ? (opts.chainId ?? 84532) : null;
 
@@ -192,15 +239,17 @@ export async function findArenaMatch(opts: {
     throw new InsufficientFundsError(buyIn, available, league.id);
   }
 
-  // Already in a live session in this mode? Send them back.
+  // Already in a live session for this format? Send them back.
   const seated = await query(
     `select s.table_id, t.name from table_sessions s
      join tables t on t.id = s.table_id
      where s.owner_id = $1 and s.status = 'active' and t.is_active = true
        and t.arena_mode = $2::arena_mode
-       and ($3::int is null or t.chain_id is null or t.chain_id = $3)
+       and t.max_seats = $3
+       and t.variant_id = $4
+       and ($5::int is null or t.chain_id is null or t.chain_id = $5)
      order by s.started_at desc limit 1`,
-    [opts.userId, arenaMode, chainId],
+    [opts.userId, arenaMode, cfg.maxSeats, cfg.variantId, chainId],
   );
   if (seated.rows[0]) {
     return {
@@ -212,10 +261,11 @@ export async function findArenaMatch(opts: {
       leagueId: opts.leagueId,
       arenaMode,
       chainId,
+      format,
+      variantId: cfg.variantId,
     };
   }
 
-  // Candidates: same mode (+ chain for on-chain) + league + exact buy-in, open seat, HU ranked.
   const candidates = await query<{ id: string; name: string; seated: number }>(
     `select t.id, t.name,
             (select count(*)::int from table_seats s where s.table_id = t.id and s.status = 'occupied') as seated
@@ -225,27 +275,31 @@ export async function findArenaMatch(opts: {
        and t.league_id = $1
        and t.min_buy_in = $2
        and t.max_seats = $3
-       and t.arena_mode = $4::arena_mode
-       and ($5::int is null or t.chain_id = $5)
+       and t.variant_id = $4
+       and t.arena_mode = $5::arena_mode
+       and ($6::int is null or t.chain_id = $6)
        and exists (
          select 1 from table_seats s
          where s.table_id = t.id and s.status = 'empty'
        )
      order by seated desc, t.created_at asc`,
-    [opts.leagueId, buyIn, HU_SEATS, arenaMode, chainId],
+    [opts.leagueId, buyIn, cfg.maxSeats, cfg.variantId, arenaMode, chainId],
   );
 
   for (const c of candidates.rows) {
     const owners = await seatedOwners(c.id);
     if (owners.includes(opts.userId)) continue;
-    let blocked = false;
-    for (const opp of owners) {
-      if (await pairCappedToday(opts.userId, opp)) {
-        blocked = true;
-        break;
+    // Pair cap only for HU rated; Classic can share tables more freely.
+    if (format === "hu") {
+      let blocked = false;
+      for (const opp of owners) {
+        if (await pairCappedToday(opts.userId, opp)) {
+          blocked = true;
+          break;
+        }
       }
+      if (blocked) continue;
     }
-    if (blocked) continue;
     return {
       tableId: c.id,
       tableName: c.name,
@@ -255,6 +309,8 @@ export async function findArenaMatch(opts: {
       leagueId: opts.leagueId,
       arenaMode,
       chainId,
+      format,
+      variantId: cfg.variantId,
     };
   }
 
@@ -264,6 +320,7 @@ export async function findArenaMatch(opts: {
     createdBy: opts.userId,
     arenaMode,
     chainId,
+    format,
   });
   return {
     tableId: created.id,
@@ -274,22 +331,47 @@ export async function findArenaMatch(opts: {
     leagueId: opts.leagueId,
     arenaMode,
     chainId,
+    format,
+    variantId: cfg.variantId,
   };
 }
 
-export async function arenaLobbyStats(arenaMode?: ArenaMode, chainId?: number | null) {
+export async function findClassicArenaMatch(opts: {
+  userId: string;
+  leagueId: string;
+  arenaMode?: ArenaMode;
+  chainId?: number | null;
+}) {
+  return findArenaMatch({ ...opts, format: "classic" });
+}
+
+export async function arenaLobbyStats(
+  arenaMode?: ArenaMode,
+  chainId?: number | null,
+  format: ArenaFormat = "hu",
+) {
   await closeIdleArenaTables();
   const mode = arenaMode ?? "demo";
+  const cfg = arenaFormatConfig(format);
   const rows = await query(
     `select t.league_id,
             count(*)::int as tables,
-            coalesce(sum((select count(*)::int from table_seats s where s.table_id = t.id and s.status='occupied')),0)::int as seated
+            coalesce(sum((
+              select count(*)::int from table_sessions ts
+              where ts.table_id = t.id and ts.status = 'active'
+            )), 0)::int as seated
      from tables t
-     where t.is_active = true and t.privacy = 'public' and t.max_seats = $1
-       and t.arena_mode = $2::arena_mode
-       and ($3::int is null or t.chain_id = $3 or (t.chain_id is null and $2 = 'demo'))
+     where t.is_active = true and t.privacy = 'public'
+       and t.max_seats = $1
+       and t.variant_id = $2
+       and t.arena_mode = $3::arena_mode
+       and ($4::int is null or t.chain_id = $4 or (t.chain_id is null and $3 = 'demo'))
+       and exists (
+         select 1 from table_sessions ts
+         where ts.table_id = t.id and ts.status = 'active'
+       )
      group by t.league_id`,
-    [HU_SEATS, mode, mode === "onchain" ? (chainId ?? 84532) : null],
+    [cfg.maxSeats, cfg.variantId, mode, mode === "onchain" ? chainId : null],
   );
   return rows.rows as { league_id: string; tables: number; seated: number }[];
 }

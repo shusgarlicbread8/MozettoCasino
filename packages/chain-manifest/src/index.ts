@@ -32,8 +32,19 @@ export function getManifest(network?: NetworkKey) {
     ...base,
     usdc: addr("USDC_ADDRESS") ?? addr("NEXT_PUBLIC_USDC_ADDRESS") ?? base.usdc,
     arenaVault: addr("ARENA_VAULT_ADDRESS") ?? addr("NEXT_PUBLIC_ARENA_VAULT_ADDRESS") ?? base.arenaVault,
+    arenaVaultV1: addr("ARENA_VAULT_V1_ADDRESS") ?? (base as { arenaVaultV1?: `0x${string}` | null }).arenaVaultV1 ?? null,
+    arenaAccountFactory:
+      addr("ARENA_ACCOUNT_FACTORY_ADDRESS") ??
+      addr("NEXT_PUBLIC_ARENA_ACCOUNT_FACTORY_ADDRESS") ??
+      (base as { arenaAccountFactory?: `0x${string}` | null }).arenaAccountFactory ??
+      null,
+    arenaAccountImplementation:
+      addr("ARENA_ACCOUNT_IMPLEMENTATION_ADDRESS") ??
+      (base as { arenaAccountImplementation?: `0x${string}` | null }).arenaAccountImplementation ??
+      null,
     tableRegistry: addr("TABLE_REGISTRY_ADDRESS") ?? base.tableRegistry,
     settlementHub: addr("SETTLEMENT_HUB_ADDRESS") ?? base.settlementHub,
+    settlementHubV1: addr("SETTLEMENT_HUB_V1_ADDRESS") ?? (base as { settlementHubV1?: `0x${string}` | null }).settlementHubV1 ?? null,
     checkpointRegistry: addr("CHECKPOINT_REGISTRY_ADDRESS") ?? base.checkpointRegistry,
     randomnessCoordinator: addr("RANDOMNESS_COORDINATOR_ADDRESS") ?? base.randomnessCoordinator,
     feeTreasury: addr("FEE_TREASURY_ADDRESS") ?? base.feeTreasury,

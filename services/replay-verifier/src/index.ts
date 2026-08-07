@@ -19,13 +19,18 @@ const FINAL_SETTLEMENT_TYPEHASH = keccak256(
 );
 
 function sessionIdToBytes32(sessionId: string): Hex {
+  // V2 custody session ids are already bytes32 values. Re-hashing them signs
+  // a different settlement than the hub receives.
+  if (/^0x[0-9a-fA-F]{64}$/.test(sessionId)) return sessionId.toLowerCase() as Hex;
+  const hex = sessionId.startsWith("0x") ? sessionId.slice(2) : sessionId;
+  if (/^[0-9a-fA-F]{64}$/.test(hex)) return (`0x${hex.toLowerCase()}`) as Hex;
   return keccak256(toBytes(sessionId));
 }
 
 function hubDomain(chainId: number, verifyingContract: Hex) {
   return {
     name: "MozettoPokerSettlement",
-    version: "1",
+    version: "2",
     chainId,
     verifyingContract,
   } as const;
@@ -135,7 +140,7 @@ app.post("/v1/verify-session", async (req, reply) => {
           eventRoot: toBytes32(p.event_root || chain.eventRoot),
           handRoot: toBytes32(p.hand_root),
           balanceRoot: toBytes32(p.balance_root),
-          totalRake: BigInt(p.total_rake || "0"),
+          totalRake: BigInt(Math.floor(Number(p.total_rake || "0") * 1e6)),
           deadline: BigInt(p.deadline || Math.floor(Date.now() / 1000) + 3600),
         },
       })

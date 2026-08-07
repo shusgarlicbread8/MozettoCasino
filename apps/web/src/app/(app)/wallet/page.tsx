@@ -1,13 +1,12 @@
 "use client";
 
 /**
- * Mozetto wallet dashboard — live on-chain net worth, faucet CTA, sessions,
- * activity, Instant Play at bottom. No advanced Arena custody UI.
+ * Mozetto wallet dashboard — Arena Account balance, fund/withdraw, sessions.
  */
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { InstantEnablePanel } from "@/components/InstantEnablePanel";
+import { PlayPermissionsPanel } from "@/components/PlayPermissionsPanel";
 import { NetWorthChart } from "@/components/NetWorthChart";
 import { SplitFlapNumber } from "@/components/SplitFlapNumber";
 import { VaultPanel } from "@/components/VaultPanel";
@@ -21,9 +20,9 @@ const FONT_MONO = "var(--font-geist-mono), monospace";
 const FILTERS = ["ALL", "POKER", "CASINO", "TRANSFERS", "SHOP"];
 
 const flow = [
-  { icon: "⬡", k: "Wallet balance", sub: "Your ERC-20 balance — primary playable funds in Instant Mode", color: "#EDEDED", bg: "#0D0D0D", border: "rgba(255,255,255,.1)" },
-  { icon: "◈", k: "Locked in table", sub: "Buy-in locked from your wallet when a match opens", color: "#FFB020", bg: "rgba(255,177,32,.08)", border: "rgba(255,177,32,.24)" },
-  { icon: "▲", k: "Settle to wallet", sub: "Session end returns USDC to your wallet — Mozetto submits settle txs", color: "#00E676", bg: "rgba(0,230,118,.08)", border: "rgba(0,230,118,.24)" },
+  { icon: "⬡", k: "Arena Account", sub: "Your playable USDC — fund this address to play", color: "#EDEDED", bg: "#0D0D0D", border: "rgba(255,255,255,.1)" },
+  { icon: "◈", k: "Locked in table", sub: "Buy-in locked from your Arena Account when a match opens", color: "#FFB020", bg: "rgba(255,177,32,.08)", border: "rgba(255,177,32,.24)" },
+  { icon: "▲", k: "Settle to account", sub: "Session end returns USDC to your Arena Account", color: "#00E676", bg: "rgba(0,230,118,.08)", border: "rgba(0,230,118,.24)" },
 ];
 
 function formatLedgerLabel(row: { description?: string; reference_type?: string }) {
@@ -96,8 +95,12 @@ export default function WalletPage() {
   const asset = balances.asset;
   const isChainTest = isOnchain && Boolean(asset?.isTestAsset);
   const primaryBalance = isOnchain ? balances.wallet : (me?.available ?? 0);
-  const lockedDisplay = isOnchain ? balances.locked : (me?.atTables ?? 0);
-  const netWorth = isOnchain ? balances.netWorth : primaryBalance + lockedDisplay;
+  // Live seat stacks (clears on leave). Chain vault lock may still be settling.
+  const lockedDisplay = balances.displayLocked;
+  const pendingSettlement = balances.pendingSettlement;
+  const netWorth = isOnchain
+    ? primaryBalance + lockedDisplay + pendingSettlement + balances.legacyMozetto
+    : primaryBalance + lockedDisplay;
   const showLegacy = isOnchain && balances.legacyMozetto > 0.000001;
 
   const league = (me?.profile?.league || "bronze").toUpperCase();
@@ -117,17 +120,27 @@ export default function WalletPage() {
   }));
   const kpis = [
     {
-      k: isOnchain ? "WALLET" : "AVAILABLE",
+      k: isOnchain ? "ARENA ACCOUNT" : "AVAILABLE",
       v: primaryBalance,
       color: "#EDEDED",
       sub: isOnchain ? `${asset?.symbol ?? "USDC"} in ${wallet.short}` : "demo paper USDC",
     },
     {
-      k: "LOCKED",
+      k: "AT TABLES",
       v: lockedDisplay,
       color: "#FFB020",
-      sub: isOnchain ? "in active sessions" : "escrowed buy-ins",
+      sub: isOnchain ? "live seat stacks" : "escrowed buy-ins",
     },
+    ...(pendingSettlement > 0
+      ? [
+          {
+            k: "SETTLING",
+            v: pendingSettlement,
+            color: "#FFB020",
+            sub: "custody unlocking on-chain",
+          },
+        ]
+      : []),
     { k: "OPEN SESSIONS", v: tables.length, color: "#EDEDED", sub: "this mode only", raw: true },
     {
       k: "MODE",
@@ -243,7 +256,7 @@ export default function WalletPage() {
             >
               <div style={{ fontSize: 13, color: "#EDEDED", fontWeight: 550 }}>Funds held by Mozetto</div>
               <div style={{ fontSize: 12, color: "#7A7A7A", marginTop: 4, lineHeight: 1.45 }}>
-                Legacy idle balance from an earlier deposit. Withdraw anytime — Instant Play does not require this.
+                Legacy idle balance from an earlier deposit. Withdraw anytime — seamless play uses your Arena Account instead.
               </div>
               <VaultPanel onUpdated={refreshWallet} compact />
             </div>
@@ -465,7 +478,7 @@ export default function WalletPage() {
 
       {isOnchain && (
         <div style={{ marginTop: 14 }}>
-          <InstantEnablePanel onUpdated={refreshWallet} />
+          <PlayPermissionsPanel onUpdated={refreshWallet} />
         </div>
       )}
     </main>

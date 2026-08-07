@@ -12,8 +12,15 @@ import {
   type PublicClient,
 } from "viem";
 import { base, baseSepolia } from "viem/chains";
-import { arenaVaultAbi, getChainConfig } from "@mozetto/blockchain";
-import { query, creditOnchainDeposit, debitOnchainWithdrawal, creditOnchainBuyInFromWallet, debitOnchainSessionPayout } from "@mozetto/database";
+import { arenaVaultAbi, arenaVaultV2Abi, getChainConfig } from "@mozetto/blockchain";
+import {
+  query,
+  creditOnchainDeposit,
+  debitOnchainWithdrawal,
+  creditOnchainBuyInFromWallet,
+  debitOnchainSessionPayout,
+  resolveProfileForChainAddress,
+} from "@mozetto/database";
 
 const SNAPSHOT_MS = Number(process.env.INDEXER_NET_WORTH_MS ?? 60_000);
 const erc20BalanceOf = [
@@ -39,8 +46,13 @@ const withdrawnEvent = parseAbiItem(
 const sessionOpenedEvent = parseAbiItem(
   "event SessionOpened(bytes32 indexed sessionId, bytes32 indexed templateId, uint256 playerCount)",
 );
-const buyInLockedEvent = parseAbiItem(
+/** V1 Instant pull shape (legacy). */
+const buyInLockedV1Event = parseAbiItem(
   "event BuyInLocked(bytes32 indexed sessionId, address indexed player, uint256 fromAvailable, uint256 fromWallet)",
+);
+/** V2 ArenaAccount pull shape. */
+const buyInLockedV2Event = parseAbiItem(
+  "event BuyInLocked(bytes32 indexed sessionId, address indexed player, uint256 amount)",
 );
 const sessionSettledEvent = parseAbiItem(
   "event SessionSettled(bytes32 indexed sessionId, uint256 rake, uint256 playerCount)",
@@ -60,7 +72,11 @@ function viemChain(chainId: number) {
   } as const;
 }
 
-async function resolveProfileId(wallet: string): Promise<string | null> {
+async function resolveProfileId(wallet: string, chainId?: number): Promise<string | null> {
+  if (chainId != null) {
+    const viaAccount = await resolveProfileForChainAddress(wallet, chainId);
+    if (viaAccount) return viaAccount;
+  }
   const res = await query<{ user_id: string }>(
     `select coalesce(profile_id, user_id) as user_id
      from wallet_identities
@@ -68,7 +84,12 @@ async function resolveProfileId(wallet: string): Promise<string | null> {
      limit 1`,
     [wallet],
   );
-  return res.rows[0]?.user_id ?? null;
+  if (res.rows[0]?.user_id) return res.rows[0].user_id;
+  const aa = await query<{ profile_id: string }>(
+    `select profile_id from arena_accounts where lower(arena_account_address) = lower($1) limit 1`,
+    [wallet],
+  );
+  return aa.rows[0]?.profile_id ?? null;
 }
 
 async function upsertNetWorthSnapshot(
@@ -88,18 +109,31 @@ async function upsertNetWorthSnapshot(
   let lockedRaw = 0n;
   let legacyRaw = 0n;
   if (vault) {
-    lockedRaw = (await client.readContract({
-      address: vault,
-      abi: arenaVaultAbi,
-      functionName: "totalLocked",
-      args: [wallet],
-    })) as bigint;
-    legacyRaw = (await client.readContract({
-      address: vault,
-      abi: arenaVaultAbi,
-      functionName: "available",
-      args: [wallet],
-    })) as bigint;
+    try {
+      lockedRaw = (await client.readContract({
+        address: vault,
+        abi: arenaVaultV2Abi,
+        functionName: "totalLocked",
+        args: [wallet],
+      })) as bigint;
+    } catch {
+      lockedRaw = (await client.readContract({
+        address: vault,
+        abi: arenaVaultAbi,
+        functionName: "totalLocked",
+        args: [wallet],
+      })) as bigint;
+    }
+    try {
+      legacyRaw = (await client.readContract({
+        address: vault,
+        abi: arenaVaultAbi,
+        functionName: "available",
+        args: [wallet],
+      })) as bigint;
+    } catch {
+      legacyRaw = 0n;
+    }
   }
   const walletUsdc = Number(formatUnits(walletRaw, 6));
   const lockedUsdc = Number(formatUnits(lockedRaw, 6));
@@ -485,7 +519,7 @@ async function handleSessionSettled(
   );
 }
 
-/** Instant Mode: credit wallet portion of buy-in so join lockBuyIn can succeed. */
+/** Credit buy-in mirror so game-server join lockBuyIn can succeed (V1 fromWallet or V2 amount). */
 async function handleBuyInLocked(
   chainId: number,
   log: Log & {
@@ -494,18 +528,21 @@ async function handleBuyInLocked(
       player?: Hex;
       fromAvailable?: bigint;
       fromWallet?: bigint;
+      amount?: bigint;
     };
   },
 ) {
   const player = log.args.player;
   const fromWallet = log.args.fromWallet ?? 0n;
+  const v2Amount = log.args.amount ?? 0n;
+  const pull = v2Amount > 0n ? v2Amount : fromWallet;
   if (!player || !log.transactionHash || log.removed) return;
-  if (fromWallet === 0n) return;
+  if (pull === 0n) return;
 
-  const amountUsdc = Number(formatUnits(fromWallet, 6));
-  const profileId = await resolveProfileId(player);
+  const amountUsdc = Number(formatUnits(pull, 6));
+  const profileId = await resolveProfileId(player, chainId);
   if (!profileId) {
-    console.warn(`[indexer] BuyInLocked from unknown wallet ${player}`);
+    console.warn(`[indexer] BuyInLocked from unknown account ${player}`);
     return;
   }
   try {
@@ -516,7 +553,7 @@ async function handleBuyInLocked(
       log.logIndex ?? 0,
     );
     console.log(
-      `[indexer] Instant buy-in mirror ${amountUsdc} USDC from wallet → ${profileId}`,
+      `[indexer] Buy-in mirror ${amountUsdc} USDC from ArenaAccount → ${profileId}`,
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -650,16 +687,26 @@ async function tick(pollCount: { n: number }) {
   const fromBlock = from === 0n ? from : from + 1n;
 
   // Fetch event types separately — Anvil/some RPCs drop multi-event topic ORs.
-  const [deposited, withdrawn, opened, buyInLocked, settled, payouts] = await Promise.all([
-    client.getLogs({ address: vault, event: depositedEvent, fromBlock, toBlock: to }),
-    client.getLogs({ address: vault, event: withdrawnEvent, fromBlock, toBlock: to }),
-    client.getLogs({ address: vault, event: sessionOpenedEvent, fromBlock, toBlock: to }),
-    client.getLogs({ address: vault, event: buyInLockedEvent, fromBlock, toBlock: to }),
-    client.getLogs({ address: vault, event: sessionSettledEvent, fromBlock, toBlock: to }),
-    client.getLogs({ address: vault, event: sessionPayoutEvent, fromBlock, toBlock: to }),
-  ]);
+  const [deposited, withdrawn, opened, buyInLockedV1, buyInLockedV2, settled, payouts] =
+    await Promise.all([
+      client.getLogs({ address: vault, event: depositedEvent, fromBlock, toBlock: to }).catch(() => []),
+      client.getLogs({ address: vault, event: withdrawnEvent, fromBlock, toBlock: to }).catch(() => []),
+      client.getLogs({ address: vault, event: sessionOpenedEvent, fromBlock, toBlock: to }),
+      client.getLogs({ address: vault, event: buyInLockedV1Event, fromBlock, toBlock: to }).catch(() => []),
+      client.getLogs({ address: vault, event: buyInLockedV2Event, fromBlock, toBlock: to }),
+      client.getLogs({ address: vault, event: sessionSettledEvent, fromBlock, toBlock: to }),
+      client.getLogs({ address: vault, event: sessionPayoutEvent, fromBlock, toBlock: to }),
+    ]);
 
-  const logs = [...deposited, ...withdrawn, ...opened, ...buyInLocked, ...settled, ...payouts].sort(
+  const logs = [
+    ...deposited,
+    ...withdrawn,
+    ...opened,
+    ...buyInLockedV1,
+    ...buyInLockedV2,
+    ...settled,
+    ...payouts,
+  ].sort(
     (a, b) => {
       const bn = Number((a.blockNumber ?? 0n) - (b.blockNumber ?? 0n));
       if (bn !== 0) return bn;

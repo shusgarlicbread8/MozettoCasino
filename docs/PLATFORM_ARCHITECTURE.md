@@ -1,15 +1,15 @@
 # Mozetto Platform Architecture
 
-**Status:** Anvil-complete Instant Mode custody loop; Base Sepolia / mainnet contracts not yet deployed.  
-**Product framing:** On-chain-custodied and settled poker with verifiable off-chain execution — **not** fully trustless mental poker, and **not** an AMM-style DEX. The money path is designed to be **DEX-like / non-custodial session custody**: funds stay in the player’s wallet until a match locks them; settle returns USDC to the wallet.
+**Status:** Arena Account V2 custody (Anvil-ready); Base Sepolia / mainnet contracts not yet deployed.  
+**Product framing:** On-chain-custodied and settled poker with verifiable off-chain execution — **not** fully trustless mental poker. MetaMask/Coinbase own a deterministic **ArenaAccount** that holds gaming USDC; a one-time **GamePermission** lets Mozetto enter ranked games under caps. Settle returns funds only to the ArenaAccount. The platform cannot withdraw.
 
-This document describes everything built so far: blockchain, Instant Mode, game engine, realtime, Supabase/Postgres roles, terminology, what is innovative, what is missing, and how the pieces fit together.
+This document describes the platform: Arena Account custody, game engine, realtime, Supabase/Postgres roles, terminology, and how the pieces fit together.
 
 ---
 
 ## 1. One-sentence model
 
-Mozetto is a **hybrid autonomous poker arena**: players (or their AI loadouts) play No-Limit Hold’em in a realtime TypeScript engine; for on-chain mode, buy-ins are locked in an **ArenaVault** on Base-family chains via EIP-712 seat tickets; after play, a **quorum of attestors** settles stacks and the vault pays winners back to their wallets. Supabase/Postgres coordinates matchmaking, auth, ratings, and UI mirrors — it must **never** be the final authority over real money.
+Mozetto is a **hybrid autonomous poker arena**: players (or their AI loadouts) play No-Limit Hold’em in a realtime TypeScript engine; for on-chain mode, each user owns a CREATE2 **ArenaAccount** (MetaMask/Coinbase as owner); buy-ins lock into **ArenaVaultV2** via session-signer SeatTickets under a contract-enforced **GamePermission**; after play, a **quorum of attestors** settles stacks back to those ArenaAccounts. Supabase/Postgres coordinates matchmaking, auth, ratings, and UI mirrors — it must **never** be the final authority over real money.
 
 ---
 
@@ -17,9 +17,9 @@ Mozetto is a **hybrid autonomous poker arena**: players (or their AI loadouts) p
 
 | Path | Role |
 |------|------|
-| `apps/web` | Next.js player UI (Wagmi/SIWE, Instant Play, wallet, tables) |
+| `apps/web` | Next.js player UI (Wagmi/SIWE, Arena Account, seamless play, wallet, tables) |
 | `apps/admin` | Ops dashboard (token-gated) |
-| `services/api` | REST: auth, lobby, wallet, Instant/arena-onchain, admin, verify |
+| `services/api` | REST: auth, lobby, wallet, Arena Account / arena-onchain, admin, verify |
 | `services/game-server` | Authoritative NLHE runtime + WebSockets |
 | `services/agent-runtime` | AI seat decision service (`shark` / `professor` / `fox` / `machine`) |
 | `services/dealer` | Dealer seed commitments, hand-seed derivation, settlement attestation |
@@ -202,7 +202,17 @@ These do **not** load code on-chain; they **bind custody** to “which rules/AI 
 
 ---
 
-## 6. Instant Mode (DEX-like UX)
+## 6. Arena Account + seamless play (V2)
+
+**Owner** = MetaMask or Coinbase wallet (SIWE).  
+**ArenaAccount** = CREATE2 clone holding USDC; only the owner can withdraw.  
+**GamePermission** = one owner-signed EIP-712 grant on the account (session signer, vault/USDC targets, template, league mask, lifetime/at-risk/buy-in/concurrent caps).  
+**ArenaVaultV2** = atomic multi-player lock via `account.lockBuyIn`; settle pays only ArenaAccounts + fee treasury. Hub EIP-712 version `2`.
+
+Legacy Instant Mode (EOA InstantPermission on ArenaVaultV1) remains in the repo for reference; new matchmaking uses V2 only.
+
+### 6.x Instant Mode (legacy / V1 reference)
+
 
 ### 6.1 Product intent
 

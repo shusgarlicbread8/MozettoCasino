@@ -7,31 +7,36 @@ import {
   verifyTypedData,
   keccak256,
   toBytes,
-  hexToSignature,
   type Hex,
   type Address,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia, foundry } from "viem/chains";
 import {
-  arenaVaultAbi,
-  erc20PermitAbi,
+  arenaAccountAbi,
+  arenaAccountFactoryAbi,
+  arenaVaultV2Abi,
   getChainConfig,
-  INSTANT_PERMISSION_TYPES,
-  instantPermissionDomain,
-  PERMIT_TYPES,
-  SEAT_TICKET_TYPES,
-  seatTicketDomain,
+  GAME_PERMISSION_TYPES,
+  gamePermissionDomain,
+  SEAT_TICKET_V2_TYPES,
+  seatTicketV2Domain,
+  leagueBit,
+  ALL_LEAGUE_MASK,
 } from "@mozetto/blockchain";
 import {
   assertLeague,
+  claimOpenOnchainSession,
+  claimSingleTicket,
   claimTicketPair,
   createMatchmakingBatch,
   createOnchainArenaTable,
   createOnchainSessionPending,
   getActiveOnchainTableForProfile,
   getAgentProfileHash,
+  getPendingMatchForProfile,
   getQueuedTicketForProfile,
+  hasInFlightMatchedTicket,
   insertOnchainSessionPlayers,
   insertSeatTicket,
   isFeatureEnabled,
@@ -41,29 +46,56 @@ import {
   markBatchFailed,
   markBatchSubmitted,
   markOnchainSessionOpened,
-  query,
+  markTicketOpened,
   suggestTicketNonce,
+  getArenaAccountByProfile,
+  upsertArenaAccount,
+  markArenaAccountDeployed,
+  reserveExposure,
+  releaseOpenSessionClaim,
+  releaseExposure,
+  sumReservedExposure,
+  confirmExposure,
+  type ArenaFormat,
 } from "@mozetto/database";
 import {
   CONTROLLER_HASH,
-  InstantPermissionSubmitSchema,
-  InstantPermitSubmitSchema,
   NLHE_HU_STANDARD_V1_TEMPLATE_ID,
   POKER_ENGINE_HASH,
   PROFILE_SET_HASH,
   SubmitSeatTicketSchema,
   TicketParamsQuerySchema,
 } from "@mozetto/shared-types";
+import { z } from "zod";
 import type { SessionUser } from "./auth.js";
 import { requireOnchainUser } from "./auth.js";
 
 const TICKET_TTL_SEC = 3600;
 const EMERGENCY_EXIT_DELAY = 3600n;
 const USDC_DECIMALS = 6;
-/** Token allowance floor when Instant permission is active (covers large Anvil buy-ins). */
-const INSTANT_ALLOWANCE_MIN = 1_000_000n * 10n ** 6n;
-const PERMIT_TTL_SEC = 3600;
-const INSTANT_DURATION_SEC = 30 * 24 * 60 * 60;
+const PERMISSION_DURATION_SEC = 30 * 24 * 60 * 60;
+const DEFAULT_LIFETIME_CAP = 100_000n * 10n ** 6n;
+const DEFAULT_MAX_AT_RISK = 10_000n * 10n ** 6n;
+const DEFAULT_MAX_BUY_IN = 10_000n * 10n ** 6n;
+const DEFAULT_MAX_GAMES = 4;
+
+const GamePermissionSubmitSchema = z.object({
+  account: z.string().regex(/^0x[a-fA-F0-9]{40}$/i),
+  sessionSigner: z.string().regex(/^0x[a-fA-F0-9]{40}$/i),
+  usdc: z.string().regex(/^0x[a-fA-F0-9]{40}$/i),
+  vault: z.string().regex(/^0x[a-fA-F0-9]{40}$/i),
+  gameTemplateId: z.string().regex(/^0x[a-fA-F0-9]{64}$/),
+  leagueMask: z.union([z.string(), z.number(), z.bigint()]),
+  lifetimeCommittedCap: z.union([z.string(), z.number(), z.bigint()]),
+  maxTotalAtRisk: z.union([z.string(), z.number(), z.bigint()]),
+  maxSingleBuyIn: z.union([z.string(), z.number(), z.bigint()]),
+  validUntil: z.union([z.string(), z.number(), z.bigint()]),
+  maxConcurrentGames: z.union([z.string(), z.number(), z.bigint()]),
+  ratedOnly: z.boolean(),
+  nonce: z.union([z.string(), z.number(), z.bigint()]),
+  enabled: z.boolean(),
+  signature: z.string().regex(/^0x[a-fA-F0-9]+$/),
+});
 
 function sessionSignerAccount() {
   const pk = process.env.INSTANT_SESSION_SIGNER_PRIVATE_KEY as Hex | undefined;
@@ -83,7 +115,11 @@ function rpcForChain(chainId: number) {
   return process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org";
 }
 
-function matchmakingPool(chainId: number, leagueId: string): Hex {
+function matchmakingPool(chainId: number, leagueId: string, format: ArenaFormat = "hu"): Hex {
+  // Keep HU pool string stable for existing queued tickets; Classic is namespaced.
+  if (format === "classic") {
+    return keccak256(toBytes(`mozetto:pool:${chainId}:${leagueId}:classic`));
+  }
   return keccak256(toBytes(`mozetto:pool:${chainId}:${leagueId}`));
 }
 
@@ -99,8 +135,95 @@ function resolveChainEnv(chainId: number | null) {
   return "base-sepolia" as const;
 }
 
+const erc20BalanceAbi = [
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+] as const;
+
+async function ensureArenaAccountDeployed(session: SessionUser, chainId: number) {
+  const chainCfg = getChainConfig(resolveChainEnv(chainId));
+  const factory = chainCfg.contracts.arenaAccountFactory;
+  const owner = (session.ownerAddress ?? session.walletAddress)?.toLowerCase() as Address | undefined;
+  if (!factory || !owner) return null;
+
+  let row = await getArenaAccountByProfile(session.profileId, chainId);
+  const publicClient = createPublicClient({
+    chain: chainFromId(chainId),
+    transport: http(rpcForChain(chainId)),
+  });
+
+  const predicted = (await publicClient.readContract({
+    address: factory,
+    abi: arenaAccountFactoryAbi,
+    functionName: "predictAddress",
+    args: [owner],
+  } as never)) as Address;
+
+  if (!row) {
+    row = await upsertArenaAccount({
+      profileId: session.profileId,
+      chainId,
+      ownerAddress: owner,
+      arenaAccountAddress: predicted,
+      factoryAddress: factory,
+      implementationAddress: chainCfg.contracts.arenaAccountImplementation,
+      deploymentStatus: "predicted",
+    });
+  }
+
+  const onchain = (await publicClient.readContract({
+    address: factory,
+    abi: arenaAccountFactoryAbi,
+    functionName: "accountOf",
+    args: [owner],
+  } as never)) as Address;
+
+  if (onchain && onchain !== "0x0000000000000000000000000000000000000000") {
+    if (row.deployment_status !== "deployed") {
+      await markArenaAccountDeployed(owner, chainId, "already-deployed");
+    }
+    return onchain.toLowerCase() as Address;
+  }
+
+  const relayerPk = process.env.SESSION_RELAYER_PRIVATE_KEY as Hex | undefined;
+  if (!relayerPk) return predicted.toLowerCase() as Address;
+
+  const account = privateKeyToAccount(relayerPk);
+  const wallet = createWalletClient({
+    account,
+    chain: chainFromId(chainId),
+    transport: http(rpcForChain(chainId)),
+  });
+  const hash = await wallet.writeContract({
+    address: factory,
+    abi: arenaAccountFactoryAbi,
+    functionName: "createAccount",
+    args: [owner],
+    chain: chainFromId(chainId),
+    account,
+  });
+  await publicClient.waitForTransactionReceipt({ hash });
+  await upsertArenaAccount({
+    profileId: session.profileId,
+    chainId,
+    ownerAddress: owner,
+    arenaAccountAddress: predicted,
+    factoryAddress: factory,
+    implementationAddress: chainCfg.contracts.arenaAccountImplementation,
+    deploymentStatus: "deployed",
+    deployTxHash: hash,
+  });
+  return predicted.toLowerCase() as Address;
+}
+
 export function registerArenaOnchainRoutes(app: FastifyInstance) {
-  app.get("/v1/arena/instant-status", async (req, reply) => {
+  /** Seamless-play / GamePermission status (replaces Instant). */
+  app.get("/v1/arena/play-status", async (req, reply) => {
     const session = await requireOnchainUser(req, reply);
     if (!session) return;
     if (!session.walletAddress || !session.chainId) {
@@ -110,8 +233,9 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
     const chainId = session.chainId;
     const chainCfg = getChainConfig(resolveChainEnv(chainId));
     const vault = chainCfg.contracts.arenaVault;
+    const factory = chainCfg.contracts.arenaAccountFactory;
     const token = chainCfg.usdc;
-    if (!vault) {
+    if (!vault || !factory) {
       return reply.code(503).send({ error: "vault_not_deployed" });
     }
 
@@ -120,535 +244,439 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
       transport: http(rpcForChain(chainId)),
     });
 
-    const owner = session.walletAddress as Address;
-    const read = (args: object) => publicClient.readContract(args as never);
+    const owner = (session.ownerAddress ?? session.walletAddress) as Address;
+    let arenaAccount =
+      (session.arenaAccountAddress as Address | null) ??
+      ((await getArenaAccountByProfile(session.profileId, chainId))?.arena_account_address as
+        | Address
+        | undefined);
+
+    if (!arenaAccount) {
+      arenaAccount = (await publicClient.readContract({
+        address: factory,
+        abi: arenaAccountFactoryAbi,
+        functionName: "predictAddress",
+        args: [owner],
+      } as never)) as Address;
+    }
+
+    const code = await publicClient.getBytecode({ address: arenaAccount });
+    const deployed = Boolean(code && code !== "0x");
+
+    let auth: {
+      enabled: boolean;
+      sessionSigner: string;
+      validUntil: number;
+      maxSingleBuyIn: string;
+      remainingLifetime: string;
+      remainingAtRisk: string;
+      activeGames: number;
+      maxConcurrentGames: number;
+      lifetimeCommittedCap: string;
+      maxTotalAtRisk: string;
+    } | null = null;
+
+    let accountBalance = 0n;
+    let authNonce = 0n;
+
+    if (deployed) {
+      const [gameAuth, remLife, remRisk, bal, nonce] = await Promise.all([
+        publicClient.readContract({
+          address: arenaAccount,
+          abi: arenaAccountAbi,
+          functionName: "gameAuth",
+        } as never) as Promise<readonly [
+          Address,
+          Address,
+          Address,
+          Hex,
+          number,
+          bigint,
+          bigint,
+          bigint,
+          bigint,
+          bigint,
+          bigint | number,
+          number,
+          number,
+          boolean,
+          boolean,
+        ]>,
+        publicClient.readContract({
+          address: arenaAccount,
+          abi: arenaAccountAbi,
+          functionName: "remainingLifetimeCap",
+        } as never) as Promise<bigint>,
+        publicClient.readContract({
+          address: arenaAccount,
+          abi: arenaAccountAbi,
+          functionName: "remainingAtRiskCap",
+        } as never) as Promise<bigint>,
+        publicClient.readContract({
+          address: token,
+          abi: erc20BalanceAbi,
+          functionName: "balanceOf",
+          args: [arenaAccount],
+        } as never) as Promise<bigint>,
+        publicClient.readContract({
+          address: arenaAccount,
+          abi: arenaAccountAbi,
+          functionName: "gameAuthNonce",
+        } as never) as Promise<bigint>,
+      ]);
+      accountBalance = bal;
+      authNonce = nonce;
+      const now = Math.floor(Date.now() / 1000);
+      const enabled = Boolean(gameAuth[14]) && Number(gameAuth[10]) > now;
+      auth = {
+        enabled,
+        sessionSigner: gameAuth[0],
+        validUntil: Number(gameAuth[10]),
+        maxSingleBuyIn: gameAuth[9].toString(),
+        remainingLifetime: remLife.toString(),
+        remainingAtRisk: remRisk.toString(),
+        activeGames: Number(gameAuth[12]),
+        maxConcurrentGames: Number(gameAuth[11]),
+        lifetimeCommittedCap: gameAuth[5].toString(),
+        maxTotalAtRisk: gameAuth[7].toString(),
+      };
+    }
 
     const signer = sessionSignerAccount();
-    const [
-      allowance,
-      walletBalance,
-      vaultAvailable,
-      totalLocked,
-      tokenName,
-      nonce,
-      auth,
-      authNonce,
-      remainingSpend,
-    ] = await Promise.all([
-      read({
-        address: token,
-        abi: [
-          {
-            type: "function",
-            name: "allowance",
-            stateMutability: "view",
-            inputs: [
-              { name: "owner", type: "address" },
-              { name: "spender", type: "address" },
-            ],
-            outputs: [{ type: "uint256" }],
-          },
-        ] as const,
-        functionName: "allowance",
-        args: [owner, vault],
-      }),
-      read({
-        address: token,
-        abi: [
-          {
-            type: "function",
-            name: "balanceOf",
-            stateMutability: "view",
-            inputs: [{ name: "account", type: "address" }],
-            outputs: [{ type: "uint256" }],
-          },
-        ] as const,
-        functionName: "balanceOf",
-        args: [owner],
-      }),
-      read({
-        address: vault,
-        abi: arenaVaultAbi,
-        functionName: "available",
-        args: [owner],
-      }),
-      read({
-        address: vault,
-        abi: arenaVaultAbi,
-        functionName: "totalLocked",
-        args: [owner],
-      }),
-      read({
-        address: token,
-        abi: erc20PermitAbi,
-        functionName: "name",
-      }).catch(() => chainCfg.symbol),
-      read({
-        address: token,
-        abi: erc20PermitAbi,
-        functionName: "nonces",
-        args: [owner],
-      }).catch(() => null),
-      read({
-        address: vault,
-        abi: arenaVaultAbi,
-        functionName: "instantAuth",
-        args: [owner],
-      }).catch(() => null),
-      read({
-        address: vault,
-        abi: arenaVaultAbi,
-        functionName: "instantAuthNonce",
-        args: [owner],
-      }).catch(() => 0n),
-      read({
-        address: vault,
-        abi: arenaVaultAbi,
-        functionName: "remainingInstantSpend",
-        args: [owner],
-      }).catch(() => 0n),
-    ]);
-
-    const authTuple = auth as
-      | readonly [Address, bigint, bigint, bigint, bigint | number, boolean]
-      | null;
     const now = Math.floor(Date.now() / 1000);
-    const permissionActive = Boolean(
-      authTuple &&
-        authTuple[5] &&
-        Number(authTuple[4]) > now &&
-        (remainingSpend as bigint) > 0n &&
-        (allowance as bigint) >= INSTANT_ALLOWANCE_MIN,
-    );
-    const deadline = now + PERMIT_TTL_SEC;
-    const defaultSpendCap = (walletBalance as bigint) > 0n ? (walletBalance as bigint) : 10_000n * 10n ** 6n;
-    const defaultMaxBuyIn = 5_000n * 10n ** 6n;
-    const suggestedExpiresAt = now + INSTANT_DURATION_SEC;
-    const sessionSigner = signer?.address ?? null;
+    const defaults = {
+      sessionSigner: signer?.address ?? "0x0000000000000000000000000000000000000000",
+      usdc: token,
+      vault,
+      gameTemplateId: NLHE_HU_STANDARD_V1_TEMPLATE_ID,
+      leagueMask: ALL_LEAGUE_MASK,
+      lifetimeCommittedCap: DEFAULT_LIFETIME_CAP.toString(),
+      maxTotalAtRisk: DEFAULT_MAX_AT_RISK.toString(),
+      maxSingleBuyIn: DEFAULT_MAX_BUY_IN.toString(),
+      validUntil: now + PERMISSION_DURATION_SEC,
+      maxConcurrentGames: DEFAULT_MAX_GAMES,
+      ratedOnly: true,
+      nonce: authNonce.toString(),
+      enabled: true,
+    };
 
     return {
-      enabled: permissionActive,
-      allowance: (allowance as bigint).toString(),
-      walletBalance: (walletBalance as bigint).toString(),
-      vaultAvailable: (vaultAvailable as bigint).toString(),
-      totalLocked: (totalLocked as bigint).toString(),
-      walletBalanceUsdc: Number(walletBalance as bigint) / 10 ** USDC_DECIMALS,
-      vaultAvailableUsdc: Number(vaultAvailable as bigint) / 10 ** USDC_DECIMALS,
-      totalLockedUsdc: Number(totalLocked as bigint) / 10 ** USDC_DECIMALS,
+      enabled: Boolean(auth?.enabled),
+      ownerAddress: owner.toLowerCase(),
+      arenaAccountAddress: arenaAccount.toLowerCase(),
+      deployed,
+      accountBalanceUsdc: Number(accountBalance) / 10 ** USDC_DECIMALS,
       symbol: chainCfg.symbol,
-      decimals: chainCfg.decimals,
-      vault,
-      token,
-      chainId,
-      sessionSigner,
-      permission: authTuple
-        ? {
-            sessionSigner: authTuple[0],
-            spendCap: authTuple[1].toString(),
-            spent: authTuple[2].toString(),
-            maxSingleBuyIn: authTuple[3].toString(),
-            expiresAt: Number(authTuple[4]),
-            enabled: authTuple[5],
-            remainingSpend: (remainingSpend as bigint).toString(),
-            remainingSpendUsdc: Number(remainingSpend as bigint) / 10 ** USDC_DECIMALS,
-            spendCapUsdc: Number(authTuple[1]) / 10 ** USDC_DECIMALS,
-            maxSingleBuyInUsdc: Number(authTuple[3]) / 10 ** USDC_DECIMALS,
-          }
-        : null,
-      permissionTypedData:
-        sessionSigner != null
-          ? {
-              player: session.walletAddress,
-              sessionSigner,
-              spendCap: defaultSpendCap.toString(),
-              maxSingleBuyIn: defaultMaxBuyIn.toString(),
-              expiresAt: suggestedExpiresAt,
-              nonce: (authNonce as bigint).toString(),
-              enabled: true,
-              domain: instantPermissionDomain(chainId, vault),
-              types: INSTANT_PERMISSION_TYPES,
-              primaryType: "InstantPermission" as const,
-            }
-          : null,
-      permitSupported: nonce !== null,
-      permit:
-        nonce !== null
-          ? {
-              owner: session.walletAddress,
-              spender: vault,
-              value: defaultSpendCap.toString(),
-              nonce: (nonce as bigint).toString(),
-              deadline,
-              domain: {
-                name: tokenName as string,
-                version: "1",
-                chainId,
-                verifyingContract: token,
-              },
-              types: PERMIT_TYPES,
-              primaryType: "Permit" as const,
-            }
-          : null,
-      gasNote: {
-        enable:
-          "Setup may need a token permit plus Instant permission once. Mozetto submits both on-chain; match fee/rake covers network costs.",
-        matchOpen:
-          "After enable, Mozetto signs and submits seat tickets — no wallet popup to join.",
-        settle: "Mozetto submits settle; funds return to your wallet.",
-      },
+      permission: auth,
+      sessionSigner: signer?.address ?? null,
+      defaults,
+      domain: gamePermissionDomain(chainId, arenaAccount),
+      types: GAME_PERMISSION_TYPES,
+      gasNote: "Mozetto sponsors the on-chain permission transaction. You only sign once in your wallet.",
     };
   });
 
-  app.post("/v1/arena/instant-permission", async (req, reply) => {
+  /** Backward-compatible alias → play-status. */
+  app.get("/v1/arena/instant-status", async (req, reply) => {
+    // Reuse handler body by forwarding after auth (same route logic via internal call pattern).
+    const session = await requireOnchainUser(req, reply);
+    if (!session) return;
+    // Delegate: clients should migrate to /v1/arena/play-status.
+    (req as { url: string }).url = "/v1/arena/play-status";
+    const handlers = (app as unknown as { routing?: unknown }).routing;
+    void handlers;
+    // Simple re-fetch of play fields via shared helper path — call play-status logic inline.
+    reply.header("Deprecation", "true");
+    reply.header("Link", '</v1/arena/play-status>; rel="successor-version"');
+    // Fall through by invoking the registered play-status route manually is awkward;
+    // return a thin mapped response by re-running ensure + reads:
+    const chainId = session.chainId!;
+    const chainCfg = getChainConfig(resolveChainEnv(chainId));
+    const vault = chainCfg.contracts.arenaVault;
+    const factory = chainCfg.contracts.arenaAccountFactory;
+    if (!vault || !factory) return reply.code(503).send({ error: "vault_not_deployed" });
+    const arena = await ensureArenaAccountDeployed(session, chainId);
+    if (!arena) return reply.code(503).send({ error: "arena_account_unavailable" });
+    const publicClient = createPublicClient({
+      chain: chainFromId(chainId),
+      transport: http(rpcForChain(chainId)),
+    });
+    const code = await publicClient.getBytecode({ address: arena });
+    let enabled = false;
+    let remainingSpendUsdc = 0;
+    if (code && code !== "0x") {
+      const [gameAuth, remLife] = await Promise.all([
+        publicClient.readContract({
+          address: arena,
+          abi: arenaAccountAbi,
+          functionName: "gameAuth",
+        } as never) as Promise<readonly [...unknown[], boolean]>,
+        publicClient.readContract({
+          address: arena,
+          abi: arenaAccountAbi,
+          functionName: "remainingLifetimeCap",
+        } as never) as Promise<bigint>,
+      ]);
+      const now = Math.floor(Date.now() / 1000);
+      enabled = Boolean(gameAuth[14]) && Number(gameAuth[10]) > now;
+      remainingSpendUsdc = Number(remLife) / 10 ** USDC_DECIMALS;
+    }
+    return {
+      enabled,
+      ownerAddress: (session.ownerAddress ?? session.walletAddress)?.toLowerCase(),
+      arenaAccountAddress: arena,
+      permission: enabled ? { remainingSpendUsdc } : null,
+    };
+  });
+
+  app.post("/v1/arena/game-permission", async (req, reply) => {
     const session = await requireOnchainUser(req, reply);
     if (!session) return;
     if (!session.walletAddress || !session.chainId) {
       return reply.code(400).send({ error: "wallet_required" });
     }
 
-    const parsed = InstantPermissionSubmitSchema.safeParse(req.body);
+    const parsed = GamePermissionSubmitSchema.safeParse(req.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: "invalid_request", message: parsed.error.message });
+      return reply.code(400).send({ error: "invalid_body", details: parsed.error.flatten() });
     }
+
     const body = parsed.data;
     const chainId = session.chainId;
+    const owner = (session.ownerAddress ?? session.walletAddress).toLowerCase();
+    const account = body.account.toLowerCase() as Address;
+
+    let arena = await ensureArenaAccountDeployed(session, chainId);
+    if (!arena) {
+      return reply.code(503).send({ error: "arena_account_unavailable" });
+    }
+    if (account !== arena.toLowerCase()) {
+      return reply.code(400).send({ error: "account_mismatch", message: "Permission must target your Arena Account." });
+    }
+
     const chainCfg = getChainConfig(resolveChainEnv(chainId));
-    const vault = chainCfg.contracts.arenaVault;
-    if (!vault) return reply.code(503).send({ error: "vault_not_deployed" });
-
-    const player = body.player.toLowerCase() as Address;
-    if (player !== session.walletAddress.toLowerCase()) {
-      return reply.code(403).send({ error: "wallet_mismatch" });
-    }
-
-    const signer = sessionSignerAccount();
-    if (!signer) {
-      return reply.code(503).send({ error: "session_signer_not_configured" });
-    }
-    if (body.enabled && body.sessionSigner.toLowerCase() !== signer.address.toLowerCase()) {
-      return reply.code(400).send({
-        error: "bad_session_signer",
-        message: "sessionSigner must be Mozetto Instant session signer.",
-      });
-    }
-
-    const spendCap = toBigIntField(body.spendCap);
-    const maxSingleBuyIn = toBigIntField(body.maxSingleBuyIn);
-    const expiresAt = toBigIntField(body.expiresAt);
-    const nonce = toBigIntField(body.nonce);
-
-    const publicClient = createPublicClient({
-      chain: chainFromId(chainId),
-      transport: http(rpcForChain(chainId)),
-    });
-
-    const onchainNonce = (await publicClient.readContract({
-      address: vault,
-      abi: arenaVaultAbi,
-      functionName: "instantAuthNonce",
-      args: [player],
-    } as never)) as bigint;
-    if (nonce !== onchainNonce) {
-      return reply.code(400).send({ error: "stale_nonce", message: "Refresh Instant status and resign." });
-    }
+    const vault = chainCfg.contracts.arenaVault!;
+    const token = chainCfg.usdc;
 
     const message = {
-      player,
+      account,
       sessionSigner: body.sessionSigner as Address,
-      spendCap,
-      maxSingleBuyIn,
-      expiresAt,
-      nonce,
+      usdc: body.usdc as Address,
+      vault: body.vault as Address,
+      gameTemplateId: body.gameTemplateId as Hex,
+      leagueMask: Number(toBigIntField(body.leagueMask)),
+      lifetimeCommittedCap: toBigIntField(body.lifetimeCommittedCap),
+      maxTotalAtRisk: toBigIntField(body.maxTotalAtRisk),
+      maxSingleBuyIn: toBigIntField(body.maxSingleBuyIn),
+      validUntil: toBigIntField(body.validUntil),
+      maxConcurrentGames: Number(toBigIntField(body.maxConcurrentGames)),
+      ratedOnly: body.ratedOnly,
+      nonce: toBigIntField(body.nonce),
       enabled: body.enabled,
     };
 
+    if (message.usdc.toLowerCase() !== token.toLowerCase() || message.vault.toLowerCase() !== vault.toLowerCase()) {
+      return reply.code(400).send({ error: "wrong_targets" });
+    }
+
     const valid = await verifyTypedData({
-      address: player,
-      domain: instantPermissionDomain(chainId, vault),
-      types: INSTANT_PERMISSION_TYPES,
-      primaryType: "InstantPermission",
+      address: owner as Address,
+      domain: gamePermissionDomain(chainId, account),
+      types: GAME_PERMISSION_TYPES,
+      primaryType: "GamePermission",
       message,
       signature: body.signature as Hex,
     });
-    if (!valid) {
-      return reply.code(400).send({ error: "bad_signature" });
-    }
-
-    // Optional permit first so allowance is ready before permission lands.
-    if (body.permit) {
-      const permitBody = body.permit;
-      const relayerPk = process.env.SESSION_RELAYER_PRIVATE_KEY as Hex | undefined;
-      if (!relayerPk) return reply.code(503).send({ error: "relayer_not_configured" });
-      const token = (permitBody.token?.toLowerCase() as Address) || chainCfg.usdc;
-      let tokenName: string;
-      let tokenNonce: bigint;
-      try {
-        tokenName = (await publicClient.readContract({
-          address: token,
-          abi: erc20PermitAbi,
-          functionName: "name",
-        } as never)) as string;
-        tokenNonce = (await publicClient.readContract({
-          address: token,
-          abi: erc20PermitAbi,
-          functionName: "nonces",
-          args: [player],
-        } as never)) as bigint;
-      } catch {
-        return reply.code(400).send({ error: "permit_unsupported" });
-      }
-      const permitValid = await verifyTypedData({
-        address: player,
-        domain: { name: tokenName, version: "1", chainId, verifyingContract: token },
-        types: PERMIT_TYPES,
-        primaryType: "Permit",
-        message: {
-          owner: player,
-          spender: vault,
-          value: toBigIntField(permitBody.value),
-          nonce: tokenNonce,
-          deadline: toBigIntField(permitBody.deadline),
-        },
-        signature: permitBody.signature as Hex,
-      });
-      if (!permitValid) return reply.code(400).send({ error: "bad_permit_signature" });
-      const { v, r, s } = hexToSignature(permitBody.signature as Hex);
-      const relayer = privateKeyToAccount(relayerPk);
-      const wallet = createWalletClient({
-        account: relayer,
-        chain: chainFromId(chainId),
-        transport: http(rpcForChain(chainId)),
-      });
-      const permitHash = await wallet.writeContract({
-        address: token,
-        abi: erc20PermitAbi,
-        functionName: "permit",
-        args: [
-          player,
-          vault,
-          toBigIntField(permitBody.value),
-          toBigIntField(permitBody.deadline),
-          Number(v),
-          r,
-          s,
-        ],
-        chain: chainFromId(chainId),
-        account: relayer,
-      } as any);
-      await publicClient.waitForTransactionReceipt({ hash: permitHash });
-    }
+    if (!valid) return reply.code(401).send({ error: "invalid_signature" });
 
     const relayerPk = process.env.SESSION_RELAYER_PRIVATE_KEY as Hex | undefined;
     if (!relayerPk) return reply.code(503).send({ error: "relayer_not_configured" });
+
+    const chain = chainFromId(chainId);
+    const rpc = rpcForChain(chainId);
     const relayer = privateKeyToAccount(relayerPk);
-    const wallet = createWalletClient({
-      account: relayer,
-      chain: chainFromId(chainId),
-      transport: http(rpcForChain(chainId)),
-    });
+    const wallet = createWalletClient({ account: relayer, chain, transport: http(rpc) });
+    const publicClient = createPublicClient({ chain, transport: http(rpc) });
 
     try {
       const hash = await wallet.writeContract({
-        address: vault,
-        abi: arenaVaultAbi,
-        functionName: "setInstantPermission",
+        address: account,
+        abi: arenaAccountAbi,
+        functionName: "setGamePermission",
         args: [
-          player,
-          body.sessionSigner as Address,
-          spendCap,
-          maxSingleBuyIn,
-          expiresAt,
-          nonce,
-          body.enabled,
+          message.sessionSigner,
+          message.usdc,
+          message.vault,
+          message.gameTemplateId,
+          message.leagueMask,
+          message.lifetimeCommittedCap,
+          message.maxTotalAtRisk,
+          message.maxSingleBuyIn,
+          message.validUntil,
+          message.maxConcurrentGames,
+          message.ratedOnly,
+          message.nonce,
+          message.enabled,
           body.signature as Hex,
         ],
-        chain: chainFromId(chainId),
+        chain,
         account: relayer,
-      } as any);
+      });
       await publicClient.waitForTransactionReceipt({ hash });
-      return { ok: true, txHash: hash, enabled: body.enabled };
+      return { ok: true, txHash: hash, enabled: message.enabled, arenaAccountAddress: account };
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "permission_submit_failed";
-      req.log.error({ err: e }, "instant permission submit failed");
-      return reply.code(502).send({ error: "permission_submit_failed", message: msg });
+      const msg = e instanceof Error ? e.message : "permission_failed";
+      req.log.error({ err: e }, "setGamePermission failed");
+      return reply.code(502).send({ error: "permission_failed", message: msg });
     }
   });
 
-  app.post("/v1/arena/instant-permit", async (req, reply) => {
+  /** Legacy Instant enable → reject with migration guidance (UI uses game-permission). */
+  app.post("/v1/arena/instant-permission", async (_req, reply) => {
+    return reply.code(410).send({
+      error: "migrated",
+      message: "Instant Play has been replaced by Arena Account seamless play. Use /v1/arena/game-permission.",
+    });
+  });
+
+  app.post("/v1/arena/instant-permit", async (_req, reply) => {
+    return reply.code(410).send({
+      error: "migrated",
+      message: "Token permit-to-vault is no longer used. Fund your Arena Account directly.",
+    });
+  });
+
+  /** Anvil-only: mint mUSDC directly into the caller's Arena Account. */
+  app.post("/v1/arena/fund-test", async (req, reply) => {
     const session = await requireOnchainUser(req, reply);
     if (!session) return;
-    if (!session.walletAddress || !session.chainId) {
-      return reply.code(400).send({ error: "wallet_required" });
+    if (!session.chainId || session.chainId !== 31337) {
+      return reply.code(400).send({ error: "anvil_only", message: "Test mint is only available on Anvil." });
     }
-
-    const parsed = InstantPermitSubmitSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: "invalid_request", message: parsed.error.message });
+    const amountUsdc = Number((req.body as { amountUsdc?: number })?.amountUsdc ?? 10_000);
+    if (!(amountUsdc > 0) || amountUsdc > 1_000_000) {
+      return reply.code(400).send({ error: "invalid_amount" });
     }
-    const body = parsed.data;
-    const chainId = session.chainId;
-    const chainCfg = getChainConfig(resolveChainEnv(chainId));
-    const vault = chainCfg.contracts.arenaVault;
-    const token = (body.token?.toLowerCase() as Address) || chainCfg.usdc;
-    if (!vault) {
-      return reply.code(503).send({ error: "vault_not_deployed" });
-    }
+    const arena = await ensureArenaAccountDeployed(session, session.chainId);
+    if (!arena) return reply.code(503).send({ error: "arena_account_unavailable" });
 
-    const owner = body.owner.toLowerCase() as Address;
-    if (owner !== session.walletAddress.toLowerCase()) {
-      return reply.code(403).send({ error: "wallet_mismatch" });
-    }
-    if (body.spender.toLowerCase() !== vault.toLowerCase()) {
-      return reply.code(400).send({ error: "bad_spender", message: "Spender must be ArenaVault." });
-    }
-    if (token.toLowerCase() !== chainCfg.usdc.toLowerCase()) {
-      return reply.code(400).send({ error: "bad_token" });
-    }
-
-    const value = toBigIntField(body.value);
-    const deadline = toBigIntField(body.deadline);
-    if (deadline < BigInt(Math.floor(Date.now() / 1000))) {
-      return reply.code(400).send({ error: "permit_expired" });
-    }
-
-    const publicClient = createPublicClient({
-      chain: chainFromId(chainId),
-      transport: http(rpcForChain(chainId)),
-    });
-
-    let tokenName: string;
-    let nonce: bigint;
-    try {
-      tokenName = (await publicClient.readContract({
-        address: token,
-        abi: erc20PermitAbi,
-        functionName: "name",
-      } as never)) as string;
-      nonce = (await publicClient.readContract({
-        address: token,
-        abi: erc20PermitAbi,
-        functionName: "nonces",
-        args: [owner],
-      } as never)) as bigint;
-    } catch {
-      return reply.code(400).send({
-        error: "permit_unsupported",
-        message: "Token does not support EIP-2612 permit — use approve fallback.",
-      });
-    }
-
-    const domain = {
-      name: tokenName,
-      version: "1",
-      chainId,
-      verifyingContract: token,
-    } as const;
-
-    const message = {
-      owner,
-      spender: vault,
-      value,
-      nonce,
-      deadline,
-    };
-
-    const valid = await verifyTypedData({
-      address: owner,
-      domain,
-      types: PERMIT_TYPES,
-      primaryType: "Permit",
-      message,
-      signature: body.signature as Hex,
-    });
-    if (!valid) {
-      return reply.code(400).send({ error: "bad_signature", message: "Permit signature invalid." });
-    }
-
-    const relayerPk = process.env.SESSION_RELAYER_PRIVATE_KEY as Hex | undefined;
-    if (!relayerPk) {
-      return reply.code(503).send({ error: "relayer_not_configured" });
-    }
-
-    const { v, r, s } = hexToSignature(body.signature as Hex);
-    const account = privateKeyToAccount(relayerPk);
-    const wallet = createWalletClient({
-      account,
-      chain: chainFromId(chainId),
-      transport: http(rpcForChain(chainId)),
-    });
-
+    const chainCfg = getChainConfig("anvil");
+    const minterPk = (process.env.SESSION_RELAYER_PRIVATE_KEY ||
+      process.env.PRIVATE_KEY ||
+      "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80") as Hex;
+    const chain = foundry;
+    const rpc = rpcForChain(31337);
+    const account = privateKeyToAccount(minterPk);
+    const wallet = createWalletClient({ account, chain, transport: http(rpc) });
+    const publicClient = createPublicClient({ chain, transport: http(rpc) });
+    const raw = BigInt(Math.round(amountUsdc * 1e6));
     try {
       const hash = await wallet.writeContract({
-        address: token,
-        abi: erc20PermitAbi,
-        functionName: "permit",
-        args: [owner, vault, value, deadline, Number(v), r, s],
-        chain: chainFromId(chainId),
+        address: chainCfg.usdc,
+        abi: [
+          {
+            type: "function",
+            name: "mint",
+            stateMutability: "nonpayable",
+            inputs: [
+              { name: "recipient", type: "address" },
+              { name: "amount", type: "uint256" },
+            ],
+            outputs: [],
+          },
+        ] as const,
+        functionName: "mint",
+        args: [arena, raw],
+        chain,
         account,
-      } as any);
+      });
       await publicClient.waitForTransactionReceipt({ hash });
-      return { ok: true, txHash: hash, gasPaidBy: "mozetto" as const };
+      return {
+        ok: true,
+        txHash: hash,
+        arenaAccountAddress: arena,
+        amountUsdc,
+        symbol: chainCfg.symbol,
+      };
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "permit_submit_failed";
-      req.log.error({ err: e }, "instant permit submit failed");
-      return reply.code(502).send({ error: "permit_submit_failed", message: msg });
+      const msg = e instanceof Error ? e.message : "mint_failed";
+      return reply.code(502).send({ error: "mint_failed", message: msg });
     }
+  });
+
+  app.get("/v1/arena/account", async (req, reply) => {
+    const session = await requireOnchainUser(req, reply);
+    if (!session) return;
+    if (!session.chainId || !session.walletAddress) {
+      return reply.code(400).send({ error: "wallet_required" });
+    }
+    const arena = await ensureArenaAccountDeployed(session, session.chainId);
+    const chainCfg = getChainConfig(resolveChainEnv(session.chainId));
+    let balance = 0n;
+    if (arena) {
+      const publicClient = createPublicClient({
+        chain: chainFromId(session.chainId),
+        transport: http(rpcForChain(session.chainId)),
+      });
+      balance = (await publicClient.readContract({
+        address: chainCfg.usdc,
+        abi: erc20BalanceAbi,
+        functionName: "balanceOf",
+        args: [arena],
+      } as never)) as bigint;
+    }
+    return {
+      ownerAddress: (session.ownerAddress ?? session.walletAddress).toLowerCase(),
+      arenaAccountAddress: arena,
+      balanceUsdc: Number(balance) / 10 ** USDC_DECIMALS,
+      symbol: chainCfg.symbol,
+      factory: chainCfg.contracts.arenaAccountFactory,
+      vault: chainCfg.contracts.arenaVault,
+    };
   });
 
   app.get("/v1/arena/ticket-params", async (req, reply) => {
     const session = await requireOnchainUser(req, reply);
     if (!session) return;
     if (!session.walletAddress || !session.chainId) {
-      return reply.code(400).send({ error: "wallet_required", message: "Wallet address missing from session." });
+      return reply.code(400).send({ error: "wallet_required" });
     }
-
-    const parsed = TicketParamsQuerySchema.safeParse(req.query);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: "invalid_request", message: "leagueId required" });
-    }
-    const { leagueId, profileKey } = parsed.data;
-    let league;
-    try {
-      league = assertLeague(leagueId);
-    } catch (e) {
-      return reply.code(400).send({ error: "invalid_league", message: e instanceof Error ? e.message : "bad league" });
-    }
+    const q = TicketParamsQuerySchema.safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ error: "invalid_query" });
 
     const chainId = session.chainId;
     const chainCfg = getChainConfig(resolveChainEnv(chainId));
     const vault = chainCfg.contracts.arenaVault;
-    if (!vault) {
-      return reply.code(503).send({ error: "vault_not_deployed", message: "Arena vault address not configured." });
-    }
+    if (!vault) return reply.code(503).send({ error: "vault_not_deployed" });
 
-    const agentKey = profileKey ?? "fox";
-    let agentProfileHash: Hex;
-    try {
-      agentProfileHash = (await getAgentProfileHash(agentKey)) as Hex;
-    } catch (e) {
-      return reply.code(400).send({ error: "invalid_profile", message: e instanceof Error ? e.message : "bad profile" });
-    }
+    const league = assertLeague(q.data.leagueId);
+    const arena = await ensureArenaAccountDeployed(session, chainId);
+    if (!arena) return reply.code(503).send({ error: "arena_account_unavailable" });
 
-    const nonce = await suggestTicketNonce(session.walletAddress, chainId);
+    const agentKey = q.data.profileKey ?? "fox";
+    const agentProfileHash = await getAgentProfileHash(agentKey);
+    const nonce = await suggestTicketNonce(arena, chainId);
     const expiresAt = Math.floor(Date.now() / 1000) + TICKET_TTL_SEC;
-    const pool = matchmakingPool(chainId, leagueId);
-    const buyInRaw = leagueBuyInRaw(leagueId);
+    const pool = matchmakingPool(chainId, q.data.leagueId);
+    const bit = leagueBit(q.data.leagueId);
 
     return {
       gameTemplateId: NLHE_HU_STANDARD_V1_TEMPLATE_ID,
-      buyIn: buyInRaw.toString(),
+      buyIn: leagueBuyInRaw(q.data.leagueId).toString(),
       buyInUsdc: league.buyIn,
       nonce: nonce.toString(),
       expiresAt,
       controllerHash: CONTROLLER_HASH,
       agentProfileHash,
       matchmakingPool: pool,
-      domain: seatTicketDomain(chainId, vault),
-      types: SEAT_TICKET_TYPES,
+      leagueBit: bit,
+      rated: true,
+      domain: seatTicketV2Domain(chainId, vault),
+      types: SEAT_TICKET_V2_TYPES,
       chainId,
       vault,
-      leagueId,
-      player: session.walletAddress,
+      arenaAccountAddress: arena,
+      leagueId: q.data.leagueId,
     };
   });
 
@@ -659,87 +687,79 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "wallet_required" });
     }
 
-    const parsed = SubmitSeatTicketSchema.safeParse(req.body);
+    const parsed = SubmitSeatTicketSchema.extend({
+      leagueBit: z.union([z.string(), z.number()]).optional(),
+      rated: z.boolean().optional(),
+    }).safeParse(req.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: "invalid_request", message: parsed.error.message });
+      return reply.code(400).send({ error: "invalid_body", details: parsed.error.flatten() });
     }
-    const body = parsed.data;
+
     const chainId = session.chainId;
     const chainCfg = getChainConfig(resolveChainEnv(chainId));
-    const vault = chainCfg.contracts.arenaVault;
-    if (!vault) {
-      return reply.code(503).send({ error: "vault_not_deployed" });
+    const vault = chainCfg.contracts.arenaVault!;
+    const arena = await ensureArenaAccountDeployed(session, chainId);
+    if (!arena) return reply.code(503).send({ error: "arena_account_unavailable" });
+
+    const player = parsed.data.player.toLowerCase();
+    if (player !== arena.toLowerCase()) {
+      return reply.code(400).send({ error: "player_mismatch", message: "SeatTicket.player must be your Arena Account." });
     }
 
-    const player = body.player.toLowerCase() as Address;
-    if (player !== session.walletAddress.toLowerCase()) {
-      return reply.code(403).send({ error: "wallet_mismatch", message: "Ticket player must match signed-in wallet." });
-    }
-
-    if (body.gameTemplateId !== NLHE_HU_STANDARD_V1_TEMPLATE_ID) {
-      return reply.code(400).send({ error: "invalid_template" });
-    }
-
+    const leagueId = parsed.data.leagueId ?? "bronze";
+    const bit = Number(parsed.data.leagueBit ?? leagueBit(leagueId));
+    const rated = parsed.data.rated ?? true;
     const message = {
-      player,
-      gameTemplateId: body.gameTemplateId as Hex,
-      buyIn: toBigIntField(body.buyIn),
-      controllerHash: body.controllerHash as Hex,
-      agentProfileHash: body.agentProfileHash as Hex,
-      expiresAt: toBigIntField(body.expiresAt),
-      nonce: toBigIntField(body.nonce),
-      matchmakingPool: body.matchmakingPool as Hex,
+      player: arena as Address,
+      gameTemplateId: parsed.data.gameTemplateId as Hex,
+      buyIn: toBigIntField(parsed.data.buyIn),
+      controllerHash: parsed.data.controllerHash as Hex,
+      agentProfileHash: parsed.data.agentProfileHash as Hex,
+      expiresAt: toBigIntField(parsed.data.expiresAt),
+      nonce: toBigIntField(parsed.data.nonce),
+      matchmakingPool: parsed.data.matchmakingPool as Hex,
+      leagueBit: bit,
+      rated,
     };
 
-    const valid = await verifyTypedData({
-      address: player,
-      domain: seatTicketDomain(chainId, vault),
-      types: SEAT_TICKET_TYPES,
+    const owner = (session.ownerAddress ?? session.walletAddress) as Address;
+    const ownerOk = await verifyTypedData({
+      address: owner,
+      domain: seatTicketV2Domain(chainId, vault),
+      types: SEAT_TICKET_V2_TYPES,
       primaryType: "SeatTicket",
       message,
-      signature: body.signature as Hex,
+      signature: parsed.data.signature as Hex,
     });
-    if (!valid) {
-      return reply.code(400).send({ error: "bad_signature", message: "EIP-712 signature verification failed." });
+    if (!ownerOk) {
+      return reply.code(401).send({ error: "invalid_signature" });
     }
 
-    const leagueId = body.leagueId;
-    let buyInUsdc = Number(message.buyIn) / 10 ** USDC_DECIMALS;
-    if (leagueId) {
-      try {
-        const league = assertLeague(leagueId);
-        buyInUsdc = league.buyIn;
-        const expectedRaw = leagueBuyInRaw(leagueId);
-        if (message.buyIn !== expectedRaw) {
-          return reply.code(400).send({ error: "buy_in_mismatch", message: "Buy-in does not match league." });
-        }
-      } catch (e) {
-        return reply.code(400).send({ error: "invalid_league", message: e instanceof Error ? e.message : "bad league" });
-      }
-    }
-
+    const buyInUsdc = Number(message.buyIn) / 10 ** USDC_DECIMALS;
     try {
-      const ticketId = await insertSeatTicket({
+      const id = await insertSeatTicket({
         profileId: session.profileId,
-        walletAddress: player,
+        walletAddress: arena,
+        arenaAccountAddress: arena,
+        ownerAddress: owner,
         chainId,
-        gameTemplateId: body.gameTemplateId,
+        gameTemplateId: message.gameTemplateId,
         buyInUsdc,
-        controllerHash: body.controllerHash,
-        agentProfileHash: body.agentProfileHash,
+        controllerHash: message.controllerHash,
+        agentProfileHash: message.agentProfileHash,
         expiresAt: new Date(Number(message.expiresAt) * 1000),
         nonce: message.nonce,
-        matchmakingPool: body.matchmakingPool,
-        signature: body.signature,
+        matchmakingPool: message.matchmakingPool,
+        signature: parsed.data.signature,
+        leagueBit: bit,
+        rated,
       });
-      return { ok: true, ticketId, status: "queued" as const };
+      return { ok: true, ticketId: id };
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "store_failed";
-      if (msg.includes("unique") || msg.includes("duplicate")) {
-        return reply.code(409).send({ error: "nonce_used", message: "Ticket nonce already used." });
-      }
-      req.log.error({ err: e }, "seat-ticket insert failed");
-      return reply.code(500).send({ error: "store_failed", message: msg });
+      return reply.code(500).send({
+        error: "store_failed",
+        message: e instanceof Error ? e.message : "store_failed",
+      });
     }
   });
 }
@@ -750,6 +770,7 @@ export async function handleOnchainFindMatch(
   session: SessionUser,
   leagueId: string,
   _profileKey: string | null,
+  format: ArenaFormat = "hu",
 ) {
   if (!(await isFeatureEnabled("onchain_matchmaking"))) {
     return reply.code(503).send({
@@ -776,7 +797,13 @@ export async function handleOnchainFindMatch(
     return reply.code(503).send({ error: "vault_not_deployed" });
   }
 
-  const existing = await getActiveOnchainTableForProfile(session.profileId, chainId);
+  const arena = await ensureArenaAccountDeployed(session, chainId);
+  if (!arena) {
+    return reply.code(503).send({ error: "arena_account_unavailable" });
+  }
+  session.arenaAccountAddress = arena;
+
+  const existing = await getActiveOnchainTableForProfile(session.profileId, chainId, format);
   if (existing?.table_id) {
     return {
       tableId: existing.table_id,
@@ -787,37 +814,147 @@ export async function handleOnchainFindMatch(
       leagueId,
       arenaMode: "onchain" as const,
       chainId,
+      format,
       sessionStatus: existing.session_status,
       waitingForChain: existing.session_status === "pending",
     };
   }
 
-  const pool = matchmakingPool(chainId, leagueId);
+  // Ticket already claimed into a batch — return that table instead of minting another ticket.
+  const pendingMatch = await getPendingMatchForProfile(session.profileId, chainId, format);
+  if (pendingMatch?.table_id) {
+    return {
+      tableId: pendingMatch.table_id,
+      tableName: pendingMatch.table_name,
+      created: false,
+      alreadySeated: false,
+      buyIn: league.buyIn,
+      leagueId,
+      arenaMode: "onchain" as const,
+      chainId,
+      format,
+      sessionId: pendingMatch.session_id,
+      sessionStatus: pendingMatch.session_status,
+      waitingForChain: pendingMatch.session_status === "pending",
+      status: pendingMatch.session_status === "pending" ? ("matching" as const) : undefined,
+      message:
+        pendingMatch.session_status === "pending"
+          ? "Match found — opening on-chain session…"
+          : "Match found — seating you…",
+    };
+  }
+
+  const pool = matchmakingPool(chainId, leagueId, format);
   const buyInRaw = leagueBuyInRaw(leagueId);
+  const bit = leagueBit(leagueId);
+
+  // Opponent claimed our ticket moments ago — wait for table/session link, do not re-ticket.
+  if (await hasInFlightMatchedTicket(session.profileId, chainId, pool)) {
+    const linked = await getPendingMatchForProfile(session.profileId, chainId, format);
+    if (linked?.table_id) {
+      return {
+        tableId: linked.table_id,
+        tableName: linked.table_name,
+        created: false,
+        alreadySeated: false,
+        buyIn: league.buyIn,
+        leagueId,
+        arenaMode: "onchain" as const,
+        chainId,
+        format,
+        sessionId: linked.session_id,
+        sessionStatus: linked.session_status,
+        waitingForChain: linked.session_status === "pending",
+        status: "matching" as const,
+        message: "Match found — opening on-chain session…",
+      };
+    }
+    return {
+      status: "matching" as const,
+      message: "Match found — creating your table…",
+      buyIn: league.buyIn,
+      leagueId,
+      arenaMode: "onchain" as const,
+      chainId,
+      format,
+    };
+  }
 
   let selfTicket = await getQueuedTicketForProfile(session.profileId, chainId, pool);
   if (!selfTicket) {
-    // Instant Mode: Mozetto session signer creates the SeatTicket — zero wallet popups.
-    const auto = await createAutomaticInstantTicket({
+    const auto = await createAutomaticSeamlessTicket({
       session,
       leagueId,
       chainId,
       vault,
+      arena,
       pool,
       buyInRaw,
       buyInUsdc: league.buyIn,
       profileKey: _profileKey,
+      leagueBit: bit,
     });
     if (auto.ok === false) {
       return reply.code(auto.status).send({ error: auto.error, message: auto.message });
     }
     selfTicket = await getQueuedTicketForProfile(session.profileId, chainId, pool);
     if (!selfTicket) {
+      // Pairer may have claimed us between mint and read — discover that match.
+      const raced = await getPendingMatchForProfile(session.profileId, chainId, format);
+      if (raced?.table_id) {
+        return {
+          tableId: raced.table_id,
+          tableName: raced.table_name,
+          created: false,
+          alreadySeated: false,
+          buyIn: league.buyIn,
+          leagueId,
+          arenaMode: "onchain" as const,
+          chainId,
+          format,
+          sessionId: raced.session_id,
+          sessionStatus: raced.session_status,
+          waitingForChain: raced.session_status === "pending",
+          status: "matching" as const,
+          message: "Match found — opening on-chain session…",
+        };
+      }
+      if (await hasInFlightMatchedTicket(session.profileId, chainId, pool)) {
+        return {
+          status: "matching" as const,
+          message: "Match found — creating your table…",
+          buyIn: league.buyIn,
+          leagueId,
+          arenaMode: "onchain" as const,
+          chainId,
+          format,
+        };
+      }
       return reply.code(500).send({
         error: "ticket_store_failed",
-        message: "Instant seat ticket was signed but not queued.",
+        message: "Seamless seat ticket was signed but not queued.",
       });
     }
+  }
+
+  // Default lifecycle: Find Match always opens a table immediately. A later
+  // player atomically claims the fullest compatible open table and is
+  // added to its custody session with topUpSession.
+  if (process.env.LEGACY_PAIR_MATCHMAKING !== "1") {
+    return openOrJoinImmediateTable({
+      req,
+      reply,
+      session,
+      selfTicket,
+      leagueId,
+      leagueName: league.name,
+      buyIn: league.buyIn,
+      chainId,
+      vault,
+      buyInRaw,
+      leagueBit: bit,
+      format,
+    });
   }
 
   const pair = await claimTicketPair({
@@ -847,6 +984,7 @@ export async function handleOnchainFindMatch(
     buyIn: league.buyIn,
     createdBy: session.profileId,
     chainId,
+    format,
   });
 
   const batchId = await createMatchmakingBatch({
@@ -855,6 +993,26 @@ export async function handleOnchainFindMatch(
     sessionId,
   });
   await linkTicketsToBatch([pair.self.id, pair.opponent.id], batchId, sessionId);
+
+  const selfArena = (pair.self.arena_account_address ?? pair.self.wallet_address).toLowerCase();
+  const oppArena = (pair.opponent.arena_account_address ?? pair.opponent.wallet_address).toLowerCase();
+
+  const selfResId = await reserveExposure({
+    profileId: pair.self.profile_id,
+    chainId,
+    arenaAccountAddress: selfArena,
+    buyInRaw: buyInRaw.toString(),
+    batchId,
+    sessionId,
+  });
+  const oppResId = await reserveExposure({
+    profileId: pair.opponent.profile_id,
+    chainId,
+    arenaAccountAddress: oppArena,
+    buyInRaw: buyInRaw.toString(),
+    batchId,
+    sessionId,
+  });
 
   await createOnchainSessionPending({
     sessionId,
@@ -866,8 +1024,33 @@ export async function handleOnchainFindMatch(
     profileSetHash: PROFILE_SET_HASH,
   });
 
+  // Register both players before openSession so the waiting opponent can discover
+  // this tableId while the pairer is still waiting on the chain receipt.
+  await insertOnchainSessionPlayers(sessionId, [
+    {
+      profileId: pair.self.profile_id,
+      walletAddress: selfArena,
+      arenaAccountAddress: selfArena,
+      ownerAddress: pair.self.owner_address ?? pair.self.wallet_address,
+      buyInRaw,
+      seat: 0,
+      controllerHash: pair.self.controller_hash,
+      agentProfileHash: pair.self.agent_profile_hash,
+    },
+    {
+      profileId: pair.opponent.profile_id,
+      walletAddress: oppArena,
+      arenaAccountAddress: oppArena,
+      ownerAddress: pair.opponent.owner_address ?? pair.opponent.wallet_address,
+      buyInRaw,
+      seat: 1,
+      controllerHash: pair.opponent.controller_hash,
+      agentProfileHash: pair.opponent.agent_profile_hash,
+    },
+  ]);
+
   const tickets = [pair.self, pair.opponent].map((t) => ({
-    player: t.wallet_address as Address,
+    player: (t.arena_account_address ?? t.wallet_address) as Address,
     gameTemplateId: t.game_template_id as Hex,
     buyIn: BigInt(Math.round(Number(t.buy_in) * 10 ** USDC_DECIMALS)),
     controllerHash: t.controller_hash as Hex,
@@ -875,11 +1058,15 @@ export async function handleOnchainFindMatch(
     expiresAt: BigInt(Math.floor(new Date(t.expires_at).getTime() / 1000)),
     nonce: BigInt(t.nonce),
     matchmakingPool: t.matchmaking_pool as Hex,
+    leagueBit: Number(t.league_bit ?? bit),
+    rated: t.rated !== false,
   }));
   const signatures = [pair.self.signature, pair.opponent.signature] as Hex[];
 
   const relayerPk = process.env.SESSION_RELAYER_PRIVATE_KEY as Hex | undefined;
   if (!relayerPk) {
+    await releaseExposure(selfResId);
+    await releaseExposure(oppResId);
     await markBatchFailed(batchId, "SESSION_RELAYER_PRIVATE_KEY not configured");
     return reply.code(503).send({ error: "relayer_not_configured" });
   }
@@ -894,7 +1081,7 @@ export async function handleOnchainFindMatch(
   try {
     openTxHash = await wallet.writeContract({
       address: vault,
-      abi: arenaVaultAbi,
+      abi: arenaVaultV2Abi,
       functionName: "openSession",
       args: [
         {
@@ -910,37 +1097,21 @@ export async function handleOnchainFindMatch(
       ],
       chain,
       account,
-    } as any);
+    } as never);
     await publicClient.waitForTransactionReceipt({ hash: openTxHash });
     await markBatchSubmitted(batchId, openTxHash);
-    await insertOnchainSessionPlayers(sessionId, [
-      {
-        profileId: pair.self.profile_id,
-        walletAddress: pair.self.wallet_address,
-        buyInRaw,
-        seat: 0,
-        controllerHash: pair.self.controller_hash,
-        agentProfileHash: pair.self.agent_profile_hash,
-      },
-      {
-        profileId: pair.opponent.profile_id,
-        walletAddress: pair.opponent.wallet_address,
-        buyInRaw,
-        seat: 1,
-        controllerHash: pair.opponent.controller_hash,
-        agentProfileHash: pair.opponent.agent_profile_hash,
-      },
-    ]);
-    // Receipt is proof of lock — mark opened so game-server join is not blocked on indexer lag.
     await markOnchainSessionOpened(sessionId, openTxHash);
+    await confirmExposure(selfResId, sessionId);
+    await confirmExposure(oppResId, sessionId);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "open_session_failed";
     req.log.error({ err: e, sessionId }, "openSession failed");
+    await releaseExposure(selfResId);
+    await releaseExposure(oppResId);
     await markBatchFailed(batchId, msg);
     return reply.code(502).send({ error: "open_session_failed", message: msg });
   }
 
-  // Wait briefly for chain-indexer Instant mirrors so lockBuyIn can succeed.
   const mirrorReady = await waitForBuyInMirrors(
     [pair.self.profile_id, pair.opponent.profile_id],
     league.buyIn,
@@ -963,6 +1134,225 @@ export async function handleOnchainFindMatch(
   };
 }
 
+async function openOrJoinImmediateTable(opts: {
+  req: FastifyRequest;
+  reply: FastifyReply;
+  session: SessionUser;
+  selfTicket: NonNullable<Awaited<ReturnType<typeof getQueuedTicketForProfile>>>;
+  leagueId: string;
+  leagueName: string;
+  buyIn: number;
+  chainId: number;
+  vault: Address;
+  buyInRaw: bigint;
+  leagueBit: number;
+  format?: ArenaFormat;
+}) {
+  const format = opts.format ?? "hu";
+  const relayerPk = process.env.SESSION_RELAYER_PRIVATE_KEY as Hex | undefined;
+  if (!relayerPk) {
+    return opts.reply.code(503).send({ error: "relayer_not_configured" });
+  }
+
+  const chain = chainFromId(opts.chainId);
+  const rpc = rpcForChain(opts.chainId);
+  const account = privateKeyToAccount(relayerPk);
+  const wallet = createWalletClient({ account, chain, transport: http(rpc) });
+  const publicClient = createPublicClient({ chain, transport: http(rpc) });
+
+  const makeTicket = (ticket: {
+    wallet_address: string;
+    arena_account_address?: string | null;
+    game_template_id: string;
+    buy_in: string;
+    controller_hash: string;
+    agent_profile_hash: string;
+    expires_at: Date;
+    nonce: string;
+    matchmaking_pool: string;
+    league_bit?: number | null;
+    rated?: boolean | null;
+  }) => ({
+    player: (ticket.arena_account_address ?? ticket.wallet_address) as Address,
+    gameTemplateId: ticket.game_template_id as Hex,
+    buyIn: BigInt(Math.round(Number(ticket.buy_in) * 10 ** USDC_DECIMALS)),
+    controllerHash: ticket.controller_hash as Hex,
+    agentProfileHash: ticket.agent_profile_hash as Hex,
+    expiresAt: BigInt(Math.floor(new Date(ticket.expires_at).getTime() / 1000)),
+    nonce: BigInt(ticket.nonce),
+    matchmakingPool: ticket.matchmaking_pool as Hex,
+    leagueBit: Number(ticket.league_bit ?? opts.leagueBit),
+    rated: ticket.rated !== false,
+  });
+
+  // Prefer the fullest compatible table that still has a seat.
+  const open = await claimOpenOnchainSession({
+    selfTicketId: opts.selfTicket.id,
+    profileId: opts.session.profileId,
+    chainId: opts.chainId,
+    leagueId: opts.leagueId,
+    buyInUsdc: opts.buyIn,
+    format,
+  });
+  if (open) {
+    const arena = (open.ticket.arena_account_address ?? open.ticket.wallet_address).toLowerCase();
+    const reservationId = await reserveExposure({
+      profileId: open.ticket.profile_id,
+      chainId: opts.chainId,
+      arenaAccountAddress: arena,
+      buyInRaw: opts.buyInRaw.toString(),
+      sessionId: open.sessionId,
+    });
+    try {
+      const hash = await wallet.writeContract({
+        address: opts.vault,
+        abi: arenaVaultV2Abi,
+        functionName: "topUpSession",
+        args: [
+          open.sessionId as Hex,
+          makeTicket(open.ticket),
+          open.ticket.signature as Hex,
+        ],
+        chain,
+        account,
+      } as never);
+      await publicClient.waitForTransactionReceipt({ hash });
+      await markTicketOpened(open.ticket.id, open.sessionId);
+      await confirmExposure(reservationId, open.sessionId);
+      const mirrorReady = await waitForBuyInMirrors([opts.session.profileId], opts.buyIn, 20_000);
+      return {
+        tableId: open.tableId,
+        tableName: open.tableName,
+        created: false,
+        alreadySeated: false,
+        buyIn: opts.buyIn,
+        leagueId: opts.leagueId,
+        arenaMode: "onchain" as const,
+        chainId: opts.chainId,
+        format,
+        sessionId: open.sessionId,
+        sessionStatus: "opened" as const,
+        waitingForChain: !mirrorReady,
+        openTxHash: hash,
+      };
+    } catch (e) {
+      await releaseExposure(reservationId);
+      await releaseOpenSessionClaim(open.ticket.id, open.sessionId, opts.session.profileId);
+      opts.req.log.error({ err: e, sessionId: open.sessionId }, "topUpSession failed");
+      return opts.reply.code(502).send({
+        error: "join_session_failed",
+        message: e instanceof Error ? e.message : "Could not join open table",
+      });
+    }
+  }
+
+  // No open seat: create a one-player table and open custody immediately.
+  const ticket = await claimSingleTicket(opts.selfTicket.id, opts.session.profileId);
+  if (!ticket) {
+    return opts.reply.code(409).send({
+      error: "ticket_claimed",
+      message: "Your ticket is already being matched. Please retry.",
+    });
+  }
+
+  const sessionId = (`0x${randomBytes(32).toString("hex")}`) as Hex;
+  const dealerRoot = keccak256(toBytes(`dealer:${sessionId}`));
+  const table = await createOnchainArenaTable({
+    leagueId: opts.leagueId,
+    buyIn: opts.buyIn,
+    createdBy: opts.session.profileId,
+    chainId: opts.chainId,
+    format,
+  });
+  const batchId = await createMatchmakingBatch({
+    chainId: opts.chainId,
+    gameTemplateId: NLHE_HU_STANDARD_V1_TEMPLATE_ID,
+    sessionId,
+  });
+  await linkTicketsToBatch([ticket.id], batchId, sessionId);
+
+  const arena = (ticket.arena_account_address ?? ticket.wallet_address).toLowerCase();
+  const reservationId = await reserveExposure({
+    profileId: ticket.profile_id,
+    chainId: opts.chainId,
+    arenaAccountAddress: arena,
+    buyInRaw: opts.buyInRaw.toString(),
+    batchId,
+    sessionId,
+  });
+  await createOnchainSessionPending({
+    sessionId,
+    chainId: opts.chainId,
+    gameTemplateId: NLHE_HU_STANDARD_V1_TEMPLATE_ID,
+    tableId: table.id,
+    dealerRoot,
+    engineHash: POKER_ENGINE_HASH,
+    profileSetHash: PROFILE_SET_HASH,
+  });
+  await insertOnchainSessionPlayers(sessionId, [
+    {
+      profileId: ticket.profile_id,
+      walletAddress: arena,
+      arenaAccountAddress: arena,
+      ownerAddress: ticket.owner_address ?? ticket.wallet_address,
+      buyInRaw: opts.buyInRaw,
+      seat: 0,
+      controllerHash: ticket.controller_hash,
+      agentProfileHash: ticket.agent_profile_hash,
+    },
+  ]);
+
+  try {
+    const hash = await wallet.writeContract({
+      address: opts.vault,
+      abi: arenaVaultV2Abi,
+      functionName: "openSession",
+      args: [
+        {
+          sessionId,
+          gameTemplateId: NLHE_HU_STANDARD_V1_TEMPLATE_ID,
+          dealerRoot,
+          engineHash: POKER_ENGINE_HASH,
+          profileSetHash: PROFILE_SET_HASH,
+          emergencyExitDelay: EMERGENCY_EXIT_DELAY,
+        },
+        [makeTicket(ticket)],
+        [ticket.signature as Hex],
+      ],
+      chain,
+      account,
+    } as never);
+    await publicClient.waitForTransactionReceipt({ hash });
+    await markBatchSubmitted(batchId, hash);
+    await markOnchainSessionOpened(sessionId, hash);
+    await confirmExposure(reservationId, sessionId);
+    const mirrorReady = await waitForBuyInMirrors([opts.session.profileId], opts.buyIn, 20_000);
+    return {
+      tableId: table.id,
+      tableName: table.name,
+      created: true,
+      alreadySeated: false,
+      buyIn: opts.buyIn,
+      leagueId: opts.leagueId,
+      arenaMode: "onchain" as const,
+      chainId: opts.chainId,
+      format,
+      sessionId,
+      sessionStatus: "opened" as const,
+      waitingForChain: !mirrorReady,
+      openTxHash: hash,
+    };
+  } catch (e) {
+    await releaseExposure(reservationId);
+    await markBatchFailed(batchId, e instanceof Error ? e.message : "open_session_failed");
+    opts.req.log.error({ err: e, sessionId }, "single-player openSession failed");
+    return opts.reply.code(502).send({
+      error: "open_session_failed",
+      message: e instanceof Error ? e.message : "Could not create table",
+    });
+  }
+}
+
 async function waitForBuyInMirrors(profileIds: string[], buyIn: number, timeoutMs: number) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -973,28 +1363,27 @@ async function waitForBuyInMirrors(profileIds: string[], buyIn: number, timeoutM
   return false;
 }
 
-async function createAutomaticInstantTicket(opts: {
+async function createAutomaticSeamlessTicket(opts: {
   session: SessionUser;
   leagueId: string;
   chainId: number;
   vault: Address;
+  arena: Address;
   pool: Hex;
   buyInRaw: bigint;
   buyInUsdc: number;
   profileKey: string | null;
-}): Promise<
-  | { ok: true }
-  | { ok: false; status: number; error: string; message: string }
-> {
-  const { session, chainId, vault, pool, buyInRaw, buyInUsdc } = opts;
-  const owner = session.walletAddress!.toLowerCase() as Address;
+  leagueBit: number;
+}): Promise<{ ok: true } | { ok: false; status: number; error: string; message: string }> {
+  const { session, chainId, vault, arena, pool, buyInRaw, buyInUsdc, leagueBit: bit } = opts;
+  const owner = (session.ownerAddress ?? session.walletAddress)!.toLowerCase() as Address;
   const signer = sessionSignerAccount();
   if (!signer) {
     return {
       ok: false,
       status: 400,
       error: "ticket_required",
-      message: "Sign a seat ticket, or configure Instant session signer for popup-free joins.",
+      message: "Sign a seat ticket, or configure the seamless-play session signer.",
     };
   }
 
@@ -1005,99 +1394,121 @@ async function createAutomaticInstantTicket(opts: {
   const chainCfg = getChainConfig(resolveChainEnv(chainId));
   const token = chainCfg.usdc;
 
-  const [auth, remaining, allowance, walletBalance] = await Promise.all([
+  const code = await publicClient.getBytecode({ address: arena });
+  if (!code || code === "0x") {
+    return {
+      ok: false,
+      status: 400,
+      error: "arena_account_not_deployed",
+      message: "Your Arena Account is still deploying. Try again in a moment.",
+    };
+  }
+
+  const [gameAuth, remLife, remRisk, balance] = await Promise.all([
     publicClient.readContract({
-      address: vault,
-      abi: arenaVaultAbi,
-      functionName: "instantAuth",
-      args: [owner],
-    } as never) as Promise<readonly [Address, bigint, bigint, bigint, bigint | number, boolean]>,
+      address: arena,
+      abi: arenaAccountAbi,
+      functionName: "gameAuth",
+    } as never) as Promise<readonly [
+      Address,
+      Address,
+      Address,
+      Hex,
+      number,
+      bigint,
+      bigint,
+      bigint,
+      bigint,
+      bigint,
+      bigint | number,
+      number,
+      number,
+      boolean,
+      boolean,
+    ]>,
     publicClient.readContract({
-      address: vault,
-      abi: arenaVaultAbi,
-      functionName: "remainingInstantSpend",
-      args: [owner],
+      address: arena,
+      abi: arenaAccountAbi,
+      functionName: "remainingLifetimeCap",
+    } as never) as Promise<bigint>,
+    publicClient.readContract({
+      address: arena,
+      abi: arenaAccountAbi,
+      functionName: "remainingAtRiskCap",
     } as never) as Promise<bigint>,
     publicClient.readContract({
       address: token,
-      abi: [
-        {
-          type: "function",
-          name: "allowance",
-          stateMutability: "view",
-          inputs: [
-            { name: "owner", type: "address" },
-            { name: "spender", type: "address" },
-          ],
-          outputs: [{ type: "uint256" }],
-        },
-      ] as const,
-      functionName: "allowance",
-      args: [owner, vault],
-    } as never) as Promise<bigint>,
-    publicClient.readContract({
-      address: token,
-      abi: [
-        {
-          type: "function",
-          name: "balanceOf",
-          stateMutability: "view",
-          inputs: [{ name: "account", type: "address" }],
-          outputs: [{ type: "uint256" }],
-        },
-      ] as const,
+      abi: erc20BalanceAbi,
       functionName: "balanceOf",
-      args: [owner],
+      args: [arena],
     } as never) as Promise<bigint>,
   ]);
 
   const now = Math.floor(Date.now() / 1000);
-  if (!auth[5] || Number(auth[4]) <= now) {
+  if (!gameAuth[14] || Number(gameAuth[10]) <= now) {
     return {
       ok: false,
       status: 400,
-      error: "instant_required",
-      message: "Enable Instant Play once before finding a match.",
+      error: "seamless_play_required",
+      message: "Enable seamless play once before finding a match.",
     };
   }
-  if (auth[0].toLowerCase() !== signer.address.toLowerCase()) {
+  if (gameAuth[0].toLowerCase() !== signer.address.toLowerCase()) {
     return {
       ok: false,
       status: 400,
-      error: "instant_signer_mismatch",
-      message: "Re-enable Instant Play to refresh your Mozetto session permission.",
+      error: "signer_mismatch",
+      message: "Re-enable seamless play to refresh your Mozetto session permission.",
     };
   }
-  if (buyInRaw > auth[3]) {
+  if (gameAuth[2].toLowerCase() !== vault.toLowerCase()) {
+    return {
+      ok: false,
+      status: 400,
+      error: "vault_mismatch",
+      message: "Re-enable seamless play for the current vault.",
+    };
+  }
+  if (buyInRaw > gameAuth[9]) {
     return {
       ok: false,
       status: 400,
       error: "buy_in_above_cap",
-      message: `Buy-in exceeds your Instant per-match maximum (${Number(auth[3]) / 1e6} USDC).`,
+      message: `Buy-in exceeds your per-match maximum (${Number(gameAuth[9]) / 1e6} USDC).`,
     };
   }
-  if (buyInRaw > remaining) {
+  if (buyInRaw > remLife || buyInRaw > remRisk) {
     return {
       ok: false,
       status: 400,
-      error: "instant_spend_exhausted",
-      message: "Instant spend budget exhausted — raise your budget or revoke and re-enable.",
+      error: "cap_exhausted",
+      message: "Seamless-play budget exhausted — raise caps or revoke and re-enable.",
     };
   }
-  if (allowance < buyInRaw) {
+  if (Number(gameAuth[12]) + 1 > Number(gameAuth[11])) {
     return {
       ok: false,
       status: 400,
-      error: "allowance_required",
-      message: "Token allowance too low — re-enable Instant Play.",
+      error: "concurrent_games",
+      message: "You already have the maximum concurrent games under your permission.",
     };
   }
-  if (walletBalance < buyInRaw) {
+  if (balance < buyInRaw) {
     return {
       ok: false,
       status: 400,
-      error: "insufficient_wallet",
-      message: "Wallet balance too low for this league buy-in.",
+      error: "insufficient_arena_balance",
+      message: "Fund your Arena Account before finding a match.",
+    };
+  }
+
+  const reserved = await sumReservedExposure(arena, chainId);
+  if (gameAuth[8] + reserved.reservedRaw + buyInRaw > gameAuth[7]) {
+    return {
+      ok: false,
+      status: 400,
+      error: "at_risk_reserved",
+      message: "Too much balance reserved in pending matches. Wait or cancel.",
     };
   }
 
@@ -1114,10 +1525,10 @@ async function createAutomaticInstantTicket(opts: {
     };
   }
 
-  const nonce = await suggestTicketNonce(owner, chainId);
+  const nonce = await suggestTicketNonce(arena, chainId);
   const expiresAt = BigInt(now + TICKET_TTL_SEC);
   const message = {
-    player: owner,
+    player: arena,
     gameTemplateId: NLHE_HU_STANDARD_V1_TEMPLATE_ID as Hex,
     buyIn: buyInRaw,
     controllerHash: CONTROLLER_HASH as Hex,
@@ -1125,11 +1536,13 @@ async function createAutomaticInstantTicket(opts: {
     expiresAt,
     nonce,
     matchmakingPool: pool,
+    leagueBit: bit,
+    rated: true,
   };
 
   const signature = await signer.signTypedData({
-    domain: seatTicketDomain(chainId, vault),
-    types: SEAT_TICKET_TYPES,
+    domain: seatTicketV2Domain(chainId, vault),
+    types: SEAT_TICKET_V2_TYPES,
     primaryType: "SeatTicket",
     message,
   });
@@ -1137,7 +1550,9 @@ async function createAutomaticInstantTicket(opts: {
   try {
     await insertSeatTicket({
       profileId: session.profileId,
-      walletAddress: owner,
+      walletAddress: arena,
+      arenaAccountAddress: arena,
+      ownerAddress: owner,
       chainId,
       gameTemplateId: NLHE_HU_STANDARD_V1_TEMPLATE_ID,
       buyInUsdc,
@@ -1147,6 +1562,8 @@ async function createAutomaticInstantTicket(opts: {
       nonce,
       matchmakingPool: pool,
       signature,
+      leagueBit: bit,
+      rated: true,
     });
     return { ok: true };
   } catch (e) {

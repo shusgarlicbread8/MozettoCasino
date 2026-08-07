@@ -1,8 +1,17 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { SignJWT, jwtVerify } from "jose";
-import { createPublicClient, http, type Hex, type Address, type Chain } from "viem";
+import { createPublicClient, createWalletClient, http, type Hex, type Address, type Chain } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { anvil, base, baseSepolia } from "viem/chains";
-import { query, getAvailableBalance, getEscrowBalance, ensureModeAccounts } from "@mozetto/database";
+import { getChainConfig, arenaAccountFactoryAbi } from "@mozetto/blockchain";
+import {
+  query,
+  getAvailableBalance,
+  getActiveTableStackBalance,
+  ensureModeAccounts,
+  upsertArenaAccount,
+  markArenaAccountDeployed,
+} from "@mozetto/database";
 import { sessionCookieOpts } from "@mozetto/server-env";
 import { getAdminClient } from "./supabase.js";
 
@@ -28,7 +37,11 @@ export type SessionUser = {
   agentHandle: string | null;
   profileKind: ProfileKind;
   chainId: number | null;
+  /** Owner wallet (MetaMask/Coinbase) — authentication identity. */
   walletAddress: string | null;
+  ownerAddress: string | null;
+  /** Gaming custody address (ArenaAccount). Null until bootstrap. */
+  arenaAccountAddress: string | null;
 };
 
 type JwtPayload = {
@@ -38,6 +51,8 @@ type JwtPayload = {
   profileKind?: string;
   chainId?: number;
   walletAddress?: string;
+  ownerAddress?: string;
+  arenaAccountAddress?: string;
 };
 
 async function signSession(payload: JwtPayload) {
@@ -68,6 +83,7 @@ async function loadProfileById(profileId: string) {
     agent_id: string | null;
     agent_handle: string | null;
     wallet_address: string | null;
+    arena_account_address: string | null;
   }>(
     `select p.id as profile_id, p.handle, p.display_name, p.league,
             coalesce(p.profile_kind::text, 'demo') as profile_kind,
@@ -75,7 +91,11 @@ async function loadProfileById(profileId: string) {
             a.id as agent_id, a.handle as agent_handle,
             (select lower(wi.address) from wallet_identities wi
               where wi.user_id = p.id or wi.profile_id = p.id
-              order by wi.verified_at desc nulls last limit 1) as wallet_address
+              order by wi.verified_at desc nulls last limit 1) as wallet_address,
+            (select lower(aa.arena_account_address) from arena_accounts aa
+              where aa.profile_id = p.id
+                and (p.primary_chain_id is null or aa.chain_id = p.primary_chain_id)
+              order by aa.updated_at desc nulls last limit 1) as arena_account_address
      from profiles p
      left join agent_identities a on a.owner_id = p.id
      where p.id = $1
@@ -100,8 +120,9 @@ function toSession(
   chainIdOverride?: number | null,
 ): SessionUser {
   const kind = (profile.profile_kind === "onchain" ? "onchain" : "demo") as ProfileKind;
+  const owner = profile.wallet_address;
   return {
-    authUserId: profile.auth_user_id ?? `wallet:${profile.wallet_address ?? profile.profile_id}`,
+    authUserId: profile.auth_user_id ?? `wallet:${owner ?? profile.profile_id}`,
     profileId: profile.profile_id,
     email,
     handle: profile.handle,
@@ -110,7 +131,9 @@ function toSession(
     agentHandle: profile.agent_handle,
     profileKind: kind,
     chainId: chainIdOverride ?? profile.primary_chain_id,
-    walletAddress: profile.wallet_address,
+    walletAddress: owner,
+    ownerAddress: owner,
+    arenaAccountAddress: profile.arena_account_address,
   };
 }
 
@@ -179,6 +202,8 @@ function publicUser(session: SessionUser) {
     profileKind: session.profileKind,
     chainId: session.chainId,
     walletAddress: session.walletAddress,
+    ownerAddress: session.ownerAddress ?? session.walletAddress,
+    arenaAccountAddress: session.arenaAccountAddress,
   };
 }
 
@@ -385,6 +410,13 @@ export async function registerAuthRoutes(app: FastifyInstance) {
 
     await ensureModeAccounts(profileId, "onchain");
 
+    const arena = await bootstrapArenaAccount({
+      profileId,
+      ownerAddress: address,
+      chainId,
+      log: req.log,
+    });
+
     const profile = await loadProfileById(profileId);
     if (!profile) return reply.code(500).send({ error: "profile_missing" });
 
@@ -395,13 +427,18 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       profileKind: "onchain",
       chainId,
       walletAddress: address,
+      ownerAddress: address,
+      arenaAccountAddress: arena?.arenaAccountAddress,
     });
     setSessionCookie(reply, cookie);
     const session = toSession(profile, address, chainId);
+    if (arena?.arenaAccountAddress) session.arenaAccountAddress = arena.arenaAccountAddress;
     if (isNewAccount && displayName) session.displayName = displayName;
     return {
       user: publicUser(session),
       isNewAccount,
+      arenaAccountAddress: arena?.arenaAccountAddress ?? null,
+      arenaAccountDeployed: arena?.deployed ?? false,
       available: await getAvailableBalance(profileId, "onchain"),
     };
   });
@@ -450,7 +487,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     return {
       user: publicUser(session),
       available: await getAvailableBalance(session.profileId, mode),
-      atTables: await getEscrowBalance(session.profileId, mode),
+      atTables: await getActiveTableStackBalance(session.profileId),
       profileKind: session.profileKind,
       chainId: session.chainId,
     };
@@ -490,4 +527,106 @@ export async function requireOnchainUser(req: FastifyRequest, reply: FastifyRepl
     return null;
   }
   return session;
+}
+
+async function bootstrapArenaAccount(opts: {
+  profileId: string;
+  ownerAddress: Address;
+  chainId: number;
+  log: { warn: (o: unknown, msg?: string) => void; error: (o: unknown, msg?: string) => void };
+}): Promise<{ arenaAccountAddress: string; deployed: boolean } | null> {
+  const env =
+    opts.chainId === 31337 ? "anvil" : opts.chainId === 8453 ? "base" : "base-sepolia";
+  const cfg = getChainConfig(env);
+  const factory = cfg.contracts.arenaAccountFactory;
+  if (!factory) {
+    opts.log.warn({ chainId: opts.chainId }, "arena_account_factory_missing");
+    return null;
+  }
+
+  const chain = opts.chainId === 31337 ? anvil : opts.chainId === 8453 ? base : baseSepolia;
+  const rpc =
+    opts.chainId === 31337
+      ? process.env.ANVIL_RPC_URL || "http://127.0.0.1:8545"
+      : opts.chainId === 8453
+        ? process.env.BASE_RPC_URL || "https://mainnet.base.org"
+        : process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org";
+
+  const publicClient = createPublicClient({ chain, transport: http(rpc) });
+  let predicted: Address;
+  try {
+    predicted = (await publicClient.readContract({
+      address: factory,
+      abi: arenaAccountFactoryAbi,
+      functionName: "predictAddress",
+      args: [opts.ownerAddress],
+    } as never)) as Address;
+  } catch (e) {
+    opts.log.error({ err: e }, "predict_arena_account_failed");
+    return null;
+  }
+
+  await upsertArenaAccount({
+    profileId: opts.profileId,
+    chainId: opts.chainId,
+    ownerAddress: opts.ownerAddress,
+    arenaAccountAddress: predicted,
+    factoryAddress: factory,
+    implementationAddress: cfg.contracts.arenaAccountImplementation,
+    deploymentStatus: "predicted",
+  });
+
+  const existing = (await publicClient.readContract({
+    address: factory,
+    abi: arenaAccountFactoryAbi,
+    functionName: "accountOf",
+    args: [opts.ownerAddress],
+  } as never)) as Address;
+
+  if (existing && existing !== "0x0000000000000000000000000000000000000000") {
+    await markArenaAccountDeployed(opts.ownerAddress, opts.chainId, "already-deployed");
+    return { arenaAccountAddress: existing.toLowerCase(), deployed: true };
+  }
+
+  const relayerPk = process.env.SESSION_RELAYER_PRIVATE_KEY as Hex | undefined;
+  if (!relayerPk) {
+    opts.log.warn("SESSION_RELAYER_PRIVATE_KEY missing — ArenaAccount predicted only");
+    return { arenaAccountAddress: predicted.toLowerCase(), deployed: false };
+  }
+
+  try {
+    const account = privateKeyToAccount(relayerPk);
+    const wallet = createWalletClient({ account, chain, transport: http(rpc) });
+    const hash = await wallet.writeContract({
+      address: factory,
+      abi: arenaAccountFactoryAbi,
+      functionName: "createAccount",
+      args: [opts.ownerAddress],
+      chain,
+      account,
+    });
+    await publicClient.waitForTransactionReceipt({ hash });
+    await upsertArenaAccount({
+      profileId: opts.profileId,
+      chainId: opts.chainId,
+      ownerAddress: opts.ownerAddress,
+      arenaAccountAddress: predicted,
+      factoryAddress: factory,
+      implementationAddress: cfg.contracts.arenaAccountImplementation,
+      deploymentStatus: "deployed",
+      deployTxHash: hash,
+    });
+    return { arenaAccountAddress: predicted.toLowerCase(), deployed: true };
+  } catch (e) {
+    opts.log.error({ err: e }, "deploy_arena_account_failed");
+    await upsertArenaAccount({
+      profileId: opts.profileId,
+      chainId: opts.chainId,
+      ownerAddress: opts.ownerAddress,
+      arenaAccountAddress: predicted,
+      factoryAddress: factory,
+      deploymentStatus: "failed",
+    });
+    return { arenaAccountAddress: predicted.toLowerCase(), deployed: false };
+  }
 }

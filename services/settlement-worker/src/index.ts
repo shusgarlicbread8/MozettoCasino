@@ -103,6 +103,23 @@ const SETTLEMENT_HUB_ABI = [
   },
 ] as const;
 
+const ARENA_VAULT_FEE_ABI = [
+  {
+    type: "function",
+    name: "accruedProtocolFees",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "withdrawProtocolFees",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "amount", type: "uint256" }],
+    outputs: [],
+  },
+] as const;
+
 function keccakLike(data: string): Hex {
   return (`0x${createHash("sha256").update(data).digest("hex")}`) as Hex;
 }
@@ -123,7 +140,7 @@ function toBytes32(raw: string): Hex {
 function hubDomain(chainId: number, verifyingContract: Hex) {
   return {
     name: "MozettoPokerSettlement",
-    version: "1",
+    version: "2",
     chainId,
     verifyingContract,
   } as const;
@@ -301,11 +318,18 @@ async function buildProposal(session: SessionRow) {
 
   const balanceRoot = keccakLike(`balances:${session.session_id}:${finalSequence}`);
   const balances: Record<string, number> = {};
-  let totalRake = 0;
+  let startTotal = 0;
+  let endTotal = 0;
   for (const row of stacks.rows) {
-    balances[row.wallet_address] = Number(row.stack);
-    totalRake += Math.max(0, Number(row.buy_in) - Number(row.stack));
+    const start = Number(row.buy_in);
+    const end = Number(row.stack);
+    balances[row.wallet_address] = end;
+    startTotal += start;
+    endTotal += end;
   }
+  // Rake is the chips removed from the table as a whole, not the sum of
+  // individual losses (which incorrectly counts chips won by another player).
+  const totalRake = Math.max(0, startTotal - endTotal);
 
   const deadline = new Date(Date.now() + 86400_000);
   const insert = await query<{ id: string }>(
@@ -501,37 +525,103 @@ async function submitHubSettlement(
     ).catch(() => null);
     console.log("[settlement-worker] hub settle submitted", proposal.sessionId, hash);
 
+    // The vault accrues rake for accounting; sweep it immediately to the
+    // configured fee treasury after each successful settlement.
+    const vault = process.env.ARENA_VAULT_ADDRESS as Hex | undefined;
+    if (vault) {
+      const fees = await publicClient.readContract({
+        address: vault,
+        abi: ARENA_VAULT_FEE_ABI,
+        functionName: "accruedProtocolFees",
+      });
+      if (fees > 0n) {
+        const feeHash = await wallet.writeContract({
+          address: vault,
+          abi: ARENA_VAULT_FEE_ABI,
+          functionName: "withdrawProtocolFees",
+          args: [fees],
+        });
+        await publicClient.waitForTransactionReceipt({ hash: feeHash });
+        console.log("[settlement-worker] protocol fees swept", fees.toString(), feeHash);
+      }
+    }
+
     // Post-settlement Glicko for on-chain HU sessions (deferred from game-server).
     await maybeRateOnchainSession(proposal.sessionId, proposal.balances).catch((e) =>
       console.warn("[settlement-worker] rated match skip", e),
     );
   } catch (e) {
     console.warn("[settlement-worker] hub settle failed", proposal.sessionId, e instanceof Error ? e.message : e);
+    // Do not leave an invalid proposal in `proposed` forever. A fresh proposal
+    // gets fresh attestations on the next pass.
+    await query(`update settlement_proposals set status = 'rejected' where id = $1`, [
+      proposal.proposalId,
+    ]).catch(() => null);
   }
 }
 
-async function maybeRateOnchainSession(sessionId: string, balances: Record<string, number>) {
-  const rows = await query<{ owner_id: string; agent_id: string; buy_in: string; stack: string }>(
-    `select owner_id::text, agent_id::text, buy_in::text, stack::text
-     from table_sessions where id = $1 or owner_id in (
-       select profile_id::text from onchain_session_players where session_id = $1
-     )`,
+async function maybeRateOnchainSession(sessionId: string, _balances: Record<string, number>) {
+  const meta = await query<{ table_id: string; variant_id: string; max_seats: number }>(
+    `select os.table_id, t.variant_id::text as variant_id, t.max_seats::int as max_seats
+     from onchain_sessions os
+     join tables t on t.id = os.table_id
+     where os.session_id = $1 limit 1`,
     [sessionId],
   );
-  if (rows.rows.length !== 2) return;
+  const tableId = meta.rows[0]?.table_id ?? null;
+  const variantId = meta.rows[0]?.variant_id ?? "";
+  const maxSeats = Number(meta.rows[0]?.max_seats ?? 0);
+
+  const rows = await query<{ owner_id: string; agent_id: string; buy_in: string; stack: string }>(
+    `select distinct on (owner_id)
+            owner_id::text, coalesce(agent_id::text, '') as agent_id, buy_in::text, stack::text
+     from table_sessions
+     where table_id = $2
+       and owner_id in (
+         select profile_id from onchain_session_players where session_id = $1
+       )
+     order by owner_id, coalesce(ended_at, started_at) desc`,
+    [sessionId, tableId],
+  );
+  // Only HU-style rating (exactly two owners). Multiway Classic stays unrated for now.
+  if (rows.rows.length !== 2 || !tableId) return;
+  const poolId =
+    variantId === "nlhe_hu" || maxSeats === 2
+      ? "hu_holdem_standard"
+      : variantId === "nlhe_6max"
+        ? "nlhe_6max_standard"
+        : null;
+  if (!poolId) return;
   const [a, b] = rows.rows;
+
+  const handsRow = await query<{ n: string }>(
+    `select count(*)::text as n from hands
+     where table_id = $1 and (status = 'settled' or settled_at is not null)`,
+    [tableId],
+  );
+  // Fall back to hand_number progress if status wasn't flipped for some hands.
+  const maxHand = await query<{ m: string }>(
+    `select coalesce(max(hand_number), 0)::text as m from hands where table_id = $1`,
+    [tableId],
+  );
+  const hands = Math.max(
+    Number(handsRow.rows[0]?.n ?? 0),
+    Number(maxHand.rows[0]?.m ?? 0),
+    1,
+  );
+
   const profitA = Number(a.stack) - Number(a.buy_in);
   const profitB = Number(b.stack) - Number(b.buy_in);
   const scoreA: 0 | 0.5 | 1 = profitA > profitB ? 1 : profitA < profitB ? 0 : 0.5;
   await settleRatedMatch({
-    poolId: "hu_holdem_standard",
+    poolId,
     ownerA: a.owner_id,
     ownerB: b.owner_id,
-    agentA: a.agent_id,
-    agentB: b.agent_id,
+    agentA: a.agent_id || null,
+    agentB: b.agent_id || null,
     scoreA,
-    hands: 1,
-    tableId: sessionId,
+    hands,
+    tableId,
     stake: Number(a.buy_in),
     eventLogRoot: keccakLike(`onchain:${sessionId}`),
     reason: "onchain_settled",
@@ -548,15 +638,15 @@ async function processOnchainSettlements() {
   const sessions = await query<SessionRow>(
     `select session_id, table_id, chain_id from onchain_sessions os
      where settlement_tx_hash is null
+       and not exists (
+         select 1 from table_sessions active
+         where active.table_id = os.table_id and active.status = 'active'
+       )
        and (
          status in ('playing', 'settling')
          or (
            status = 'opened'
            and table_id is not null
-           and not exists (
-             select 1 from table_sessions ts
-             where ts.table_id = os.table_id and ts.status = 'active'
-           )
            and exists (
              select 1 from table_sessions ts
              where ts.table_id = os.table_id and ts.status = 'completed'

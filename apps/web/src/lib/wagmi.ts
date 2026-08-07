@@ -28,6 +28,7 @@ export type ChainAsset = {
   chainId: number;
   usdc: `0x${string}`;
   vault: `0x${string}` | null;
+  factory: `0x${string}` | null;
   symbol: string;
   decimals: number;
   isTestAsset: boolean;
@@ -40,6 +41,9 @@ export const chainAssets: Record<number, ChainAsset> = {
     usdc: envAddr("NEXT_PUBLIC_USDC_ADDRESS") ?? chainManifest.anvil.usdc,
     vault:
       envAddr("NEXT_PUBLIC_ARENA_VAULT_ADDRESS") ?? chainManifest.anvil.arenaVault,
+    factory:
+      envAddr("NEXT_PUBLIC_ARENA_ACCOUNT_FACTORY_ADDRESS") ??
+      chainManifest.anvil.arenaAccountFactory,
     symbol: chainManifest.anvil.symbol,
     decimals: chainManifest.anvil.decimals,
     isTestAsset: chainManifest.anvil.isTestAsset,
@@ -49,6 +53,7 @@ export const chainAssets: Record<number, ChainAsset> = {
     chainId: baseSepolia.id,
     usdc: chainManifest.baseSepolia.usdc,
     vault: chainManifest.baseSepolia.arenaVault,
+    factory: chainManifest.baseSepolia.arenaAccountFactory,
     symbol: chainManifest.baseSepolia.symbol,
     decimals: chainManifest.baseSepolia.decimals,
     isTestAsset: chainManifest.baseSepolia.isTestAsset,
@@ -58,6 +63,7 @@ export const chainAssets: Record<number, ChainAsset> = {
     chainId: base.id,
     usdc: chainManifest.base.usdc,
     vault: chainManifest.base.arenaVault,
+    factory: chainManifest.base.arenaAccountFactory,
     symbol: "USDC",
     decimals: 6,
     isTestAsset: false,

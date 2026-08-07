@@ -11,8 +11,8 @@ create table if not exists public.rating_pools (
 );
 
 insert into public.rating_pools (id, label, game, format, model_class, description) values
-  ('hu_holdem_standard', 'Heads-Up Hold''em', 'holdem', 'hu', 'standard', 'Standardised HU NLHE matches'),
-  ('nlhe_6max_standard', '6-Max Hold''em', 'holdem', '6max', 'standard', 'Multiway cash Hold''em'),
+  ('hu_holdem_standard', 'Texas Hold''em', 'holdem', 'hu', 'standard', 'Heads-up Texas Hold''em ranked matches'),
+  ('nlhe_6max_standard', 'Poker (Classic)', 'holdem', '6max', 'standard', 'Multiway Poker (Classic) 6-max'),
   ('hu_omaha_standard', 'Heads-Up Omaha', 'omaha', 'hu', 'standard', 'Heads-up Pot-Limit Omaha'),
   ('tournament_standard', 'Tournament', 'tournament', 'mtt', 'standard', 'Scheduled poker tournaments'),
   ('reputation', 'Overall Reputation', 'reputation', 'account', 'standard', 'Reliability / account history')
