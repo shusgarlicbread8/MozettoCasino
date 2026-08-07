@@ -8,6 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../lib.sh"
 
 require_docker
+require_chaos_live_gate
+refuse_production_targets
 
 chaos_log "scenario=db-disconnect"
 chaos_log "expected: pause DB → game/api writes fail safely; resume → outbox catch-up possible"

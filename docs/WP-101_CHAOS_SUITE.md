@@ -35,10 +35,16 @@ scripts/chaos/
     worker-restart.mjs
     db-disconnect.mjs
     assert.mjs
-  live/
+  live/                   # expanded in WP-113 — see docs/WP-113_LIVE_CHAOS.md
+    EXPECTED_OUTCOMES.md
     game-kill.sh
+    dealer-kill.sh
     indexer-restart.sh
+    rpc-stall.sh
     worker-restart.sh
+    settlement-stall.sh
+    vrf-stall.sh
+    redis-kill.sh
     db-disconnect.sh
 ```
 
@@ -126,10 +132,13 @@ Contract backstop: `PokerSettlementHubV3.AlreadySettled` / vault `AlreadySettled
 | Indexer stop/lag | Covered (unit + live recipe) |
 | Settlement submitter restart | Covered (unit guards + live health) |
 | WebSocket gateway alone | Deferred (same process as game today) |
-| Redis kill | Deferred (multi-replica staging) |
-| Primary/fallback RPC | Deferred (WP-100 / ops) |
-| Proof publisher | Deferred (WP-085 runner optional) |
-| Dealer / VRF / Groq / attestor | Deferred (separate packets) |
+| Redis kill | **WP-113** live (`redis-kill`; dual-replica fencing still staging manual) |
+| Primary/fallback RPC | **WP-113** partial (`rpc-stall` consumers); dual-URL failover still ops |
+| Proof publisher | Deferred (WP-085 / `Dockerfile.publisher` optional) |
+| Dealer / VRF / settlement path | **WP-113** live (`dealer-kill`, `vrf-stall`, `settlement-stall`) |
+| Groq / Nitro enclave | Deferred (agent mock fallback; real Nitro separate) |
+
+Live completeness note: `docs/WP-113_LIVE_CHAOS.md` (`CHAOS_LIVE=1`).
 
 ---
 

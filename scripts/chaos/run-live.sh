@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
-# WP-101 live chaos against docker-compose.hosted.yml (+ local postgres for db-disconnect).
-# Not run in default CI — requires a running stack and Docker.
+# WP-113 live chaos against docker-compose.hosted.yml (+ local postgres/redis).
+# Not run in default CI — requires CHAOS_LIVE=1, a running stack, and Docker.
+# Never targets production (refuses MOZETTO_CHAIN_ENV=base|mainnet|prod).
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
 
 SCENARIO="${1:-all}"
+
+LIVE_CORE=(
+  game-kill
+  dealer-kill
+  indexer-restart
+  rpc-stall
+  worker-restart
+  settlement-stall
+  vrf-stall
+)
 
 run_one() {
   local name="$1"
@@ -20,23 +31,50 @@ run_one() {
   bash "$path"
 }
 
+list_scenarios() {
+  cat <<EOF
+Live scenarios (CHAOS_LIVE=1 required):
+  ${LIVE_CORE[*]}
+  redis-kill          (auto if mozetto-redis up, or CHAOS_REDIS_KILL=1)
+  db-disconnect       (opt-in: CHAOS_DB_DISCONNECT=1)
+
+Matrix: scripts/chaos/live/EXPECTED_OUTCOMES.md
+Docs:   docs/WP-113_LIVE_CHAOS.md
+EOF
+}
+
+case "$SCENARIO" in
+  list|-h|--help)
+    list_scenarios
+    exit 0
+    ;;
+esac
+
+require_chaos_live_gate
+refuse_production_targets
+
 case "$SCENARIO" in
   all)
-    run_one game-kill
-    run_one indexer-restart
-    run_one worker-restart
-    # db-disconnect is opt-in (destructive to shared local DB connections)
+    chaos_log "WP-113 live chaos — core multi-container drills"
+    for name in "${LIVE_CORE[@]}"; do
+      run_one "$name"
+    done
+    if container_running mozetto-redis || [[ "${CHAOS_REDIS_KILL:-0}" == "1" ]]; then
+      run_one redis-kill
+    else
+      chaos_log "skip redis-kill (start mozetto-redis or set CHAOS_REDIS_KILL=1)"
+    fi
     if [[ "${CHAOS_DB_DISCONNECT:-0}" == "1" ]]; then
       run_one db-disconnect
     else
       chaos_log "skip db-disconnect (set CHAOS_DB_DISCONNECT=1 to enable)"
     fi
     ;;
-  game-kill|indexer-restart|worker-restart|db-disconnect)
+  game-kill|dealer-kill|indexer-restart|rpc-stall|worker-restart|settlement-stall|vrf-stall|redis-kill|db-disconnect)
     run_one "$SCENARIO"
     ;;
   *)
-    echo "Usage: $0 [all|game-kill|indexer-restart|worker-restart|db-disconnect]" >&2
+    echo "Usage: CHAOS_LIVE=1 $0 [all|list|game-kill|dealer-kill|indexer-restart|rpc-stall|worker-restart|settlement-stall|vrf-stall|redis-kill|db-disconnect]" >&2
     exit 2
     ;;
 esac

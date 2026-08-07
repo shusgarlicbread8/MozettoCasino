@@ -1727,9 +1727,28 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 
 **Follow-up:** Cut over live dealer secrets into EIF on Nitro host; wire parent vsock; publish measurements; WP-090 verify page can surface attestation.
 
+### 2026-08-07 — WP-113 Live chaos completeness (DONE)
+
+**Status:** `DONE` (live recipes + matrix + gates; default CI remains unit-only)
+
+**Delivered:**
+- Expanded live drills under `scripts/chaos/live/`: `dealer-kill`, `rpc-stall`, `vrf-stall`, `settlement-stall`, `redis-kill` (+ existing game/indexer/worker/db)
+- Canonical expected-outcome matrix: `scripts/chaos/live/EXPECTED_OUTCOMES.md`
+- Hard gates: `CHAOS_LIVE=1` required; refuses production-like `MOZETTO_CHAIN_ENV`; `CHAOS_ALLOW_PROD` unsupported
+- Docs: `docs/WP-113_LIVE_CHAOS.md`; WP-101/086/audit register pointers; honest CI gaps
+- Entrypoints: `CHAOS_LIVE=1 pnpm test:chaos:live` / `test:chaos:all`
+
+**Commands / evidence:**
+- `pnpm test:chaos` — unit suite still CI-green (WP-101)
+- Live multi-container: requires hosted stack — **not** wired into default GitHub Actions (by design)
+
+**Out of scope:** Spec mutations; faking live CI green; Nitro enclave/vsock; dual-RPC automatic cutover; proof-publisher compose default; production incident tooling.
+
+**Follow-up:** Staging dual-replica Redis fencing drill; Anvil seeded VRF fulfill race; optional publisher service in hosted compose.
+
 ### 2026-08-07 — WP-101 Chaos suite (DONE)
 
-**Status:** `DONE` (unit suite green in CI; live multi-container optional)
+**Status:** `DONE` (unit suite green in CI; live multi-container completed in WP-113)
 
 **Delivered:**
 - Composable chaos under `scripts/chaos/` — unit (CI) + live (`docker-compose.hosted.yml`)
@@ -1740,11 +1759,11 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 
 **Commands / evidence:**
 - `pnpm test:chaos` — **4/4 scenarios pass** (game-kill, indexer-lag, worker-restart, db-disconnect)
-- Live compose kill/restart **not** executed in this packet (requires hosted stack + secrets)
+- Live compose kill/restart expanded in **WP-113**
 
 **Out of scope:** Spec mutations; faking live CI green; full Plan 14 matrix (Redis dual-replica, VRF, dealer enclave, RPC failover); production incident tooling.
 
-**Follow-up:** Staging `CHAOS_LIVE=1` drill; Redis multi-replica lease chaos; seeded Anvil double-settle race beside WP-100.
+**Follow-up:** Completed via WP-113 live recipes; residual staging manuals listed there.
 
 ### 2026-08-07 — WP-095 Watchtower prototype (DONE)
 
@@ -2211,6 +2230,7 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 | Admin audit + RBAC (WP-094) | migration `022` + `packages/database/src/admin-audit.ts` + `services/api/src/admin-auth.ts` + `docs/WP-094_AUDIT_RBAC.md` |
 | Safe/timelock proposals (WP-093) | `packages/governance` + `apps/admin/src/app/governance/` + `docs/WP-093_SAFE_TIMELOCK.md` |
 | Chaos suite (WP-101) | `scripts/chaos/` + `docs/WP-101_CHAOS_SUITE.md` (`pnpm test:chaos`) |
+| Live chaos completeness (WP-113) | `scripts/chaos/live/` + `docs/WP-113_LIVE_CHAOS.md` (`CHAOS_LIVE=1 pnpm test:chaos:live`) |
 | Full Anvil protocol E2E (WP-100) | `scripts/anvil-e2e-protocol-v3.{mjs,sh}` + `docs/WP-100_ANVIL_E2E.md` (`pnpm e2e:protocol-v3`) |
 | Sepolia deploy recipes (WP-102) | `contracts/script/DeploySepolia.s.sol` + `scripts/sepolia-*.{sh,mjs}` + `docs/WP-102_SEPOLIA_DEPLOYMENT.md` (`pnpm sepolia:*`) — live tx pending ops |
 | Public testnet program (WP-103) | `docs/WP-103_PUBLIC_TESTNET_PROGRAM.md` + `scripts/testnet/` (`pnpm testnet:*`) — live Stage A blocked on ops deploy |

@@ -55,6 +55,9 @@ integrity_tooling:
   - packet: WP-101
     doc: docs/WP-101_CHAOS_SUITE.md
     command: pnpm test:chaos
+  - packet: WP-113
+    doc: docs/WP-113_LIVE_CHAOS.md
+    command: "CHAOS_LIVE=1 pnpm test:chaos:live (staging; not default CI)"
   - packet: WP-095
     doc: docs/WP-095_WATCHTOWER.md
     command: pnpm watchtower
