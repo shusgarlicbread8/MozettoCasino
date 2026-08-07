@@ -41,7 +41,7 @@ Delayed ranked viewing and featured matches — real public sessions after alloc
 | Session list | `GET /v1/tables?variant=nlhe_hu` + `nlhe_6max` | “Nothing to watch” / “No featured matches” |
 | League occupancy | `GET /v1/arena` · `GET /v1/arena/classic` | Hidden when all zeros |
 | Table meta + seats | `GET /v1/tables/:id` | Name falls back to table id |
-| Live public feed | Game WS `subscribe_table` `role: "spectator"` (ignores `holeCards`) | Connecting… / waiting |
+| Live public feed | Game WS `subscribe_table` `role: "spectator"` via `useTableFeed` + WP-125 felt (ignores `holeCards`) | Connecting… / waiting |
 | Verify deep-link | `onchain_session_id` when present → `/verify/:sessionId` | Ghost Verify → `/verify` |
 
 Client filters: seated ≥ 1; omit non-`public` when `privacy` is present. Featured requires seated ≥ 2.
@@ -50,7 +50,7 @@ Client filters: seated ≥ 1; omit non-`public` when `privacy` is present. Featu
 
 ## Delay policy (honest)
 
-Product copy states ~90s ranked delay. Plan 07 defines `table:<id>:spectator-delayed`. The game-server delay buffer is not yet a separate delayed channel in this packet; the spectator UI **never** renders private hole cards or CoT (WS snapshots ignore `holeCards` on this surface).
+Product copy states ~90s ranked delay. Plan 07 defines `table:<id>:spectator-delayed`. The game-server delay buffer is not yet a separate delayed channel in this packet; the spectator UI **never** renders private hole cards or CoT (`useTableFeed` strips `holeCards` when `role: "spectator"`).
 
 ---
 
