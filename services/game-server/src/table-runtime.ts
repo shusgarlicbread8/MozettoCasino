@@ -61,6 +61,8 @@ import {
 } from "./outbox/index.js";
 import {
   hashObservation,
+  notifyAgentRuntimeHandBegin,
+  notifyAgentRuntimeObserve,
   resolveSeatController,
   timeoutFallbackController,
   type SeatController,
@@ -651,6 +653,9 @@ export class TableRuntime {
           this.broadcast(full);
         },
       });
+      if (visibility === "public") {
+        void this.notifyAiObservation(eventType, payload, this.sequence, eventHash);
+      }
       return full;
     }
 
@@ -724,7 +729,84 @@ export class TableRuntime {
         this.broadcast(full);
       },
     });
+    // WP-107: fan out public events to agent-runtime cognition (no hole cards / CoT).
+    if (visibility === "public") {
+      void this.notifyAiObservation(eventType, payload, this.sequence, eventHash);
+    }
     return full;
+  }
+
+  /** AI seats currently occupied (profile-bound). */
+  aiSeatIndexes(): number[] {
+    return [...this.agentProfiles.keys()].filter((seat) => {
+      const s = this.state.seats.find((x) => x.seatIndex === seat);
+      return Boolean(s?.playerId);
+    });
+  }
+
+  sessionIdForAi(): string {
+    return this.onchainSessionId ?? `table:${this.tableId}`;
+  }
+
+  async notifyAiHandBegin(handId: string): Promise<void> {
+    const seats = this.aiSeatIndexes().map((seat) => ({
+      seat,
+      profileKey: this.agentProfiles.get(seat) ?? "machine",
+    }));
+    if (!seats.length) return;
+    await notifyAgentRuntimeHandBegin({
+      sessionId: this.sessionIdForAi(),
+      handId,
+      seats,
+    });
+  }
+
+  async notifyAiObservation(
+    eventType: string,
+    payload: Record<string, unknown>,
+    cursor: number,
+    eventId?: string,
+  ): Promise<void> {
+    const handId = this.state.handId;
+    if (!handId) return;
+    const seats = this.aiSeatIndexes();
+    if (!seats.length) return;
+    const profiles: Record<string, string> = {};
+    for (const seat of seats) {
+      profiles[String(seat)] = this.agentProfiles.get(seat) ?? "machine";
+    }
+    const actorSeat =
+      typeof payload.seatIndex === "number"
+        ? payload.seatIndex
+        : typeof payload.actorSeat === "number"
+          ? payload.actorSeat
+          : null;
+    await notifyAgentRuntimeObserve({
+      sessionId: this.sessionIdForAi(),
+      handId,
+      seats,
+      profiles,
+      event: {
+        cursor,
+        eventId,
+        eventType,
+        street: this.state.street,
+        actorSeat,
+        amount:
+          typeof payload.amount === "number" || typeof payload.amount === "string"
+            ? payload.amount
+            : null,
+        pot: this.state.pot,
+        boardCardCount: this.state.board.length,
+        activeSeats: this.state.seats
+          .filter((s) => s.playerId && !s.folded)
+          .map((s) => s.seatIndex),
+        stacksBySeat: Object.fromEntries(
+          this.state.seats.filter((s) => s.playerId).map((s) => [String(s.seatIndex), s.stack]),
+        ),
+        summaryCode: eventType,
+      },
+    });
   }
 
   async join(opts: {
@@ -1408,6 +1490,7 @@ export class TableRuntime {
     );
     this.state = state;
     await markEpochActive(this.tableId, state.handNumber);
+    void this.notifyAiHandBegin(handId);
     for (const ev of events) await this.emitEngine(ev);
   }
 
@@ -1578,7 +1661,10 @@ export class TableRuntime {
         seatIndex,
         profileKey: profile,
         computeRemainingMs: TURN_MS,
-        sessionId: this.onchainSessionId ?? this.sessions.get(seat.playerId ?? "") ?? undefined,
+        sessionId:
+          this.onchainSessionId ??
+          this.sessions.get(seat.playerId ?? "") ??
+          this.sessionIdForAi(),
         handId: this.state.handId,
       });
       decided = {
@@ -1614,7 +1700,19 @@ export class TableRuntime {
       } catch (err) {
         console.warn("agent_invocations insert failed", this.tableId, err);
       }
-      await sleep(Math.min(400, TURN_MS / 4));
+      // WP-107 / WP-075: wait remaining public cadence on the table clock (client-owned).
+      // Runtime may have already slept (cadenceSleptMs); never double-wait.
+      const cadenceWait =
+        botDecision.cadenceSleptMs && botDecision.cadenceSleptMs > 0
+          ? 0
+          : Math.max(0, botDecision.cadenceWaitMs ?? 0);
+      if (cadenceWait > 0) {
+        const remaining = Math.max(0, (this.actionDeadlineAt ?? Date.now()) - Date.now() - 250);
+        await sleep(Math.min(cadenceWait, remaining, TURN_MS));
+      } else if (botDecision.publicCadenceMs == null) {
+        // Legacy controllers without cadence metadata.
+        await sleep(Math.min(400, TURN_MS / 4));
+      }
     } else {
       await this.persistEvent("ACTION_CLOCK", {
         seatIndex,

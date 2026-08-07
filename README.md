@@ -78,7 +78,7 @@ Open http://localhost:3000 → **Play Demo** or **Enter On-chain**.
 | **settlement-worker** | Render / Docker | Checkpoints, settlement proposals |
 | **dealer** | Render / Docker | Dealer commitments + secrets |
 | **replay-verifier** | Render / Docker | Replay attestations |
-| **agent-runtime** | Render / Docker | Mock AI action schema |
+| **agent-runtime** | Render / Docker | Live Groq / mock AI seats (WP-107) |
 
 ### Web (Vercel)
 
@@ -148,7 +148,7 @@ services/chain-indexer   ArenaVault log indexer — deposit mirror authority
 services/settlement-worker  Checkpoint / mock VRF publisher
 services/dealer          Dealer commitments
 services/replay-verifier Replay attestations
-services/agent-runtime   Schema-validated mock AI actions
+services/agent-runtime   Live Groq table path (cognition/Energy/cadence) + mock
 packages/*               Shared types, DB, game rules, ratings
 contracts/               Foundry (ArenaVault, settlement hub, …)
 design/                  Original Claude Design .dc.html sources

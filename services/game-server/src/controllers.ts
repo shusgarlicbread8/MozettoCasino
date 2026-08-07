@@ -7,13 +7,36 @@ const AGENT_RUNTIME_URL = process.env.AGENT_RUNTIME_URL ?? "http://localhost:400
 const SILICONFLOW_API_URL = process.env.SILICONFLOW_API_URL ?? "https://api.siliconflow.cn/v1/chat/completions";
 const SILICONFLOW_MODEL = process.env.SILICONFLOW_MODEL ?? "deepseek-ai/DeepSeek-V2.5";
 
+/**
+ * WP-107 AI seat controller selection:
+ * - agent-runtime (default): HTTP → cognition → Energy → Groq/mock → cadence
+ * - siliconflow: legacy direct LLM stub
+ * - deterministic: legal random / HTTP mock only
+ */
+export type AiControllerKind = "agent-runtime" | "siliconflow" | "deterministic";
+
+export function resolveAiControllerKind(
+  env: NodeJS.ProcessEnv = process.env,
+): AiControllerKind {
+  const raw = (env.AI_CONTROLLER ?? "agent-runtime").trim().toLowerCase();
+  if (raw === "siliconflow" || raw === "sf") return "siliconflow";
+  if (raw === "deterministic" || raw === "bot" || raw === "random") return "deterministic";
+  return "agent-runtime";
+}
+
 export type SeatDecision = {
   action: PokerAction;
   amount?: number;
   reasonCode: string;
   computeUsed?: number;
   latencyMs?: number;
+  providerLatencyMs?: number;
+  publicCadenceMs?: number;
+  cadenceWaitMs?: number;
+  cadenceSleptMs?: number;
   fallbackUsed?: boolean;
+  energyDebited?: number;
+  energyRemaining?: number;
   modelId?: string;
 };
 
@@ -43,7 +66,12 @@ function pickLegalRandom(legal: ReturnType<typeof getLegalActions>): SeatDecisio
   };
 }
 
-function buildAgentRequest(ctx: SeatControllerContext): AgentRequest {
+function buildAgentRequest(ctx: SeatControllerContext): AgentRequest & {
+  sessionId?: string;
+  handId?: string;
+  seatIndex?: number;
+  cadenceWait?: "client" | "server" | "off";
+} {
   const seat = ctx.state.seats.find((s) => s.seatIndex === ctx.seatIndex)!;
   const callAmount = Math.max(0, ctx.state.currentBet - seat.bet);
   return {
@@ -65,11 +93,31 @@ function buildAgentRequest(ctx: SeatControllerContext): AgentRequest {
       toActSeat: ctx.seatIndex,
     },
     computeRemaining: ctx.computeRemainingMs,
+    sessionId: ctx.sessionId,
+    handId: ctx.handId ?? undefined,
+    seatIndex: ctx.seatIndex,
+    // Game-server owns table-clock wait (WP-075 client mode).
+    cadenceWait: "client",
   };
 }
 
-/** Calls agent-runtime or falls back to a legal random action. */
-export class DeterministicBotController implements SeatController {
+type AgentRuntimeActResponse = AgentResponse & {
+  latencyMs?: number;
+  providerLatencyMs?: number;
+  publicCadenceMs?: number;
+  cadenceWaitMs?: number;
+  cadenceSleptMs?: number;
+  fallbackUsed?: boolean;
+  energyDebited?: number;
+  energyRemaining?: number;
+  modelId?: string;
+};
+
+/**
+ * WP-107: calls agent-runtime `/v1/act` (cognition + Energy + Groq/mock + cadence schedule).
+ * Falls back to a legal random action on transport / legality failure.
+ */
+export class AgentRuntimeController implements SeatController {
   async decide(ctx: SeatControllerContext): Promise<SeatDecision> {
     const legal = getLegalActions(ctx.state);
     if (!legal.length) return { action: "fold", reasonCode: "no_legal", fallbackUsed: true };
@@ -82,19 +130,38 @@ export class DeterministicBotController implements SeatController {
         signal: AbortSignal.timeout(Math.min(ctx.computeRemainingMs, 14_000)),
       });
       if (!res.ok) return pickLegalRandom(legal);
-      const body = (await res.json()) as AgentResponse & { latencyMs?: number };
-      if (!legal.some((l) => l.action === body.action)) return pickLegalRandom(legal);
+      const body = (await res.json()) as AgentRuntimeActResponse;
+      if (!legal.some((l) => l.action === body.action)) {
+        return { ...pickLegalRandom(legal), reasonCode: "illegal_retry_random" };
+      }
       return {
         action: body.action,
         amount: body.amount,
         reasonCode: body.reasonCode,
         computeUsed: body.computeUsed,
         latencyMs: body.latencyMs,
-        modelId: "agent-runtime",
+        providerLatencyMs: body.providerLatencyMs,
+        publicCadenceMs: body.publicCadenceMs,
+        cadenceWaitMs: body.cadenceWaitMs,
+        cadenceSleptMs: body.cadenceSleptMs,
+        fallbackUsed: body.fallbackUsed ?? false,
+        energyDebited: body.energyDebited,
+        energyRemaining: body.energyRemaining,
+        modelId: body.modelId ?? "agent-runtime",
       };
     } catch {
       return pickLegalRandom(legal);
     }
+  }
+}
+
+/** @deprecated Prefer AgentRuntimeController — kept for AI_CONTROLLER=deterministic. */
+export class DeterministicBotController implements SeatController {
+  private inner = new AgentRuntimeController();
+
+  async decide(ctx: SeatControllerContext): Promise<SeatDecision> {
+    // Still hit agent-runtime when available; random only on failure.
+    return this.inner.decide(ctx);
   }
 }
 
@@ -115,9 +182,9 @@ export class TimeoutFallbackController implements SeatController {
   }
 }
 
-/** LLM stub via SiliconFlow; falls back to DeterministicBotController when key missing. */
+/** LLM stub via SiliconFlow; falls back to AgentRuntimeController when key missing. */
 export class SiliconFlowController implements SeatController {
-  private fallback = new DeterministicBotController();
+  private fallback = new AgentRuntimeController();
 
   async decide(ctx: SeatControllerContext): Promise<SeatDecision> {
     const apiKey = process.env.SILICONFLOW_API_KEY;
@@ -197,10 +264,74 @@ export function hashObservation(ctx: SeatControllerContext): string {
 }
 
 export function resolveSeatController(profileKey: string): SeatController {
-  if (process.env.SILICONFLOW_API_KEY && profileKey !== "machine") {
+  const kind = resolveAiControllerKind();
+  if (kind === "siliconflow") {
     return new SiliconFlowController();
   }
-  return new DeterministicBotController();
+  // Legacy: SiliconFlow key + non-machine profile without explicit AI_CONTROLLER.
+  if (
+    !process.env.AI_CONTROLLER &&
+    process.env.SILICONFLOW_API_KEY &&
+    profileKey !== "machine"
+  ) {
+    return new SiliconFlowController();
+  }
+  return new AgentRuntimeController();
+}
+
+/**
+ * Notify agent-runtime of a public table event for continuous cognition (fire-and-forget).
+ * Never sends hole cards / CoT.
+ */
+export async function notifyAgentRuntimeObserve(input: {
+  sessionId: string;
+  handId: string;
+  seats: number[];
+  profiles?: Record<string, string>;
+  event: {
+    cursor: number;
+    eventId?: string;
+    eventType: string;
+    street?: string;
+    actorSeat?: number | null;
+    amount?: number | string | null;
+    pot?: number | string | null;
+    stacksBySeat?: Record<string, number | string>;
+    activeSeats?: number[];
+    boardCardCount?: number;
+    summaryCode?: string;
+  };
+}): Promise<void> {
+  if (process.env.AGENT_RUNTIME_OBSERVE === "0") return;
+  if (!input.seats.length || !input.sessionId || !input.handId) return;
+  try {
+    await fetch(`${AGENT_RUNTIME_URL.replace(/\/$/, "")}/v1/observe`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(2_500),
+    });
+  } catch (err) {
+    console.warn("[wp-107] agent-runtime observe failed", err);
+  }
+}
+
+export async function notifyAgentRuntimeHandBegin(input: {
+  sessionId: string;
+  handId: string;
+  seats: Array<{ seat: number; profileKey?: string }>;
+}): Promise<void> {
+  if (process.env.AGENT_RUNTIME_OBSERVE === "0") return;
+  try {
+    await fetch(`${AGENT_RUNTIME_URL.replace(/\/$/, "")}/v1/hand/begin`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(2_500),
+    });
+  } catch (err) {
+    console.warn("[wp-107] agent-runtime hand/begin failed", err);
+  }
 }
 
 export const timeoutFallbackController = new TimeoutFallbackController();

@@ -483,6 +483,9 @@ importers:
       '@mozetto/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@mozetto/game-rules':
+        specifier: workspace:*
+        version: link:../../packages/game-rules
       '@mozetto/protocol-vectors':
         specifier: workspace:*
         version: link:../../packages/protocol-vectors-ts
@@ -529,6 +532,9 @@ importers:
       '@mozetto/server-env':
         specifier: workspace:*
         version: link:../../packages/server-env
+      '@mozetto/session-seal':
+        specifier: workspace:*
+        version: link:../../packages/session-seal
       '@mozetto/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types

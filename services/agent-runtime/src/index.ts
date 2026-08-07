@@ -1,97 +1,174 @@
+/**
+ * Agent-runtime HTTP service (WP-107 live Groq table integration).
+ *
+ * Path: observe → cognition → Energy → Groq/mock → structured action → cadence → response.
+ * Never returns chain-of-thought / private reasoning to clients.
+ */
+
 import Fastify from "fastify";
 import cors from "@fastify/cors";
-import { AgentRequestSchema, type AgentResponse } from "@mozetto/shared-types";
+import { z } from "zod";
+import { AgentRequestSchema } from "@mozetto/shared-types";
+import { isPresetKey } from "./policy/presets.js";
+import {
+  LiveSessionManager,
+  describeRuntimeConfig,
+  resolveAgentRuntimeMode,
+} from "./live/index.js";
 
 const app = Fastify({ logger: true });
 await app.register(cors, { origin: true });
 
-function decide(req: ReturnType<typeof AgentRequestSchema.parse>): AgentResponse {
-  const { profileKey, legalActions, publicState, privateState } = req;
-  const has = (a: string) => legalActions.find((x) => x.action === a);
-  const suited =
-    privateState.holeCards.length === 2 &&
-    privateState.holeCards[0].suit === privateState.holeCards[1].suit;
-  const high =
-    privateState.holeCards.some((c) => ["A", "K", "Q"].includes(c.rank));
+const ObserveBodySchema = z.object({
+  sessionId: z.string().min(1),
+  handId: z.string().min(1),
+  seats: z.array(z.number().int().nonnegative()).min(1),
+  profiles: z.record(z.string()).optional(),
+  event: z.object({
+    cursor: z.number().int().nonnegative(),
+    eventId: z.string().optional(),
+    kind: z.string().optional(),
+    eventType: z.string().optional(),
+    street: z.string().optional(),
+    actorSeat: z.number().int().nullable().optional(),
+    actionType: z.number().int().nullable().optional(),
+    amount: z.union([z.string(), z.number()]).nullable().optional(),
+    pot: z.union([z.string(), z.number()]).nullable().optional(),
+    stacksBySeat: z.record(z.union([z.string(), z.number()])).optional(),
+    activeSeats: z.array(z.number().int()).optional(),
+    boardCardCount: z.number().int().optional(),
+    publicCadenceMs: z.number().int().nullable().optional(),
+    summaryCode: z.string().optional(),
+  }),
+});
 
-  // Profile-biased but always legal
-  if (profileKey === "shark") {
-    if (has("raise") && (high || suited)) {
-      const r = has("raise")!;
-      return { action: "raise", amount: r.minAmount, reasonCode: "pressure", computeUsed: 120 };
-    }
-    if (has("bet") && publicState.pot > 0) {
-      const b = has("bet")!;
-      return { action: "bet", amount: b.minAmount, reasonCode: "cbet", computeUsed: 100 };
-    }
-  }
-  if (profileKey === "professor") {
-    if (has("check")) return { action: "check", reasonCode: "pot_control", computeUsed: 80 };
-    if (has("call") && publicState.callAmount <= publicState.pot * 0.35) {
-      return { action: "call", amount: has("call")!.minAmount, reasonCode: "odds", computeUsed: 140 };
-    }
-  }
-  if (profileKey === "fox") {
-    if (has("raise") && suited) {
-      return { action: "raise", amount: has("raise")!.minAmount, reasonCode: "semi_bluff", computeUsed: 160 };
-    }
-    if (has("bet")) return { action: "bet", amount: has("bet")!.minAmount, reasonCode: "probe", computeUsed: 110 };
-  }
-  if (profileKey === "machine") {
-    if (has("check")) return { action: "check", reasonCode: "default", computeUsed: 40 };
-    if (has("call")) return { action: "call", amount: has("call")!.minAmount, reasonCode: "default", computeUsed: 40 };
-  }
+const HandBeginSchema = z.object({
+  sessionId: z.string().min(1),
+  handId: z.string().min(1),
+  seats: z
+    .array(
+      z.object({
+        seat: z.number().int().nonnegative(),
+        profileKey: z.string().optional(),
+      }),
+    )
+    .min(1),
+});
 
-  if (has("check")) return { action: "check", reasonCode: "fallback_check", computeUsed: 20 };
-  if (has("call")) return { action: "call", amount: has("call")!.minAmount, reasonCode: "fallback_call", computeUsed: 20 };
-  if (has("fold")) return { action: "fold", reasonCode: "fallback_fold", computeUsed: 10 };
-  const first = legalActions[0];
-  return { action: first.action, amount: first.minAmount, reasonCode: "fallback", computeUsed: 10 };
+const ActBodySchema = AgentRequestSchema.extend({
+  sessionId: z.string().optional(),
+  handId: z.string().optional(),
+  seatIndex: z.number().int().nonnegative().optional(),
+  cadenceWait: z.enum(["client", "server", "off"]).optional(),
+});
+
+let manager: LiveSessionManager;
+try {
+  manager = new LiveSessionManager();
+} catch (err) {
+  app.log.error(err);
+  // Fall back to mock so the process still serves /health for readiness.
+  manager = new LiveSessionManager({
+    env: { ...process.env, AGENT_RUNTIME_MODE: "mock" },
+    mode: "mock",
+  });
 }
 
+app.get("/health", async () => {
+  const cfg = describeRuntimeConfig();
+  return {
+    ok: true,
+    workPacket: "WP-107",
+    ...cfg,
+    modeResolved: manager.mode,
+    modelId: manager.provider.modelId,
+    providerId: manager.provider.providerId,
+    schedulers: manager.schedulerCount(),
+  };
+});
+
+app.get("/v1/metrics", async () => manager.metrics.snapshot());
+
+app.post("/v1/hand/begin", async (req, reply) => {
+  const parsed = HandBeginSchema.safeParse(req.body);
+  if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+  const result = await manager.beginHand(parsed.data);
+  return result;
+});
+
+app.post("/v1/observe", async (req, reply) => {
+  const parsed = ObserveBodySchema.safeParse(req.body);
+  if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+  const profiles = parsed.data.profiles
+    ? Object.fromEntries(
+        Object.entries(parsed.data.profiles).map(([k, v]) => [
+          k,
+          isPresetKey(v) ? v : "machine",
+        ]),
+      )
+    : undefined;
+  const result = await manager.observe({ ...parsed.data, profiles });
+  return result;
+});
+
+/**
+ * Final seat action — full WP-107 path.
+ * Response is Controller-shaped public fields only (no CoT).
+ */
 app.post("/v1/act", async (req, reply) => {
-  const parsed = AgentRequestSchema.safeParse(req.body);
+  const parsed = ActBodySchema.safeParse(req.body);
   if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
 
-  const started = Date.now();
-  const budget = Math.min(Math.max(parsed.data.computeRemaining ?? 15_000, 1_000), 15_000);
   try {
-    // Lightweight bots decide quickly, but respect the table's turn budget.
-    const thinkMs = 400 + Math.floor(Math.random() * 900);
-    await new Promise((r) => setTimeout(r, Math.min(thinkMs, budget - 200)));
-    const result = await Promise.race([
-      Promise.resolve(decide(parsed.data)),
-      new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), budget)),
-    ]);
-    // validate legal
-    const legal = parsed.data.legalActions.find((l) => l.action === result.action);
-    if (!legal) {
-      const fold = parsed.data.legalActions.find((l) => l.action === "fold");
-      const check = parsed.data.legalActions.find((l) => l.action === "check");
-      return {
-        action: (fold ?? check ?? parsed.data.legalActions[0]).action,
-        amount: (fold ?? check ?? parsed.data.legalActions[0]).minAmount,
-        reasonCode: "invalid_retry_fold",
-        computeUsed: result.computeUsed,
-        latencyMs: Date.now() - started,
-      };
-    }
-    return { ...result, latencyMs: Date.now() - started };
-  } catch {
+    const result = await manager.act({
+      profileKey: parsed.data.profileKey,
+      legalActions: parsed.data.legalActions,
+      privateState: parsed.data.privateState,
+      publicState: parsed.data.publicState,
+      computeRemaining: parsed.data.computeRemaining,
+      sessionId: parsed.data.sessionId,
+      handId: parsed.data.handId,
+      seatIndex: parsed.data.seatIndex,
+      cadenceWait: parsed.data.cadenceWait,
+    });
+
+    // Backward-compatible AgentResponse fields + WP-107 extensions.
+    return {
+      action: result.action,
+      amount: result.amount,
+      reasonCode: result.reasonCode,
+      computeUsed: result.computeUsed,
+      latencyMs: result.latencyMs,
+      providerLatencyMs: result.providerLatencyMs,
+      publicCadenceMs: result.publicCadenceMs,
+      cadenceWaitMs: result.cadenceWaitMs,
+      cadenceSleptMs: result.cadenceSleptMs,
+      fallbackUsed: result.fallbackUsed,
+      energyDebited: result.energyDebited,
+      energyRemaining: result.energyRemaining,
+      modelId: result.modelId,
+      providerId: result.providerId,
+      responseNonce: result.responseNonce,
+      audit: result.audit,
+    };
+  } catch (err) {
+    req.log.error(err);
     const fold = parsed.data.legalActions.find((l) => l.action === "fold");
     const check = parsed.data.legalActions.find((l) => l.action === "check");
     const fb = fold ?? check ?? parsed.data.legalActions[0];
     return {
-      action: fb.action,
-      amount: fb.minAmount,
+      action: fb?.action ?? "fold",
+      amount: fb?.minAmount,
       reasonCode: "timeout_fold",
       computeUsed: 0,
-      latencyMs: Date.now() - started,
+      latencyMs: 0,
+      fallbackUsed: true,
+      modelId: manager.provider.modelId,
     };
   }
 });
 
-app.get("/health", async () => ({ ok: true }));
-
 const port = Number(process.env.PORT ?? process.env.AGENT_PORT ?? 4002);
+const mode = resolveAgentRuntimeMode();
+app.log.info({ mode, port }, "agent-runtime listening (WP-107)");
 await app.listen({ port, host: "0.0.0.0" });

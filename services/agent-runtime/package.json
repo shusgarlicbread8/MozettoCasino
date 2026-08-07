@@ -11,7 +11,8 @@
     "./energy": "./src/energy/index.ts",
     "./cadence": "./src/cadence/index.ts",
     "./cognition": "./src/cognition/index.ts",
-    "./eval": "./src/eval/index.ts"
+    "./eval": "./src/eval/index.ts",
+    "./live": "./src/live/index.ts"
   },
   "scripts": {
     "dev": "tsx watch --env-file=../../.env.local src/index.ts",
@@ -19,11 +20,13 @@
     "start:local": "tsx --env-file=../../.env.local src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test src/**/*.test.ts src/**/**/*.test.ts",
-    "eval:poker": "tsx src/eval/cli.ts"
+    "eval:poker": "tsx src/eval/cli.ts",
+    "smoke:groq-table": "tsx --env-file=../../.env.local src/live/cli.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.0",
     "@mozetto/database": "workspace:*",
+    "@mozetto/game-rules": "workspace:*",
     "@mozetto/protocol-vectors": "workspace:*",
     "@mozetto/shared-types": "workspace:*",
     "fastify": "^5.2.1",

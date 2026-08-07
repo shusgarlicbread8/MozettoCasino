@@ -80,7 +80,7 @@ Exit code **0** when there are **no FAIL** stages. `GAP` / `SKIP` do not fail th
 
 1. **Ranked match / find-match (API)** — On-chain path uses relayer `openSession` with session-signer tickets. Pass `--with-api` when API + game server are healthy to compose `e2e:arena-account`.
 2. **`sealAndFundSession` (WP-041)** — `@mozetto/session-seal` coordinator exists; this E2E seals via `SessionLifecycleV2` draft→seal stubs alongside vault `openSession`, not the atomic V3 `sealAndFundSession` submit path.
-3. **AI-only hands / continuous cognition** — Not wired end-to-end. Needs live game-server + agent-runtime + dealer deal path (remaining backend cutover, e.g. WP-083/084). Settlement uses **stub** event/hand/balance roots, not a 100+ hand replay.
+3. **AI-only hands / continuous cognition** — WP-107 wires game-server ↔ agent-runtime (observe → cognition → Energy → Groq/mock → cadence → commit) and `pnpm smoke:groq-table` for multi-hand autonomous play. Full Anvil golden path still needs WP-106 (browser → seal → settle) + WP-108 real roots; settlement in this E2E still uses **stub** event/hand/balance roots.
 4. **Hub V3 without `--redeploy`** — If `vault.settlementHub` is still Hub V2, the script falls back to Anvil hub impersonation for `settleSession` and records Hub V3 quorum settle as `GAP`.
 
 ---

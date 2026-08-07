@@ -35,6 +35,7 @@
     "test:poker-replay": "cargo run -q -p poker-replay -- verify packages/game-rules/fixtures",
     "test:poker-replay:events": "cargo run -q -p poker-replay -- verify-events --golden 03 && cargo run -q -p poker-replay -- verify-events --golden 04",
     "eval:poker": "pnpm --filter @mozetto/agent-runtime eval:poker",
+    "smoke:groq-table": "pnpm --filter @mozetto/agent-runtime smoke:groq-table",
     "verify:randomness": "pnpm --filter @mozetto/randomness-verifier verify",
     "watchtower": "pnpm --filter @mozetto/watchtower verify",
     "test:unit": "pnpm --filter @mozetto/game-rules test && pnpm --filter @mozetto/unit-economics test && pnpm --filter @mozetto/ratings test && pnpm --filter @mozetto/database test && pnpm --filter @mozetto/agent-runtime test && pnpm --filter @mozetto/session-seal test && pnpm --filter @mozetto/dealer-deck test && pnpm --filter @mozetto/event-store test && pnpm --filter @mozetto/root-builder test && pnpm --filter @mozetto/attestors test && pnpm --filter @mozetto/proof-batch-publisher test && pnpm --filter @mozetto/reconciliation test && pnpm --filter @mozetto/randomness-verifier test && pnpm --filter @mozetto/watchtower test && pnpm --filter @mozetto/replay-verifier test && pnpm --filter @mozetto/dealer test && pnpm --filter @mozetto/settlement-worker test && pnpm --filter @mozetto/game-server test && pnpm --filter @mozetto/api test && pnpm --filter @mozetto/dealer-enclave test && pnpm test:protocol-vectors",

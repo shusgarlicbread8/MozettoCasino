@@ -186,7 +186,10 @@ Names only. Full local template: [`.env.example`](../.env.example).
 
 | Variable | Required | Notes |
 |---|---|---|
-| `GROQ_API_KEY` | live Season 1 model | Optional for mock `/v1/act` |
+| `GROQ_API_KEY` | live Season 1 model | Optional for `AGENT_RUNTIME_MODE=mock` / auto without key (WP-107) |
+| `AGENT_RUNTIME_MODE` | no | `auto` (default) \| `mock` \| `live` |
+| `AGENT_STATE_STORE` / `ENERGY_LEDGER_STORE` | no | `memory` (default) or `db` when migration 026 applied |
+| `HUMAN_PLAY` | no | Set `0` on game-server for autonomous AI seats |
 
 ### web (Vercel) — pointer only
 
