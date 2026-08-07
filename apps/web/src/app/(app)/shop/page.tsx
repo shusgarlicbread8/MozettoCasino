@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { HoverDiv } from "@/components/Hoverable";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = "var(--font-mono), monospace";
 
 const ITEMS = [
   { cat: "AVATAR", name: "Obsidian Mask", desc: "A matte black avatar frame with a slow emerald sheen.", glyph: "◆", color: "#00E676", rarity: "RARE", price: "$4.00", tone: "rgba(0,230,118,.14)" },

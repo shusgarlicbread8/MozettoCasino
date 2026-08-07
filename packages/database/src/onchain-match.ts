@@ -252,9 +252,9 @@ export async function claimTicketPair(opts: {
 }
 
 /**
- * Atomically reserve a random compatible open on-chain table for one queued
- * ticket (WP-040 ranked random — not fullest-first / user-picked). The player
- * row is inserted in the same transaction so concurrent find-match cannot overfill.
+ * Atomically reserve a compatible open on-chain table for one queued ticket.
+ * Fullest tables are preferred (ties randomized), then the player row is
+ * inserted in the same transaction so concurrent find-match cannot overfill.
  */
 export async function claimOpenOnchainSession(opts: {
   selfTicketId: string;
@@ -323,7 +323,10 @@ export async function claimOpenOnchainSession(opts: {
            where done.table_id = os.table_id and done.status = 'completed'
          )
          and (select count(*) from onchain_session_players osp where osp.session_id = os.session_id) < $5
-       order by random()
+       order by (
+         select count(*) from onchain_session_players occupied
+         where occupied.session_id = os.session_id
+       ) desc, random()
        limit 12
        for update of os skip locked`,
       [opts.chainId, opts.leagueId, opts.buyInUsdc, opts.profileId, cfg.maxSeats, cfg.variantId],
@@ -510,6 +513,20 @@ export async function markTicketOpened(ticketId: string, sessionId: string) {
   );
 }
 
+/** Permission/signer changes invalidate unclaimed tickets signed under the old grant. */
+export async function invalidateQueuedTicketsForProfile(profileId: string, chainId: number) {
+  const res = await query<{ id: string }>(
+    `update seat_tickets
+     set status = 'failed'
+     where profile_id = $1
+       and chain_id = $2
+       and status = 'queued'
+     returning id::text`,
+    [profileId, chainId],
+  );
+  return res.rows.map((row) => row.id);
+}
+
 export async function createMatchmakingBatch(opts: {
   chainId: number;
   gameTemplateId: string;
@@ -558,6 +575,42 @@ export async function markOnchainSessionOpened(sessionId: string, openTxHash?: s
      where session_id = $1 and status in ('submitted', 'pending', 'matched', 'opened')`,
     [sessionId],
   );
+}
+
+/**
+ * Fail closed when custody opening/joining reverts (or Anvil was reset).
+ * Blocks pending/opened/playing rows so matchmaking never routes into a dead session.
+ */
+export async function blockFailedOnchainSession(sessionId: string) {
+  const res = await query<{ table_id: string }>(
+    `update onchain_sessions
+     set status = 'blocked'
+     where session_id = $1 and status in ('pending', 'opened', 'playing')
+     returning table_id`,
+    [sessionId],
+  );
+  const tableId = res.rows[0]?.table_id;
+  if (tableId) {
+    await query(`update tables set is_active = false where id = $1`, [tableId]);
+  }
+}
+
+/** Block every Anvil (or chain) session that matchmaking still treats as joinable. */
+export async function blockOpenOnchainSessionsForChain(chainId: number) {
+  const res = await query<{ session_id: string; table_id: string | null }>(
+    `update onchain_sessions
+     set status = 'blocked'
+     where chain_id = $1 and status in ('pending', 'opened', 'playing')
+     returning session_id, table_id`,
+    [chainId],
+  );
+  const tableIds = [
+    ...new Set(res.rows.map((r) => r.table_id).filter((id): id is string => Boolean(id))),
+  ];
+  if (tableIds.length) {
+    await query(`update tables set is_active = false where id = any($1::text[])`, [tableIds]);
+  }
+  return res.rows.map((r) => r.session_id);
 }
 
 export async function markBatchFailed(batchId: string, error: string) {
@@ -706,10 +759,8 @@ export async function getActiveOnchainTableForProfile(
   format: ArenaFormat = "hu",
 ) {
   const cfg = arenaFormatConfig(format);
-  // Return a live custody match the player still owes a join (or is seated at).
-  // - Include players listed on an opened/playing session who have not completed a table_session
-  //   yet (waiting opponent must discover tableId after pairing / openSession).
-  // - Exclude sessions where they already completed/left, so leave does not sticky-loop.
+  // Return a live custody match this player still owes a join (or is seated at).
+  // Sticky is per-player: if *this* profile already completed/left, do not force them back.
   const res = await query<{
     table_id: string;
     table_name: string;
@@ -729,31 +780,97 @@ export async function getActiveOnchainTableForProfile(
      join onchain_sessions os on os.session_id = osp.session_id
      join tables t on t.id = os.table_id
      where osp.profile_id = $1 and os.chain_id = $2
+       and os.status in ('pending', 'opened', 'playing')
        and t.is_active = true
        and t.max_seats = $3
        and t.variant_id = $4
-       and (
-         -- Still seated at the table
-         exists (
-           select 1 from table_sessions ts
-           where ts.table_id = os.table_id
-             and ts.owner_id = osp.profile_id
-             and ts.status = 'active'
-         )
-         -- Or matched/opened/playing and nobody has cashed out yet (safe to join)
-         or (
-           os.status in ('pending', 'opened', 'playing')
-           and not exists (
-             select 1 from table_sessions ts
-             where ts.table_id = os.table_id and ts.status = 'completed'
-           )
-         )
+       and not exists (
+         select 1 from table_sessions done
+         where done.table_id = os.table_id
+           and done.owner_id = osp.profile_id
+           and done.status = 'completed'
        )
      order by os.created_at desc
      limit 1`,
     [profileId, chainId, cfg.maxSeats, cfg.variantId],
   );
   return res.rows[0] ?? null;
+}
+
+/**
+ * Leave/abandon when custody exists but the player never got a live seat.
+ * Clears sticky matchmaking + exposure reservations. Vault refund still goes
+ * through settlement / emergency-exit for on-chain locks.
+ */
+export async function abandonUnseatedOnchainPlayer(opts: {
+  profileId: string;
+  tableId: string;
+}) {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const sess = await client.query(
+      `select session_id, status from onchain_sessions
+       where table_id = $1 and status in ('pending', 'opened', 'playing')
+       order by created_at desc limit 1`,
+      [opts.tableId],
+    );
+    const sessionId = (sess.rows[0] as { session_id?: string } | undefined)?.session_id;
+    if (!sessionId) {
+      await client.query("rollback");
+      return { abandoned: false as const };
+    }
+
+    const player = await client.query(
+      `delete from onchain_session_players
+       where session_id = $1 and profile_id = $2
+       returning profile_id`,
+      [sessionId, opts.profileId],
+    );
+    if (!player.rows[0]) {
+      await client.query("rollback");
+      return { abandoned: false as const };
+    }
+
+    await client.query(
+      `update arena_exposure_reservations
+       set status = 'released', updated_at = now()
+       where session_id = $1 and profile_id = $2 and status in ('reserved', 'confirmed')`,
+      [sessionId, opts.profileId],
+    );
+    await client.query(
+      `update seat_tickets
+       set status = 'failed'
+       where profile_id = $1 and session_id = $2 and status in ('queued', 'matched', 'opened')`,
+      [opts.profileId, sessionId],
+    );
+    await client.query(
+      `update table_sessions
+       set status = 'completed', stack = 0, ended_at = coalesce(ended_at, now())
+       where table_id = $1 and owner_id = $2 and status = 'active'`,
+      [opts.tableId, opts.profileId],
+    );
+
+    const remaining = await client.query(
+      `select count(*)::text as n from onchain_session_players where session_id = $1`,
+      [sessionId],
+    );
+    if (Number((remaining.rows[0] as { n?: string } | undefined)?.n ?? 0) === 0) {
+      await client.query(
+        `update onchain_sessions set status = 'blocked' where session_id = $1 and status in ('pending','opened','playing')`,
+        [sessionId],
+      );
+      await client.query(`update tables set is_active = false where id = $1`, [opts.tableId]);
+    }
+
+    await client.query("commit");
+    return { abandoned: true as const, sessionId };
+  } catch (e) {
+    await client.query("rollback");
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 /**

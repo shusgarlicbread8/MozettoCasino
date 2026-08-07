@@ -220,8 +220,10 @@ export function randomSeatOrder(maxSeats: number, random: () => number = Math.ra
 }
 
 /**
- * Ranked allocation: random among eligible same-pool tables, else create.
- * Does not prefer "fullest" tables — that would leak fill-order targeting.
+ * Ranked allocation:
+ * - HU remains random among eligible opponents (anti-targeting).
+ * - Classic fills the most populated eligible table first, randomizing ties.
+ * - A new table is created only when no eligible seat exists.
  */
 export function allocateRankedMatch(opts: {
   userId: string;
@@ -241,7 +243,13 @@ export function allocateRankedMatch(opts: {
     linkedToUser: opts.linkedToUser,
   });
   const seatOrder = randomSeatOrder(opts.maxSeats, random);
-  const picked = pickRandomEligible(eligible, random);
+  const fullest =
+    opts.format === "classic" && eligible.length > 0
+      ? Math.max(...eligible.map((candidate) => candidate.seated))
+      : null;
+  const pool =
+    fullest == null ? eligible : eligible.filter((candidate) => candidate.seated === fullest);
+  const picked = pickRandomEligible(pool, random);
   if (picked) {
     return { kind: "join_existing", candidate: picked, rejects, seatOrder };
   }

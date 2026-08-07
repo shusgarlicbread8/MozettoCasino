@@ -7,7 +7,7 @@
  *   Machine remains precise/consistent
  */
 
-import type { AvatarState, PresentationEventKind, ProfilePreset, PotClass } from "./types.js";
+import type { AvatarState, PresentationEventKind, ProfilePreset, PotClass } from "./types";
 
 type MappingKey = `${PresentationEventKind}|${ProfilePreset}`;
 

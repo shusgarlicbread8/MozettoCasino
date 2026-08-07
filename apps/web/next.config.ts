@@ -1,7 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  transpilePackages: ["@mozetto/shared-types", "@mozetto/chain-manifest", "@mozetto/game-rules"],
+  transpilePackages: [
+    "@mozetto/shared-types",
+    "@mozetto/chain-manifest",
+    "@mozetto/game-rules",
+    "@mozetto/presentation-adapter",
+  ],
   // Existing pages use loose `any` types; don't block production deploys on lint debt.
   eslint: { ignoreDuringBuilds: true },
   turbopack: {
@@ -16,6 +21,7 @@ const nextConfig: NextConfig = {
     };
     config.resolve.extensionAlias = {
       ".js": [".ts", ".tsx", ".js"],
+      ".jsx": [".tsx", ".jsx"],
       ...(config.resolve.extensionAlias ?? {}),
     };
     return config;

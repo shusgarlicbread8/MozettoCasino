@@ -94,19 +94,18 @@ export const arenaVaultAddress = (chainAssets[preferredChainId]?.vault ||
 export function getWagmiConfig() {
   // Explicit connectors only. multiInjectedProviderDiscovery duplicates MetaMask as
   // Injected + MetaMask + Leap and triggers "Connector already connected".
+  // Coinbase: prefer injected extension (worked at 3738427); keep SDK as fallback.
   const connectors = [
     injected({
       target: "metaMask",
       shimDisconnect: true,
       unstable_shimAsyncInject: 2_000,
     }),
-    // Browser extension path (when Coinbase injects into window.ethereum).
     injected({
       target: "coinbaseWallet",
       shimDisconnect: true,
       unstable_shimAsyncInject: 2_000,
     }),
-    // SDK path — required peer `@coinbase/wallet-sdk`. Prefer EOA extension over Smart Wallet.
     coinbaseWallet({
       appName: "Mozetto Arena",
       preference: { options: "eoaOnly" },
@@ -130,7 +129,7 @@ export function getWagmiConfig() {
     chains: supportedChains,
     connectors,
     multiInjectedProviderDiscovery: false,
-    storage: createStorage({ storage: cookieStorage }),
+    storage: createStorage({ storage: cookieStorage, key: "mozetto.wagmi.v3" }),
     ssr: true,
     transports: {
       [anvil.id]: http(process.env.NEXT_PUBLIC_ANVIL_RPC_URL || "http://127.0.0.1:8545"),
@@ -311,5 +310,15 @@ export const erc20Abi = [
       { name: "amount", type: "uint256" },
     ],
     outputs: [],
+  },
+  {
+    type: "function",
+    name: "transfer",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ type: "bool" }],
   },
 ] as const;

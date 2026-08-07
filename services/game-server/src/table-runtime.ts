@@ -33,6 +33,7 @@ import {
   releaseSession,
   markOnchainSessionPlaying,
   markOnchainSessionReadyForSettlement,
+  abandonUnseatedOnchainPlayer,
   rebalanceEscrowToStacks,
   settleRatedMatch,
   getOnchainSessionForTable,
@@ -1255,8 +1256,22 @@ export class TableRuntime {
     if (!seat || !seat.playerId) {
       // Still close any orphaned DB session so the lobby doesn't think we're seated.
       await this.completeSessionsForUser(userId, 0);
+      // Custody may exist even when join never seated the player (stuck CONNECTING).
+      if (this.arenaMode === "onchain") {
+        if (!this.onchainSessionId) await this.loadOnchainSession();
+        const abandoned = await abandonUnseatedOnchainPlayer({
+          profileId: userId,
+          tableId: this.tableId,
+        }).catch((err) => {
+          console.error("abandonUnseatedOnchainPlayer failed", this.tableId, err);
+          return { abandoned: false as const };
+        });
+        if (abandoned.abandoned && abandoned.sessionId) {
+          await markOnchainSessionReadyForSettlement(abandoned.sessionId).catch(() => null);
+        }
+      }
       this.pendingLeaveOwners.delete(userId);
-      return { queued: false, ok: true };
+      return { queued: false, ok: true, abandoned: true };
     }
 
     // WP-042: mid-hand leave is queued — player remains exposed until hand finishes.

@@ -77,12 +77,13 @@ export default function FundPage() {
 
   return (
     <main
+      className="mz-page"
       style={{
         flex: 1,
         width: "100%",
-        maxWidth: 560,
+        maxWidth: 640,
+        margin: "0 auto",
         minWidth: 0,
-        padding: `${space[6]}px ${space[7]}px 56px`,
         boxSizing: "border-box",
         fontFamily: font.sans,
         color: color.text,
@@ -112,7 +113,9 @@ export default function FundPage() {
       </h1>
       <p style={{ margin: `${space[2]}px 0 0`, fontSize: 14, color: color.textMuted, lineHeight: 1.5 }}>
         {isOnchain
-          ? `Send ${symbol} to your Arena Account. That balance is what Find Match locks.`
+          ? isChainTest
+            ? `Mint local ${symbol} into your Arena Account. This sponsored Anvil faucet does not open a wallet transaction prompt.`
+            : `Send ${symbol} to your Arena Account. That balance is what Find Match locks.`
           : "Credit demo paper USDC. Not real custody."}
       </p>
 
@@ -148,7 +151,8 @@ export default function FundPage() {
               </p>
             )}
             <p style={{ margin: `${space[4]}px 0 0`, fontSize: 12.5, color: color.textFaint, lineHeight: 1.5 }}>
-              Do not send to your EOA if you want to play — matches spend from the Arena Account only.
+              Your connected wallet is the owner, but playable funds live at the Arena Account address.
+              Wallet extensions normally show the EOA balance, not this smart-account balance.
             </p>
           </section>
 

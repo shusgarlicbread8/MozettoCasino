@@ -85,16 +85,27 @@ export default function TableClient() {
   }, [amSeated, tableId, setSeatedTable]);
 
   async function leaveTable() {
+    const wasSeated = amSeated;
     if (
       !confirmLeave(
-        "Leave the table? If a hand is in progress you'll fold. Your remaining stack is cashed back to your wallet.",
+        wasSeated
+          ? "Leave the table? If a hand is in progress you'll fold. Your remaining stack is cashed back after the hand/settlement."
+          : "Leave this table? This clears a stuck match so you can find a new one. On-chain buy-ins settle via the vault refund path.",
       )
     ) {
       return;
     }
     setSeatedTable(null);
     try {
-      await api(`/v1/tables/${tableId}/leave`, { method: "POST", body: "{}" });
+      const leaveRes = await api<{ queued?: boolean; ok?: boolean }>(`/v1/tables/${tableId}/leave`, {
+        method: "POST",
+        body: "{}",
+      });
+      if (leaveRes?.queued) {
+        setActionError("Leave queued — you'll exit after this hand finishes.");
+        if (tableId) setSeatedTable(tableId);
+        return;
+      }
       setLive((prev) =>
         prev
           ? {
@@ -125,14 +136,16 @@ export default function TableClient() {
         ),
       );
     } catch (e) {
-      if (tableId) setSeatedTable(tableId);
+      if (wasSeated && tableId) setSeatedTable(tableId);
       setActionError(e instanceof Error ? e.message : "Leave failed — try again");
       return;
     }
     await refresh();
     balances.refetch();
-    // WP-127 — post-match result (P&L / rating / timeline / rematch)
-    window.location.href = `/result/${encodeURIComponent(String(tableId))}`;
+    // Never-seated abandon → lobby. Seated leave → result panel.
+    window.location.href = wasSeated
+      ? `/result/${encodeURIComponent(String(tableId))}`
+      : "/poker";
   }
 
   async function sendAction(action: string, amount?: number) {

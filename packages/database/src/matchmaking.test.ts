@@ -325,6 +325,25 @@ describe("random allocation (WP-040)", () => {
     }
   });
 
+  it("Poker Classic fills the fullest eligible table before opening another", () => {
+    const decision = allocateRankedMatch({
+      userId: "me",
+      format: "classic",
+      maxSeats: 6,
+      candidates: [
+        { id: "one", name: "One", seated: 1, owners: ["a"] },
+        { id: "four", name: "Four", seated: 4, owners: ["b", "c", "d", "e"] },
+        { id: "two", name: "Two", seated: 2, owners: ["f", "g"] },
+      ],
+      pairCapped: () => false,
+      random: () => 0.99,
+    });
+    assert.equal(decision.kind, "join_existing");
+    if (decision.kind === "join_existing") {
+      assert.equal(decision.candidate.id, "four");
+    }
+  });
+
   it("allocateRankedMatch creates table when all candidates rejected", () => {
     const decision = allocateRankedMatch({
       userId: "me",

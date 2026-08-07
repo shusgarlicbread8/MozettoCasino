@@ -6,15 +6,26 @@
  */
 
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
-import { useAccount, useSignTypedData } from "wagmi";
+import { useAccount, useConnect, useSignTypedData } from "wagmi";
 import { Button } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 import { color, font, radius, space } from "@/lib/design-tokens";
 import { useSession } from "@/lib/session";
-import { confirmInWallet, useWalletBrand } from "@/lib/wallet-brand";
+import {
+  confirmInWallet,
+  findPreferredConnector,
+  rememberConnector,
+  useWalletBrand,
+} from "@/lib/wallet-brand";
+import {
+  friendlyWalletError,
+  pickCoinbaseConnector,
+} from "@/lib/wallet-connect";
+import { preferredChainId } from "@/lib/wagmi";
 
 type PlayStatus = {
   enabled: boolean;
+  signerRotationRequired?: boolean;
   ownerAddress: string;
   arenaAccountAddress: string;
   deployed: boolean;
@@ -77,6 +88,7 @@ export function PlayPermissionsPanel({
   const wallet = useWalletBrand();
   const { me } = useSession();
   const { signTypedDataAsync } = useSignTypedData();
+  const { connectAsync, connectors, reset: resetConnect } = useConnect();
 
   const [status, setStatus] = useState<PlayStatus | null>(null);
   const [sheetOpen, setSheetOpen] = useState(Boolean(autoOpen));
@@ -112,12 +124,60 @@ export function PlayPermissionsPanel({
     me?.walletAddress &&
     address.toLowerCase() === me.walletAddress.toLowerCase();
 
+  async function ensureOwnerConnected(): Promise<`0x${string}`> {
+    if (ownerOk && address) return address as `0x${string}`;
+    setMsg(`Opening ${wallet.short}…`);
+    resetConnect();
+    const preferred = findPreferredConnector(connectors);
+    const target =
+      preferred ||
+      pickCoinbaseConnector(connectors) ||
+      connectors.find((c) => /metamask/i.test(`${c.id} ${c.name}`)) ||
+      connectors[0];
+    if (!target) {
+      throw new Error(`Reconnect ${wallet.short} first, then enable seamless play.`);
+    }
+    const desired = status?.domain.chainId || me?.chainId || preferredChainId;
+    try {
+      const result = await connectAsync({
+        connector: target,
+        chainId: desired,
+      });
+      rememberConnector(target);
+      const next = result.accounts[0] as `0x${string}` | undefined;
+      if (!next) {
+        throw new Error(`Approve the ${wallet.short} connection, then click Confirm again.`);
+      }
+      if (me?.walletAddress && next.toLowerCase() !== me.walletAddress.toLowerCase()) {
+        throw new Error(
+          `Connected account does not match your signed-in wallet. Switch accounts in ${wallet.short}.`,
+        );
+      }
+      return next;
+    } catch (e) {
+      const msgText = e instanceof Error ? e.message : "";
+      if (/already connected/i.test(msgText)) {
+        return (address || me?.walletAddress) as `0x${string}`;
+      }
+      throw e;
+    }
+  }
+
   async function enableSeamless() {
-    if (!status?.defaults || !ownerOk) return;
+    if (!status?.defaults) {
+      setErr("Play status still loading — try again in a moment.");
+      return;
+    }
+    if (!status.deployed) {
+      setErr("Arena Account is still deploying. Wait a few seconds, then retry.");
+      return;
+    }
     setBusy(true);
     setErr(null);
     setMsg(null);
     try {
+      const signer = ownerOk && address ? (address as `0x${string}`) : await ensureOwnerConnected();
+
       const d = status.defaults;
       const message = {
         account: status.arenaAccountAddress as `0x${string}`,
@@ -137,6 +197,7 @@ export function PlayPermissionsPanel({
       };
       setMsg(confirmInWallet(wallet, "Sign Enable seamless play"));
       const signature = await signTypedDataAsync({
+        account: signer,
         domain: status.domain,
         types: status.types,
         primaryType: "GamePermission",
@@ -168,17 +229,23 @@ export function PlayPermissionsPanel({
       await refresh();
       onUpdated?.();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Failed");
+      setErr(
+        friendlyWalletError(
+          e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Failed",
+          wallet.short,
+        ),
+      );
     } finally {
       setBusy(false);
     }
   }
 
   async function revoke() {
-    if (!status?.defaults || !ownerOk) return;
+    if (!status?.defaults) return;
     setBusy(true);
     setErr(null);
     try {
+      const signer = ownerOk && address ? (address as `0x${string}`) : await ensureOwnerConnected();
       const d = status.defaults;
       const message = {
         account: status.arenaAccountAddress as `0x${string}`,
@@ -198,6 +265,7 @@ export function PlayPermissionsPanel({
       };
       setMsg(confirmInWallet(wallet, "Sign revoke permission"));
       const signature = await signTypedDataAsync({
+        account: signer,
         domain: status.domain,
         types: status.types,
         primaryType: "GamePermission",
@@ -219,7 +287,12 @@ export function PlayPermissionsPanel({
       await refresh();
       onUpdated?.();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Failed");
+      setErr(
+        friendlyWalletError(
+          e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Failed",
+          wallet.short,
+        ),
+      );
     } finally {
       setBusy(false);
     }
@@ -239,7 +312,7 @@ export function PlayPermissionsPanel({
     : {
         border: `1px solid ${color.line}`,
         background: color.inkElevated,
-        padding: `${space[5]}px ${space[5]}px`,
+        padding: `${space[4]}px ${space[5]}px`,
         borderRadius: radius.xl,
       };
 
@@ -302,6 +375,28 @@ export function PlayPermissionsPanel({
           : "Enable once so Mozetto can enter ranked games under your caps. Mozetto cannot withdraw available funds."}
       </p>
 
+      {status?.domain.chainId === 31337 ? (
+        <p
+          style={{
+            margin: `${space[2]}px 0 0`,
+            color: color.warn,
+            fontSize: 12,
+            lineHeight: 1.5,
+          }}
+        >
+          Local Anvil simulation. Wallet security scanners may warn because localhost contracts have
+          no public reputation. Public-network configuration rejects all known Anvil signer and
+          relayer accounts.
+        </p>
+      ) : null}
+
+      {status?.signerRotationRequired ? (
+        <p style={{ margin: `${space[2]}px 0 0`, color: color.warn, fontSize: 12.5 }}>
+          The local session signer was rotated. Enable Seamless Play again to replace the old
+          authorization.
+        </p>
+      ) : null}
+
       {perm && enabled ? (
         <div
           style={{
@@ -332,8 +427,8 @@ export function PlayPermissionsPanel({
       ) : null}
 
       {!ownerOk && status ? (
-        <p style={{ color: color.danger, fontSize: 12.5, margin: `${space[3]}px 0 0` }}>
-          Reconnect the same {wallet.name} account that signed in.
+        <p style={{ color: color.warn, fontSize: 12.5, margin: `${space[3]}px 0 0` }}>
+          {wallet.name} is disconnected. Click Confirm — it will reopen the wallet popup.
         </p>
       ) : null}
 
@@ -342,13 +437,19 @@ export function PlayPermissionsPanel({
           <Button
             variant="primary"
             size="sm"
-            disabled={busy || !ownerOk || !status?.deployed}
+            disabled={busy || !status?.deployed}
             onClick={() => (sheetOpen ? void enableSeamless() : setSheetOpen(true))}
           >
-            {sheetOpen ? (busy ? "Enabling…" : "Confirm in wallet") : "Enable seamless play"}
+            {sheetOpen
+              ? busy
+                ? "Check wallet…"
+                : ownerOk
+                  ? "Confirm in wallet"
+                  : `Reconnect ${wallet.short}`
+              : "Enable seamless play"}
           </Button>
         ) : (
-          <Button variant="danger" size="sm" disabled={busy || !ownerOk} onClick={() => void revoke()}>
+          <Button variant="danger" size="sm" disabled={busy} onClick={() => void revoke()}>
             Revoke
           </Button>
         )}

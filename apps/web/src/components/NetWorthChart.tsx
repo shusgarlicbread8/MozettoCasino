@@ -5,7 +5,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { api } from "@/lib/api";
 import { money } from "@/lib/session";
 
-const FONT_MONO = "var(--font-geist-mono), monospace";
+const FONT_MONO = "var(--font-mono), monospace";
 const RANGES = ["1h", "1d", "1w", "all"] as const;
 type Range = (typeof RANGES)[number];
 

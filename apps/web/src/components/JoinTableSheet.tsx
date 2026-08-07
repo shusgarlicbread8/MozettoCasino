@@ -8,7 +8,7 @@
 import { useState } from "react";
 import { api } from "@/lib/api";
 
-const MONO = "var(--font-geist-mono), 'Geist Mono', monospace";
+const MONO = "var(--font-mono), 'Geist Mono', monospace";
 
 export type JoinTableData = {
   id?: string;

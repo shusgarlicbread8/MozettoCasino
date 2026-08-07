@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useAccount, useChainId } from "wagmi";
+import { parseUnits } from "viem";
+import { useAccount, useChainId, usePublicClient, useWriteContract } from "wagmi";
 import { SoftSwap } from "@/components/PageFade";
 import { Button } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
@@ -9,34 +10,40 @@ import { color, font, radius, space } from "@/lib/design-tokens";
 import { useSession } from "@/lib/session";
 import { useMozettoBalances } from "@/lib/use-mozetto-balances";
 import { useWalletBrand } from "@/lib/wallet-brand";
-import { getChainAsset, isMockUsdcChain } from "@/lib/wagmi";
+import { erc20Abi, getChainAsset, isMockUsdcChain } from "@/lib/wagmi";
 
 const DEFAULT_FAUCET = "10000";
+const ANVIL_ID = 31337;
 
-/** Mint test mUSDC directly into the user's Arena Account (Anvil). */
+/** Mint test mUSDC into the user's Arena Account (Anvil sponsored or Base Sepolia wallet faucet). */
 export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
+  const publicClient = usePublicClient();
+  const { writeContractAsync } = useWriteContract();
   const wallet = useWalletBrand();
   const { me } = useSession();
   const balances = useMozettoBalances();
   const [amount, setAmount] = useState(DEFAULT_FAUCET);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [confirmedBalance, setConfirmedBalance] = useState<number | null>(null);
+  const [txHash, setTxHash] = useState<string | null>(null);
 
   const asset = getChainAsset(chainId);
   const canFaucet = isMockUsdcChain(chainId);
   const sessionWallet = me?.walletAddress?.toLowerCase() ?? null;
   const walletMatch =
     Boolean(address && sessionWallet && address.toLowerCase() === sessionWallet);
-  const arena = me?.arenaAccountAddress ?? balances.arenaAccountAddress;
+  const arena = (me?.arenaAccountAddress ?? balances.arenaAccountAddress) as `0x${string}` | null;
+  const sponsoredAnvil = chainId === ANVIL_ID;
 
   if (!canFaucet) {
     if (chainId === 8453) return null;
     return (
       <div style={{ marginTop: space[4], fontSize: 13, color: color.textMuted, lineHeight: 1.5 }}>
-        Get Test mUSDC is available on Anvil (local). On Sepolia, send USDC to your Arena Account
-        address shown on the wallet page.
+        Get Test mUSDC requires a mock USDC deploy (`USE_MOCK_USDC=1`). On Base Sepolia without mock
+        USDC, send Circle test USDC to your Arena Account address on the wallet page.
       </div>
     );
   }
@@ -48,21 +55,60 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
       );
       return;
     }
+    if (!arena) {
+      setMsg("Arena Account not ready yet — finish on-chain sign-in first.");
+      return;
+    }
     setBusy(true);
     setMsg(null);
     try {
       const amountUsdc = Number(amount || DEFAULT_FAUCET);
-      const res = await api<{
-        amountUsdc: number;
-        arenaAccountAddress: string;
-        txHash: string;
-      }>("/v1/arena/fund-test", {
-        method: "POST",
-        body: JSON.stringify({ amountUsdc }),
-      });
-      setMsg(
-        `Minted ${res.amountUsdc} mUSDC into your Arena Account (${res.arenaAccountAddress.slice(0, 6)}…${res.arenaAccountAddress.slice(-4)}). Enable Seamless Play, then Find Match.`,
-      );
+      if (!Number.isFinite(amountUsdc) || amountUsdc <= 0) {
+        throw new Error("Enter a positive faucet amount.");
+      }
+
+      if (sponsoredAnvil) {
+        const res = await api<{
+          amountUsdc: number;
+          accountBalanceUsdc: number;
+          arenaAccountAddress: string;
+          txHash: string;
+        }>("/v1/arena/fund-test", {
+          method: "POST",
+          body: JSON.stringify({ amountUsdc }),
+        });
+        setConfirmedBalance(res.accountBalanceUsdc);
+        setTxHash(res.txHash);
+        setMsg(
+          `Confirmed on Anvil: ${res.amountUsdc.toLocaleString()} mUSDC minted. Arena Account balance is now ${res.accountBalanceUsdc.toLocaleString()} mUSDC.`,
+        );
+      } else {
+        if (!asset?.usdc || !address || !publicClient) {
+          throw new Error("Mock USDC address or wallet provider missing.");
+        }
+        const raw = parseUnits(String(amountUsdc), asset.decimals);
+        // 1) Self-serve faucet onto the connected EOA
+        const faucetHash = await writeContractAsync({
+          address: asset.usdc,
+          abi: erc20Abi,
+          functionName: "faucet",
+          args: [raw],
+        });
+        await publicClient.waitForTransactionReceipt({ hash: faucetHash });
+        // 2) Move tokens into the Arena Account (where play funds live)
+        const transferHash = await writeContractAsync({
+          address: asset.usdc,
+          abi: erc20Abi,
+          functionName: "transfer",
+          args: [arena, raw],
+        });
+        await publicClient.waitForTransactionReceipt({ hash: transferHash });
+        setTxHash(transferHash);
+        setConfirmedBalance(amountUsdc);
+        setMsg(
+          `Minted ${amountUsdc.toLocaleString()} mUSDC and sent it to your Arena Account. Approve two wallet prompts (faucet + transfer).`,
+        );
+      }
       balances.refetch();
       onUpdated?.();
     } catch (e) {
@@ -95,7 +141,17 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
         Chain test · mUSDC → Arena Account
       </div>
       <p style={{ margin: `${space[2]}px 0 0`, fontSize: 13, color: color.textMuted, lineHeight: 1.5 }}>
-        Mints into your Arena Account (playable balance), not your connected {wallet.name} EOA.
+        {sponsoredAnvil ? (
+          <>
+            Local sponsored faucet: Mozetto submits the mint, so {wallet.name} will not open a
+            transaction prompt. Tokens live in your Arena Account.
+          </>
+        ) : (
+          <>
+            Base Sepolia mock faucet: {wallet.name} will ask to approve <code>faucet</code> then a
+            transfer into your Arena Account.
+          </>
+        )}
         {!isConnected ? (
           <>
             {" "}
@@ -111,7 +167,7 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
           fontVariantNumeric: "tabular-nums",
         }}
       >
-        Arena Account mUSDC: {balances.wallet.toLocaleString()}
+        Arena Account mUSDC: {(confirmedBalance ?? balances.wallet).toLocaleString()}
       </div>
       {arena ? (
         <div
@@ -151,7 +207,7 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
         <Button
           variant="primary"
           size="sm"
-          disabled={busy || !isConnected || !walletMatch}
+          disabled={busy || !isConnected || !walletMatch || !arena}
           onClick={() => void runFaucet()}
         >
           {busy ? "Minting…" : "Fund Arena Account"}
@@ -164,11 +220,19 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
             style={{
               margin: `${space[3]}px 0 0`,
               fontSize: 12.5,
-              color: msg.toLowerCase().includes("minted") ? color.accent : color.danger,
+              color: /minted|Confirmed|sent it/i.test(msg) ? color.accent : color.danger,
               lineHeight: 1.45,
             }}
           >
             {msg}
+            {txHash ? (
+              <>
+                {" "}
+                <span style={{ color: color.textFaint }}>
+                  Tx {txHash.slice(0, 10)}…{txHash.slice(-8)}
+                </span>
+              </>
+            ) : null}
           </p>
         </SoftSwap>
       ) : null}

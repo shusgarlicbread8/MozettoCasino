@@ -109,6 +109,7 @@ export default function OnchainPortalPage() {
           return;
         }
 
+        // Same path as 3738427 — Wagmi connect opens the extension popup.
         await connectAsync({
           connector,
           chainId: preferredChainId,
@@ -116,7 +117,6 @@ export default function OnchainPortalPage() {
         rememberConnector(connector);
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Connection failed";
-        // Already linked in this tab — treat as success and show the sign-in step.
         if (/already connected/i.test(msg)) {
           setStatus(null);
           return;
@@ -125,12 +125,37 @@ export default function OnchainPortalPage() {
           setStatus("Connection cancelled in the wallet.");
           return;
         }
+        // Injected Coinbase failed → try SDK once (same button click).
+        if (
+          /coinbase/i.test(`${connector.id} ${connector.name}`) &&
+          connector.type === "injected"
+        ) {
+          const sdk = connectors.find((c) => c.id === "coinbaseWalletSDK");
+          if (sdk) {
+            try {
+              await connectAsync({
+                connector: sdk,
+                chainId: preferredChainId,
+              });
+              rememberConnector(sdk);
+              return;
+            } catch (sdkErr) {
+              const sdkMsg = sdkErr instanceof Error ? sdkErr.message : "Connection failed";
+              if (/already connected/i.test(sdkMsg)) {
+                setStatus(null);
+                return;
+              }
+              setStatus(friendlyConnectError(sdkMsg));
+              return;
+            }
+          }
+        }
         setStatus(friendlyConnectError(msg));
       } finally {
         setConnectBusy(false);
       }
     },
-    [connectAsync, isConnected, resetConnect],
+    [connectAsync, connectors, isConnected, resetConnect],
   );
 
   const signIn = useCallback(async () => {
@@ -174,7 +199,6 @@ export default function OnchainPortalPage() {
         user?: { displayName?: string; arenaAccountAddress?: string | null };
         isNewAccount?: boolean;
         arenaAccountAddress?: string | null;
-        arenaAccountDeployed?: boolean;
         welcomeFaucet?: number;
       }>("/v1/auth/wallet/verify", {
         method: "POST",
@@ -192,8 +216,11 @@ export default function OnchainPortalPage() {
       const aaNote = aa
         ? ` Your Arena Account is ready (${aa.slice(0, 6)}…${aa.slice(-4)}).`
         : "";
+      const funded = res.welcomeFaucet
+        ? ` Funded with $${res.welcomeFaucet.toLocaleString()} test chips.`
+        : "";
       setStatus(
-        `${res.isNewAccount ? "Account created" : "Welcome back"}, ${signedInName}.${aaNote} Entering arena…`,
+        `${res.isNewAccount ? "Account created" : "Welcome back"}, ${signedInName}.${aaNote}${funded} Entering arena…`,
       );
       // Soft navigate — hard reload drops Coinbase SDK connection state.
       router.push("/home");
@@ -207,7 +234,16 @@ export default function OnchainPortalPage() {
     } finally {
       setBusy(false);
     }
-  }, [address, chainId, displayName, router, signMessageAsync, switchChainAsync, wallet.short, walletAccount]);
+  }, [
+    address,
+    chainId,
+    displayName,
+    router,
+    signMessageAsync,
+    switchChainAsync,
+    wallet.short,
+    walletAccount,
+  ]);
 
   const pending = connecting || connectBusy || disconnecting;
 
@@ -243,7 +279,7 @@ export default function OnchainPortalPage() {
         >
           <div
             style={{
-              font: "500 11px var(--font-geist-mono), monospace",
+              font: "500 11px var(--font-mono), monospace",
               color: "#00E676",
               letterSpacing: ".08em",
             }}
@@ -276,28 +312,28 @@ export default function OnchainPortalPage() {
           {!isConnected ? (
             <SoftSwap id="connect">
               <div style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 10 }}>
-              <div style={{ marginBottom: 2 }}>
-                <div style={{ color: "#EDEDED", fontSize: 17, fontWeight: 600 }}>Connect your wallet</div>
-                <div style={{ color: "#707070", fontSize: 13, marginTop: 5 }}>
-                  We’ll recognize your account automatically.
+                <div style={{ marginBottom: 2 }}>
+                  <div style={{ color: "#EDEDED", fontSize: 17, fontWeight: 600 }}>Connect your wallet</div>
+                  <div style={{ color: "#707070", fontSize: 13, marginTop: 5 }}>
+                    We’ll recognize your account automatically.
+                  </div>
                 </div>
-              </div>
-              {walletButtons.map((c) => (
-                <button
-                  key={c.uid}
-                  type="button"
-                  disabled={pending}
-                  onClick={() => void connectWallet(c)}
-                  style={primaryBtn}
-                  className="mz-soft-btn"
-                >
-                  {pending ? "Opening wallet…" : `Connect ${c.name}`}
-                </button>
-              ))}
-              <p style={{ margin: "4px 0 0", fontSize: 12, color: "#636363", lineHeight: 1.45 }}>
-                If the wallet popup does not open, click the extension icon in your browser toolbar —
-                some browsers block it until you focus it once.
-              </p>
+                {walletButtons.map((c) => (
+                  <button
+                    key={c.uid}
+                    type="button"
+                    disabled={pending}
+                    onClick={() => void connectWallet(c)}
+                    style={primaryBtn}
+                    className="mz-soft-btn"
+                  >
+                    {pending ? "Opening wallet…" : `Connect ${c.name}`}
+                  </button>
+                ))}
+                <p style={{ margin: "4px 0 0", fontSize: 12, color: "#636363", lineHeight: 1.45 }}>
+                  If the wallet popup does not open, click the extension icon in your browser toolbar —
+                  some browsers block it until you focus it once.
+                </p>
               </div>
             </SoftSwap>
           ) : checkingAccount ? (
@@ -309,112 +345,112 @@ export default function OnchainPortalPage() {
             </SoftSwap>
           ) : (
             <SoftSwap id={walletAccount?.exists ? "returning" : "new"}>
-            <div style={{ marginTop: 22 }}>
-              {walletAccount?.exists ? (
-                <div style={identityCard}>
-                  <div style={eyebrow}>WELCOME BACK</div>
-                  <div style={{ fontSize: 24, fontWeight: 600, letterSpacing: "-.025em", marginTop: 7 }}>
-                    {walletAccount.displayName}
+              <div style={{ marginTop: 22 }}>
+                {walletAccount?.exists ? (
+                  <div style={identityCard}>
+                    <div style={eyebrow}>WELCOME BACK</div>
+                    <div style={{ fontSize: 24, fontWeight: 600, letterSpacing: "-.025em", marginTop: 7 }}>
+                      {walletAccount.displayName}
+                    </div>
+                    <div style={{ ...walletText, marginTop: 7 }}>
+                      {wallet.short} · {shortAddr(address)}
+                    </div>
+                    <div style={{ color: "#777", fontSize: 12, marginTop: 10 }}>
+                      Your existing player profile is ready.
+                    </div>
                   </div>
-                  <div style={{ ...walletText, marginTop: 7 }}>
-                    {wallet.short} · {shortAddr(address)}
+                ) : (
+                  <label style={{ display: "block" }}>
+                    <div style={eyebrow}>CREATE YOUR PLAYER IDENTITY</div>
+                    <div style={{ color: "#858585", fontSize: 13, lineHeight: 1.45, margin: "7px 0 12px" }}>
+                      First time here. Pick the name other players will see.
+                    </div>
+                    <input
+                      autoFocus
+                      value={displayName}
+                      onChange={(e) => {
+                        setDisplayName(e.target.value);
+                        setStatus(null);
+                      }}
+                      placeholder="Display name"
+                      minLength={2}
+                      maxLength={48}
+                      autoComplete="nickname"
+                      style={nameInput}
+                    />
+                    <div style={{ ...walletText, marginTop: 9 }}>
+                      {wallet.short} · {shortAddr(address)}
+                    </div>
+                  </label>
+                )}
+                {!walletAccount && (
+                  <div style={{ color: "#FF8A8A", fontSize: 13 }}>
+                    We couldn’t load this wallet’s profile. Try disconnecting and reconnecting.
                   </div>
-                  <div style={{ color: "#777", fontSize: 12, marginTop: 10 }}>
-                    Your existing player profile is ready.
-                  </div>
+                )}
+                <div style={{ color: "#666", fontSize: 12, lineHeight: 1.45, marginTop: 15 }}>
+                  Signing is free and does not submit a transaction.
                 </div>
-              ) : (
-                <label style={{ display: "block" }}>
-                  <div style={eyebrow}>CREATE YOUR PLAYER IDENTITY</div>
-                  <div style={{ color: "#858585", fontSize: 13, lineHeight: 1.45, margin: "7px 0 12px" }}>
-                    First time here. Pick the name other players will see.
-                  </div>
-                  <input
-                    autoFocus
-                    value={displayName}
-                    onChange={(e) => {
-                      setDisplayName(e.target.value);
-                      setStatus(null);
-                    }}
-                    placeholder="Display name"
-                    minLength={2}
-                    maxLength={48}
-                    autoComplete="nickname"
-                    style={nameInput}
-                  />
-                  <div style={{ ...walletText, marginTop: 9 }}>
-                    {wallet.short} · {shortAddr(address)}
-                  </div>
-                </label>
-              )}
-              {!walletAccount && (
-                <div style={{ color: "#FF8A8A", fontSize: 13 }}>
-                  We couldn’t load this wallet’s profile. Try disconnecting and reconnecting.
-                </div>
-              )}
-              <div style={{ color: "#666", fontSize: 12, lineHeight: 1.45, marginTop: 15 }}>
-                Signing is free and does not submit a transaction.
-              </div>
-              <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
-                {!authed ? (
-                  <button
-                    type="button"
-                    disabled={
-                      busy ||
-                      signing ||
-                      !walletAccount ||
-                      (!walletAccount.exists &&
-                        (displayName.trim().length < 2 || displayName.trim().length > 48))
-                    }
-                    onClick={() => void signIn()}
-                    className="mz-soft-btn"
-                    style={{
-                      ...primaryBtn,
-                      opacity:
+                <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
+                  {!authed ? (
+                    <button
+                      type="button"
+                      disabled={
+                        busy ||
+                        signing ||
                         !walletAccount ||
                         (!walletAccount.exists &&
                           (displayName.trim().length < 2 || displayName.trim().length > 48))
-                          ? 0.5
-                          : 1,
-                    }}
-                  >
-                    {busy || signing
-                      ? checkingWallet(wallet)
-                      : walletAccount?.exists
-                        ? `Sign in as ${walletAccount.displayName}`
-                        : "Create account & sign in"}
-                  </button>
-                ) : (
-                  <Link
-                    href="/home"
-                    style={{ ...primaryBtn, textDecoration: "none", display: "inline-block" }}
-                  >
-                    Enter arena
-                  </Link>
-                )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    void (async () => {
-                      try {
-                        await disconnectAsync();
-                      } catch {
-                        /* ignore */
                       }
-                      setAuthed(false);
-                      setWalletAccount(null);
-                      setDisplayName("");
-                      resetConnect();
-                      void api("/v1/auth/logout", { method: "POST" }).catch(() => null);
-                    })();
-                  }}
-                  style={ghostBtn}
-                  className="mz-soft-btn"
-                >
-                  Disconnect
-                </button>
+                      onClick={() => void signIn()}
+                      className="mz-soft-btn"
+                      style={{
+                        ...primaryBtn,
+                        opacity:
+                          !walletAccount ||
+                          (!walletAccount.exists &&
+                            (displayName.trim().length < 2 || displayName.trim().length > 48))
+                            ? 0.5
+                            : 1,
+                      }}
+                    >
+                      {busy || signing
+                        ? checkingWallet(wallet)
+                        : walletAccount?.exists
+                          ? `Sign in as ${walletAccount.displayName}`
+                          : "Create account & sign in"}
+                    </button>
+                  ) : (
+                    <Link
+                      href="/home"
+                      style={{ ...primaryBtn, textDecoration: "none", display: "inline-block" }}
+                    >
+                      Enter arena
+                    </Link>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void (async () => {
+                        try {
+                          await disconnectAsync();
+                        } catch {
+                          /* ignore */
+                        }
+                        setAuthed(false);
+                        setWalletAccount(null);
+                        setDisplayName("");
+                        resetConnect();
+                        void api("/v1/auth/logout", { method: "POST" }).catch(() => null);
+                      })();
+                    }}
+                    style={ghostBtn}
+                    className="mz-soft-btn"
+                  >
+                    Disconnect
+                  </button>
+                </div>
               </div>
-            </div>
             </SoftSwap>
           )}
           {status && (
@@ -424,7 +460,14 @@ export default function OnchainPortalPage() {
                 style={{
                   margin: "16px 0 0",
                   fontSize: 13,
-                  color: status.includes("Signed") || status.includes("Funded") || status.includes("Welcome") || status.includes("Account created") ? "#00E676" : "#FF8A8A",
+                  color:
+                    status.includes("Signed") ||
+                    status.includes("Funded") ||
+                    status.includes("Welcome") ||
+                    status.includes("Account created") ||
+                    status.includes("Entering")
+                      ? "#00E676"
+                      : "#FF8A8A",
                 }}
               >
                 {status}
@@ -452,7 +495,7 @@ function dedupeConnectors(connectors: readonly Connector[]) {
     const rank = (c: Connector) => {
       const n = `${c.id} ${c.name}`;
       if (/metamask/i.test(n)) return 0;
-      // Prefer injected Coinbase extension over SDK duplicate.
+      // Prefer injected Coinbase extension over SDK duplicate (3738427 behavior).
       if (/coinbase/i.test(n) && c.type === "injected") return 1;
       if (/coinbase/i.test(n)) return 2;
       if (/walletconnect/i.test(n)) return 3;
@@ -509,7 +552,7 @@ function NetBtn({
         border: active ? "1px solid rgba(0,230,118,.45)" : "1px solid rgba(255,255,255,.1)",
         background: active ? "rgba(0,230,118,.12)" : "transparent",
         color: active ? "#00E676" : "#8A8A8A",
-        font: "600 12px var(--font-geist-mono), monospace",
+        font: "600 12px var(--font-mono), monospace",
         cursor: disabled ? "wait" : "pointer",
       }}
     >
@@ -548,13 +591,13 @@ const identityCard: React.CSSProperties = {
 };
 
 const eyebrow: React.CSSProperties = {
-  font: "600 11px var(--font-geist-mono), monospace",
+  font: "600 11px var(--font-mono), monospace",
   color: "#00E676",
   letterSpacing: ".09em",
 };
 
 const walletText: React.CSSProperties = {
-  font: "400 12px var(--font-geist-mono), monospace",
+  font: "400 12px var(--font-mono), monospace",
   color: "#777",
 };
 

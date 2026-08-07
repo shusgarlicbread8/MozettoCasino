@@ -295,7 +295,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
               setStatus(again.message ?? "Match found — sealing on-chain…");
               continue;
             }
-            if (again.tableId && (again.joined || !again.waitingForChain)) {
+            if (again.tableId && again.joined) {
               setPhase("seating");
               setStatus("Match found — seating you…");
               await refresh();
@@ -303,6 +303,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
               return;
             }
             if (again.tableId) {
+              setPhase("sealing");
               setStatus(again.message ?? "Match found — seating shortly…");
               continue;
             }
@@ -327,7 +328,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
             body: JSON.stringify({ leagueId: league.id, profileKey: profile }),
           });
           applyMatchResult(again);
-          if (again.tableId && (again.joined || !again.waitingForChain)) {
+          if (again.tableId && again.joined) {
             setPhase("seating");
             await refresh();
             window.location.assign(`/table/${again.tableId}`);
@@ -336,14 +337,22 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
           setPhase("sealing");
           setStatus(again.message ?? "Session opening on-chain — seating shortly…");
         }
-        setPhase("seating");
-        await refresh();
-        window.location.assign(`/table/${result.tableId}`);
+        setBusy(false);
+        setPhase("idle");
+        setStatus(
+          "Could not seat at the table yet (balance mirror or join still pending). Try Find Match again — Leave will clear a stuck table.",
+        );
         return;
       }
 
       if (!result.tableId) {
         throw new Error("Matchmaking did not return a table");
+      }
+      if (!result.joined && !result.alreadySeated) {
+        setBusy(false);
+        setPhase("idle");
+        setStatus(result.message ?? "Match found but seating failed — try Find Match again.");
+        return;
       }
 
       setPhase("seating");
@@ -377,7 +386,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
   async function topUp(amount: number) {
     if (isOnchain) {
       setError(
-        `Mint or transfer ${money(amount)} more ${asset?.symbol ?? "USDC"} into your wallet, then retry.`,
+        `Mint or transfer ${money(amount)} more ${asset?.symbol ?? "USDC"} into your Arena Account, then retry.`,
       );
       setPhase("error");
       return;
@@ -426,6 +435,61 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
         minWidth: 0,
       }}
     >
+      <nav
+        aria-label="Poker mode"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gap: 10,
+          marginBottom: space[5],
+          maxWidth: 620,
+        }}
+      >
+        {[
+          {
+            id: "texas" as const,
+            href: "/poker",
+            title: "Texas Hold’em",
+            detail: "Ranked · heads-up",
+          },
+          {
+            id: "classic" as const,
+            href: "/poker/classic",
+            title: "Poker Classic",
+            detail: "Public tables · 6-max",
+          },
+        ].map((mode) => {
+          const active = product === mode.id;
+          return (
+            <Link
+              key={mode.id}
+              href={mode.href}
+              aria-current={active ? "page" : undefined}
+              style={{
+                padding: "14px 16px",
+                borderRadius: radius.lg,
+                border: `1px solid ${active ? color.accentBorder : color.lineStrong}`,
+                background: active ? color.accentDim : color.inkElevated,
+                color: active ? color.accent : color.text,
+                textDecoration: "none",
+              }}
+            >
+              <div style={{ fontSize: 14, fontWeight: 650 }}>{mode.title}</div>
+              <div
+                style={{
+                  marginTop: 4,
+                  font: `500 10px ${font.mono}`,
+                  color: active ? color.accent : color.textFaint,
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                }}
+              >
+                {mode.detail}
+              </div>
+            </Link>
+          );
+        })}
+      </nav>
       <div
         style={{
           display: "flex",
@@ -471,18 +535,6 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
           >
             {cfg.subtitle} Buy-in locks when a match is formed.
           </p>
-          <div style={{ marginTop: 12 }}>
-            <Link
-              href={cfg.altHref}
-              style={{
-                font: `500 12px ${font.mono}`,
-                color: color.accent,
-                letterSpacing: "0.04em",
-              }}
-            >
-              Switch to {cfg.altLabel} →
-            </Link>
-          </div>
         </div>
         <div
           style={{

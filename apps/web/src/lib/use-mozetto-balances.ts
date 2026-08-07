@@ -49,7 +49,10 @@ export function useMozettoBalances(): MozettoBalances {
   const connectedChainId = useChainId();
 
   const isOnchain = (me?.profileKind ?? me?.arenaMode) === "onchain";
-  const chainId = isConnected && address ? connectedChainId : (me?.chainId ?? preferredChainId);
+  // Reads must follow the authenticated Arena Account's chain. Using the
+  // wallet's currently selected chain made an Anvil balance appear as $0
+  // whenever MetaMask was briefly connected to Base/Sepolia.
+  const chainId = me?.chainId ?? (isConnected && address ? connectedChainId : preferredChainId);
   const asset = getChainAsset(chainId);
   const ownerAddress =
     (address ??
@@ -60,14 +63,17 @@ export function useMozettoBalances(): MozettoBalances {
     (me?.arenaAccountAddress as `0x${string}` | undefined) ||
     (me?.session?.arenaAccountAddress as `0x${string}` | undefined) ||
     undefined;
-  const playableAddress = arenaAccountAddress ?? ownerAddress;
+  // Never silently substitute the owner's EOA for a missing Arena Account:
+  // test mUSDC and match custody intentionally live at the smart account.
+  const playableAddress = isOnchain ? arenaAccountAddress : ownerAddress;
   const enabled = Boolean(isOnchain && playableAddress && asset?.usdc);
 
   const {
     data: arenaBal,
-    isLoading: arenaLoading,
+    isPending: arenaLoading,
     refetch: refetchArena,
   } = useReadContract({
+    chainId,
     address: asset?.usdc,
     abi: erc20Abi,
     functionName: "balanceOf",
@@ -76,14 +82,16 @@ export function useMozettoBalances(): MozettoBalances {
       enabled,
       refetchInterval: POLL_MS,
       refetchOnWindowFocus: true,
+      placeholderData: (previous) => previous,
     },
   });
 
   const {
     data: ownerBal,
-    isLoading: ownerLoading,
+    isPending: ownerLoading,
     refetch: refetchOwner,
   } = useReadContract({
+    chainId,
     address: asset?.usdc,
     abi: erc20Abi,
     functionName: "balanceOf",
@@ -92,14 +100,16 @@ export function useMozettoBalances(): MozettoBalances {
       enabled: Boolean(isOnchain && ownerAddress && asset?.usdc),
       refetchInterval: POLL_MS,
       refetchOnWindowFocus: true,
+      placeholderData: (previous) => previous,
     },
   });
 
   const {
     data: totalLocked,
-    isLoading: lockedLoading,
+    isPending: lockedLoading,
     refetch: refetchLocked,
   } = useReadContract({
+    chainId,
     address: asset?.vault || undefined,
     abi: arenaVaultAbi,
     functionName: "totalLocked",
@@ -108,14 +118,16 @@ export function useMozettoBalances(): MozettoBalances {
       enabled: Boolean(enabled && asset?.vault),
       refetchInterval: POLL_MS,
       refetchOnWindowFocus: true,
+      placeholderData: (previous) => previous,
     },
   });
 
   const {
     data: vaultAvailable,
-    isLoading: availLoading,
+    isPending: availLoading,
     refetch: refetchAvail,
   } = useReadContract({
+    chainId,
     address: asset?.vault || undefined,
     abi: arenaVaultAbi,
     functionName: "available",
@@ -124,6 +136,7 @@ export function useMozettoBalances(): MozettoBalances {
       enabled: Boolean(enabled && asset?.vault),
       refetchInterval: POLL_MS,
       refetchOnWindowFocus: true,
+      placeholderData: (previous) => previous,
     },
   });
 

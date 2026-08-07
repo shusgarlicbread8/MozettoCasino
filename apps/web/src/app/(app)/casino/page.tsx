@@ -5,7 +5,7 @@ import { HoverDiv, HoverLink } from "@/components/Hoverable";
 import { useSession } from "@/lib/session";
 import { useMozettoBalances } from "@/lib/use-mozetto-balances";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = "var(--font-mono), monospace";
 
 const L: Record<string, string> = { Bronze: "#B87333", Silver: "#B8C0C8", Gold: "#C9A227", Platinum: "#8FE3D2", Diamond: "#8FB8FF", Sovereign: "#C89BFF" };
 
@@ -173,7 +173,7 @@ export default function CasinoPage() {
                 <div style={{ display: "flex", alignItems: "center", gap: 11, minWidth: 0 }}>
                   <div style={{ width: 5, height: 28, borderRadius: 3, background: L[t.league], flex: "none" }} />
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontFamily: "var(--font-geist-sans), sans-serif", fontSize: 13.5, fontWeight: 550, letterSpacing: "-.015em", color: "#EDEDED" }}>{t.name}</div>
+                    <div style={{ fontFamily: "var(--font-sans), sans-serif", fontSize: 13.5, fontWeight: 550, letterSpacing: "-.015em", color: "#EDEDED" }}>{t.name}</div>
                     <div style={{ font: `400 9.5px ${MONO}`, color: L[t.league], marginTop: 3, letterSpacing: ".08em" }}>
                       {t.league.toUpperCase()} · {t.game}
                     </div>
@@ -189,7 +189,7 @@ export default function CasinoPage() {
                 <div style={{ display: "flex", gap: 7, justifyContent: "flex-end" }}>
                   <HoverLink
                     href="/live"
-                    style={{ padding: "7px 13px", borderRadius: 8, border: "1px solid rgba(255,255,255,.11)", fontFamily: "var(--font-geist-sans), sans-serif", fontSize: 12, color: "#9A9A9A" }}
+                    style={{ padding: "7px 13px", borderRadius: 8, border: "1px solid rgba(255,255,255,.11)", fontFamily: "var(--font-sans), sans-serif", fontSize: 12, color: "#9A9A9A" }}
                     hoverStyle={{ borderColor: "rgba(255,255,255,.3)", color: "#EDEDED" }}
                   >
                     Watch
@@ -198,7 +198,7 @@ export default function CasinoPage() {
                     style={{
                       padding: "7px 18px",
                       borderRadius: 8,
-                      fontFamily: "var(--font-geist-sans), sans-serif",
+                      fontFamily: "var(--font-sans), sans-serif",
                       fontSize: 12,
                       fontWeight: 600,
                       cursor: "default",

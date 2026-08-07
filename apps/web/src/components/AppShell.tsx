@@ -3,6 +3,7 @@ import { MobileTabBar } from "./MobileTabBar";
 import { Topbar } from "./Topbar";
 import { PageFade } from "./PageFade";
 import { WalletReconnect } from "./WalletReconnect";
+import { DebugTerminal } from "./DebugTerminal";
 import { LeaveGuardProvider } from "@/lib/leave-guard";
 import { SessionProvider } from "@/lib/session";
 import { color } from "@/lib/design-tokens";
@@ -27,6 +28,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </PageFade>
           </div>
           <MobileTabBar />
+          <DebugTerminal />
         </div>
       </LeaveGuardProvider>
     </SessionProvider>

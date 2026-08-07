@@ -94,10 +94,20 @@ export function findPreferredConnector(connectors: readonly Connector[]): Connec
   if (remembered) {
     const hit = connectors.find((c) => c.id === remembered);
     if (hit) return hit;
+    // Remembered SDK id may disappear after reload; fall back by brand.
+    if (/coinbase/i.test(remembered)) {
+      const cb =
+        connectors.find((c) => /coinbase/i.test(`${c.id} ${c.name}`) && c.type === "injected") ||
+        connectors.find((c) => /coinbase/i.test(`${c.id} ${c.name}`));
+      if (cb) return cb;
+    }
   }
   const brand = readRememberedBrand();
   if (brand?.id === "coinbase") {
-    return connectors.find((c) => /coinbase/i.test(`${c.id} ${c.name}`));
+    return (
+      connectors.find((c) => /coinbase/i.test(`${c.id} ${c.name}`) && c.type === "injected") ||
+      connectors.find((c) => /coinbase/i.test(`${c.id} ${c.name}`))
+    );
   }
   if (brand?.id === "metamask") {
     return connectors.find((c) => /metamask/i.test(`${c.id} ${c.name}`));

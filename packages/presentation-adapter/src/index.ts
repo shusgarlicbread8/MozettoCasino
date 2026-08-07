@@ -13,13 +13,13 @@ export {
   type CanonicalPresentationInput,
   type PresentationEvent,
   type AvatarPresentation,
-} from "./types.js";
+} from "./types";
 
-export { classifyPotClass } from "./pot-class.js";
-export { normalizeProfilePreset, toPresentationKind } from "./canonical.js";
-export { AVATAR_STATE_MAP, resolveAvatarState, avatarStateLabel } from "./mapping.js";
+export { classifyPotClass } from "./pot-class";
+export { normalizeProfilePreset, toPresentationKind } from "./canonical";
+export { AVATAR_STATE_MAP, resolveAvatarState, avatarStateLabel } from "./mapping";
 export {
   toPresentationEvent,
   toAvatarPresentation,
   adaptCanonicalToAvatar,
-} from "./adapt.js";
+} from "./adapt";

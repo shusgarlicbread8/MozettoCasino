@@ -1,12 +1,12 @@
-import { normalizeProfilePreset, toPresentationKind } from "./canonical.js";
-import { avatarStateLabel, resolveAvatarState } from "./mapping.js";
-import { classifyPotClass } from "./pot-class.js";
+import { normalizeProfilePreset, toPresentationKind } from "./canonical";
+import { avatarStateLabel, resolveAvatarState } from "./mapping";
+import { classifyPotClass } from "./pot-class";
 import type {
   AvatarPresentation,
   CanonicalPresentationInput,
   HandResultHint,
   PresentationEvent,
-} from "./types.js";
+} from "./types";
 
 function resolveHandResult(
   input: CanonicalPresentationInput,

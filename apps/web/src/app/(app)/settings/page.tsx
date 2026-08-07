@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { HoverDiv } from "@/components/Hoverable";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = "var(--font-mono), monospace";
 
 const GROUPS = [
   {

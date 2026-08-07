@@ -36,7 +36,7 @@ export function SplitFlapNumber({
     display: "inline-flex",
     alignItems: "baseline",
     fontVariantNumeric: "tabular-nums",
-    fontFamily: mono ? "var(--font-geist-mono), monospace" : undefined,
+    fontFamily: mono ? "var(--font-mono), monospace" : undefined,
     color,
     fontSize,
     ...style,

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { HoverDiv, HoverLink } from "@/components/Hoverable";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = "var(--font-mono), monospace";
 
 const LC: Record<string, string> = { Bronze: "#B87333", Silver: "#B8C0C8", Gold: "#C9A227", Platinum: "#8FE3D2", Diamond: "#8FB8FF", Sovereign: "#C89BFF" };
 
@@ -153,7 +153,7 @@ export default function TournamentsPage() {
               <div style={{ display: "flex", alignItems: "center", gap: 11, minWidth: 0 }}>
                 <div style={{ width: 5, height: 30, borderRadius: 3, background: LC[r.league], flex: "none" }} />
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontFamily: "var(--font-geist-sans), sans-serif", fontSize: 13.5, fontWeight: 600, letterSpacing: "-.02em", color: "#EDEDED" }}>{r.name}</div>
+                  <div style={{ fontFamily: "var(--font-sans), sans-serif", fontSize: 13.5, fontWeight: 600, letterSpacing: "-.02em", color: "#EDEDED" }}>{r.name}</div>
                   <div style={{ font: `400 9.5px ${MONO}`, color: LC[r.league], marginTop: 3, letterSpacing: ".08em" }}>
                     {r.league.toUpperCase()} · {r.meta}
                   </div>
@@ -173,7 +173,7 @@ export default function TournamentsPage() {
                   style={{
                     padding: "8px 18px",
                     borderRadius: 9,
-                    fontFamily: "var(--font-geist-sans), sans-serif",
+                    fontFamily: "var(--font-sans), sans-serif",
                     fontSize: 12,
                     fontWeight: 600,
                     cursor: "pointer",

@@ -222,7 +222,7 @@ export function VaultPanel({ onUpdated, compact }: { onUpdated?: () => void; com
     >
       {!compact && (
         <>
-          <div style={{ font: "600 11px var(--font-geist-mono), monospace", color: "#8A8A8A" }}>
+          <div style={{ font: "600 11px var(--font-mono), monospace", color: "#8A8A8A" }}>
             FUNDS HELD BY MOZETTO
           </div>
           <div style={{ marginTop: 10, fontSize: 13, color: "#9A9A9A", lineHeight: 1.55 }}>

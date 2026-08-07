@@ -13,6 +13,7 @@ export function Web3Provider({
   initialState?: State;
 }) {
   const [queryClient] = useState(() => new QueryClient());
+  // Fresh config each full page load (includes injected Coinbase + SDK).
   const [config] = useState(() => getWagmiConfig());
 
   return (

@@ -6,10 +6,12 @@ import { BrandMark, Button, LeagueChip } from "@/components/ui";
 import {
   color,
   font,
+  localDebugNav,
   primaryNav,
   resolveNavId,
   secondaryNav,
 } from "@/lib/design-tokens";
+import { isLocalAnvilDebug } from "@/lib/local-debug";
 import { money, useSession } from "@/lib/session";
 import { useMozettoBalances } from "@/lib/use-mozetto-balances";
 
@@ -23,6 +25,7 @@ const icons: Record<string, string> = {
   verify: "◎",
   replays: "⟲",
   settings: "⚙",
+  debug: "⌘",
 };
 
 export function Nav() {
@@ -157,7 +160,7 @@ export function Nav() {
         >
           MORE
         </div>
-        {secondaryNav.map((item) => {
+        {[...secondaryNav, ...(isLocalAnvilDebug() ? localDebugNav : [])].map((item) => {
           const isActive = active === item.id;
           return (
             <Link
@@ -188,6 +191,17 @@ export function Nav() {
                   }}
                 >
                   TRUST
+                </span>
+              ) : null}
+              {item.id === "debug" ? (
+                <span
+                  style={{
+                    font: `500 8.5px ${font.mono}`,
+                    letterSpacing: ".06em",
+                    color: color.accent,
+                  }}
+                >
+                  LOCAL
                 </span>
               ) : null}
             </Link>

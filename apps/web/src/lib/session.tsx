@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { signOut as authSignOut } from "@/lib/auth";
 
 export type ProfileKind = "demo" | "onchain";
@@ -80,12 +80,20 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async () => {
     try {
-      const [meRes, statsRes] = await Promise.all([
-        api<SessionMe>("/v1/me").catch(() => null),
-        api<PlatformStats>("/v1/stats").catch(() => null),
+      const [meRes, statsRes] = await Promise.allSettled([
+        api<SessionMe>("/v1/me"),
+        api<PlatformStats>("/v1/stats"),
       ]);
-      setMe(meRes);
-      setStats(statsRes);
+      // A transient API/RPC failure must not turn a signed-in on-chain profile
+      // into a zero-balance demo profile for one polling cycle.
+      if (meRes.status === "fulfilled") setMe(meRes.value);
+      else if (
+        meRes.reason instanceof ApiError &&
+        (meRes.reason.status === 401 || meRes.reason.status === 403)
+      ) {
+        setMe(null);
+      }
+      if (statsRes.status === "fulfilled") setStats(statsRes.value);
     } finally {
       setLoading(false);
     }

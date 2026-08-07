@@ -6,7 +6,7 @@ import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
 import { signInWithEmail, signUpWithEmail } from "@/lib/auth";
 import { api } from "@/lib/api";
 
-const FONT_MONO = "var(--font-geist-mono), monospace";
+const FONT_MONO = "var(--font-mono), monospace";
 
 const T =
   "NULLSET is in the tank. Eleven percent of the roll to continue with a hand that beats only bluffs. His check-raise frequency on ace-high boards is six percent. Discipline over curiosity.";

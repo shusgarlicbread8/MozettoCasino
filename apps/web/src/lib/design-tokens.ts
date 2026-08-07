@@ -112,8 +112,13 @@ export const secondaryNav = [
   { id: "settings", label: "Settings", href: "/settings" },
 ] as const;
 
+/** Anvil-only ops nav — appended in Nav when NEXT_PUBLIC_CHAIN_ENV is local. */
+export const localDebugNav = [
+  { id: "debug", label: "Debug", href: "/debug" },
+] as const;
+
 export type PrimaryNavId = (typeof primaryNav)[number]["id"];
-export type SecondaryNavId = (typeof secondaryNav)[number]["id"];
+export type SecondaryNavId = (typeof secondaryNav)[number]["id"] | "debug";
 
 export function resolveNavId(pathname: string): PrimaryNavId | SecondaryNavId | "home" {
   if (
@@ -131,6 +136,7 @@ export function resolveNavId(pathname: string): PrimaryNavId | SecondaryNavId | 
   if (pathname.startsWith("/verify") || pathname.startsWith("/fairness")) return "verify";
   if (pathname.startsWith("/replays")) return "replays";
   if (pathname.startsWith("/settings") || pathname.startsWith("/notifications")) return "settings";
+  if (pathname.startsWith("/debug")) return "debug";
   if (pathname.startsWith("/home")) return "home";
   return "home";
 }

@@ -29,6 +29,7 @@ import {
 import { SessionSealCoordinator } from "@mozetto/session-seal";
 import {
   assertLeague,
+  blockFailedOnchainSession,
   claimOpenOnchainSession,
   claimSingleTicket,
   claimTicketPair,
@@ -43,6 +44,7 @@ import {
   hasInFlightMatchedTicket,
   insertOnchainSessionPlayers,
   insertSeatTicket,
+  invalidateQueuedTicketsForProfile,
   isFeatureEnabled,
   leagueBuyInRaw,
   linkTicketsToBatch,
@@ -65,7 +67,6 @@ import {
 } from "@mozetto/database";
 import {
   CONTROLLER_HASH,
-  NLHE_HU_STANDARD_V1_TEMPLATE_ID,
   NLHE_HU_STANDARD_V2_TEMPLATE_ID,
   POKER_ENGINE_HASH,
   PROFILE_SET_HASH,
@@ -112,6 +113,27 @@ function sessionSignerAccount() {
   return privateKeyToAccount(pk);
 }
 
+// Foundry/Anvil public development accounts are intentionally well known.
+// They must never be authorized as a session signer on a public network.
+const ANVIL_ACCOUNT_ADDRESSES = new Set(
+  [
+    "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+    "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+    "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc",
+    "0x90f79bf6eb2c4f870365e785982e1f101e93b906",
+    "0x15d34aaf54267db7d7c367839aaf71a00a2c6a65",
+    "0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc",
+    "0x976ea74026e726554db657fa54763abd0c3a0aa9",
+    "0x14dc79964da2c08b23698b3d3cc7ca32193d9955",
+    "0x23618e81e3f5cdf7f54c3d65f7fbaed3bace8f6",
+    "0xa0ee7a142d267c1f36714e4a8f75612f20a79720",
+  ].map((address) => address.toLowerCase()),
+);
+
+function isUnsafePublicNetworkSigner(chainId: number, address?: string | null) {
+  return chainId !== 31337 && Boolean(address && ANVIL_ACCOUNT_ADDRESSES.has(address.toLowerCase()));
+}
+
 function chainFromId(chainId: number) {
   if (chainId === 31337) return foundry;
   if (chainId === 8453) return base;
@@ -125,19 +147,20 @@ function rpcForChain(chainId: number) {
 }
 
 /**
- * WP-106: HU ranked Match → SeatTicketV3 → atomic sealAndFundSession (default).
- * Opt out with LEGACY_OPEN_TOPUP=1 (openSession + topUpSession progressive fill).
- * Classic 6-max still uses open/topUp until full-table V3 seal lands.
+ * Seat-first matchmaking is the product default: join an existing compatible
+ * custody session or open a one-player table immediately. Atomic V3 pair
+ * sealing remains an explicit ops mode for protocol/golden verification.
  */
 function useSealAndFundV3(format: ArenaFormat = "hu"): boolean {
   if (format !== "hu") return false;
   if (process.env.LEGACY_OPEN_TOPUP === "1") return false;
-  return process.env.SEAL_AND_FUND_V3 !== "0";
+  return process.env.SEAL_AND_FUND_V3 === "1";
 }
 
-/** Active ranked HU template: V2 when sealAndFund is on (GameRegistryV2), else legacy V1. */
+/** Active ranked custody template registered by the current V2 deployment. */
 function rankedHuTemplateId(format: ArenaFormat = "hu"): Hex {
-  return (useSealAndFundV3(format) ? NLHE_HU_STANDARD_V2_TEMPLATE_ID : NLHE_HU_STANDARD_V1_TEMPLATE_ID) as Hex;
+  void format;
+  return NLHE_HU_STANDARD_V2_TEMPLATE_ID as Hex;
 }
 
 function matchmakingPool(chainId: number, leagueId: string, format: ArenaFormat = "hu"): Hex {
@@ -146,6 +169,37 @@ function matchmakingPool(chainId: number, leagueId: string, format: ArenaFormat 
     return keccak256(toBytes(`mozetto:pool:${chainId}:${leagueId}:classic`));
   }
   return keccak256(toBytes(`mozetto:pool:${chainId}:${leagueId}`));
+}
+
+function isUnknownSessionError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  // ArenaVaultV2.UnknownSession() — DB thinks the table is open, chain does not.
+  return /0x4fca7936|UnknownSession/i.test(msg);
+}
+
+async function readVaultSessionOpenedAt(
+  publicClient: { readContract: (args: never) => Promise<unknown> },
+  vault: Address,
+  sessionId: Hex,
+): Promise<bigint> {
+  try {
+    const row = await publicClient.readContract({
+      address: vault,
+      abi: arenaVaultV2Abi,
+      functionName: "sessions",
+      args: [sessionId],
+    } as never);
+    if (Array.isArray(row)) {
+      // public mapping getter returns a tuple; openedAt is index 5
+      return BigInt(row[5] as bigint | number | string);
+    }
+    if (row && typeof row === "object" && "openedAt" in row) {
+      return BigInt((row as { openedAt: bigint | number | string }).openedAt ?? 0);
+    }
+    return 0n;
+  } catch {
+    return 0n;
+  }
 }
 
 function toBigIntField(v: string | number | bigint): bigint {
@@ -182,12 +236,29 @@ async function ensureArenaAccountDeployed(session: SessionUser, chainId: number)
     transport: http(rpcForChain(chainId)),
   });
 
-  const predicted = (await publicClient.readContract({
-    address: factory,
-    abi: arenaAccountFactoryAbi,
-    functionName: "predictAddress",
-    args: [owner],
-  } as never)) as Address;
+  // Stale Anvil (restart without --redeploy) leaves manifest addresses with empty bytecode.
+  const factoryCode = await publicClient.getBytecode({ address: factory });
+  if (!factoryCode || factoryCode === "0x") {
+    throw Object.assign(
+      new Error(
+        "Arena Account factory has no code on this RPC. Restart Anvil and run ./scripts/start-local.sh --redeploy.",
+      ),
+      { code: "contracts_not_deployed" },
+    );
+  }
+
+  let predicted: Address;
+  try {
+    predicted = (await publicClient.readContract({
+      address: factory,
+      abi: arenaAccountFactoryAbi,
+      functionName: "predictAddress",
+      args: [owner],
+    } as never)) as Address;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "predictAddress failed";
+    throw Object.assign(new Error(msg), { code: "predict_arena_failed", cause: e });
+  }
 
   if (!row) {
     row = await upsertArenaAccount({
@@ -277,16 +348,45 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
         | undefined);
 
     if (!arenaAccount) {
-      arenaAccount = (await publicClient.readContract({
-        address: factory,
-        abi: arenaAccountFactoryAbi,
-        functionName: "predictAddress",
-        args: [owner],
-      } as never)) as Address;
+      try {
+        const factoryCode = await publicClient.getBytecode({ address: factory });
+        if (!factoryCode || factoryCode === "0x") {
+          return reply.code(503).send({
+            error: "contracts_not_deployed",
+            message:
+              "Arena Account factory has no code on this RPC. Run ./scripts/start-local.sh --redeploy.",
+          });
+        }
+        arenaAccount = (await publicClient.readContract({
+          address: factory,
+          abi: arenaAccountFactoryAbi,
+          functionName: "predictAddress",
+          args: [owner],
+        } as never)) as Address;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "predictAddress failed";
+        return reply.code(503).send({
+          error: msg.includes("ECONNREFUSED") ? "rpc_unavailable" : "predict_arena_failed",
+          message: msg.includes("ECONNREFUSED")
+            ? "Anvil RPC is down. Start it and redeploy if needed."
+            : msg,
+        });
+      }
     }
 
-    const code = await publicClient.getBytecode({ address: arenaAccount });
-    const deployed = Boolean(code && code !== "0x");
+    let deployed = false;
+    try {
+      const code = await publicClient.getBytecode({ address: arenaAccount });
+      deployed = Boolean(code && code !== "0x");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "rpc failed";
+      return reply.code(503).send({
+        error: msg.includes("ECONNREFUSED") ? "rpc_unavailable" : "rpc_failed",
+        message: msg.includes("ECONNREFUSED")
+          ? "Anvil RPC is down. Start it and redeploy if needed."
+          : msg,
+      });
+    }
 
     let auth: {
       enabled: boolean;
@@ -368,6 +468,13 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
     }
 
     const signer = sessionSignerAccount();
+    if (isUnsafePublicNetworkSigner(chainId, signer?.address)) {
+      return reply.code(503).send({
+        error: "unsafe_session_signer",
+        message:
+          "Session signer is an Anvil development account. Configure a unique role-separated signer before using a public network.",
+      });
+    }
     const now = Math.floor(Date.now() / 1000);
     const defaults = {
       sessionSigner: signer?.address ?? "0x0000000000000000000000000000000000000000",
@@ -386,7 +493,11 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
     };
 
     return {
-      enabled: Boolean(auth?.enabled),
+      enabled: Boolean(
+        auth?.enabled &&
+          signer &&
+          auth.sessionSigner.toLowerCase() === signer.address.toLowerCase(),
+      ),
       ownerAddress: owner.toLowerCase(),
       arenaAccountAddress: arenaAccount.toLowerCase(),
       deployed,
@@ -394,6 +505,11 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
       symbol: chainCfg.symbol,
       permission: auth,
       sessionSigner: signer?.address ?? null,
+      signerRotationRequired: Boolean(
+        auth?.enabled &&
+          signer &&
+          auth.sessionSigner.toLowerCase() !== signer.address.toLowerCase(),
+      ),
       defaults,
       domain: gamePermissionDomain(chainId, arenaAccount),
       types: GAME_PERMISSION_TYPES,
@@ -503,6 +619,24 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
     if (message.usdc.toLowerCase() !== token.toLowerCase() || message.vault.toLowerCase() !== vault.toLowerCase()) {
       return reply.code(400).send({ error: "wrong_targets" });
     }
+    const configuredSigner = sessionSignerAccount();
+    if (message.enabled) {
+      if (!configuredSigner) {
+        return reply.code(503).send({ error: "session_signer_not_configured" });
+      }
+      if (isUnsafePublicNetworkSigner(chainId, configuredSigner.address)) {
+        return reply.code(503).send({
+          error: "unsafe_session_signer",
+          message: "Refusing to authorize an Anvil development signer on a public network.",
+        });
+      }
+      if (message.sessionSigner.toLowerCase() !== configuredSigner.address.toLowerCase()) {
+        return reply.code(400).send({
+          error: "session_signer_mismatch",
+          message: "Permission signer no longer matches the configured Mozetto session signer. Refresh and retry.",
+        });
+      }
+    }
 
     const valid = await verifyTypedData({
       address: owner as Address,
@@ -520,6 +654,12 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
     const chain = chainFromId(chainId);
     const rpc = rpcForChain(chainId);
     const relayer = privateKeyToAccount(relayerPk);
+    if (isUnsafePublicNetworkSigner(chainId, relayer.address)) {
+      return reply.code(503).send({
+        error: "unsafe_relayer",
+        message: "Refusing to use an Anvil development relayer on a public network.",
+      });
+    }
     const wallet = createWalletClient({ account: relayer, chain, transport: http(rpc) });
     const publicClient = createPublicClient({ chain, transport: http(rpc) });
 
@@ -548,7 +688,17 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
         account: relayer,
       });
       await publicClient.waitForTransactionReceipt({ hash });
-      return { ok: true, txHash: hash, enabled: message.enabled, arenaAccountAddress: account };
+      const invalidatedTicketIds = await invalidateQueuedTicketsForProfile(
+        session.profileId,
+        chainId,
+      );
+      return {
+        ok: true,
+        txHash: hash,
+        enabled: message.enabled,
+        arenaAccountAddress: account,
+        invalidatedQueuedTickets: invalidatedTicketIds.length,
+      };
     } catch (e) {
       const msg = e instanceof Error ? e.message : "permission_failed";
       req.log.error({ err: e }, "setGamePermission failed");
@@ -582,7 +732,16 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
     if (!(amountUsdc > 0) || amountUsdc > 1_000_000) {
       return reply.code(400).send({ error: "invalid_amount" });
     }
-    const arena = await ensureArenaAccountDeployed(session, session.chainId);
+    let arena: Address | null = null;
+    try {
+      arena = await ensureArenaAccountDeployed(session, session.chainId);
+    } catch (e) {
+      const err = e as Error & { code?: string };
+      return reply.code(503).send({
+        error: err.code || "arena_account_unavailable",
+        message: err.message || "Arena Account unavailable",
+      });
+    }
     if (!arena) return reply.code(503).send({ error: "arena_account_unavailable" });
 
     const chainCfg = getChainConfig("anvil");
@@ -619,13 +778,21 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
       // Anvil-only: mirror mint into on-chain ledger available so join/lockBuyIn
       // works without a live indexer (WP-106 golden). Idempotent on tx hash.
       await creditOnchainDeposit(session.profileId, amountUsdc, hash);
+      const accountBalanceRaw = (await publicClient.readContract({
+        address: chainCfg.usdc,
+        abi: erc20BalanceAbi,
+        functionName: "balanceOf",
+        args: [arena],
+      } as never)) as bigint;
       return {
         ok: true,
         txHash: hash,
         arenaAccountAddress: arena,
         amountUsdc,
+        accountBalanceUsdc: Number(accountBalanceRaw) / 10 ** USDC_DECIMALS,
         symbol: chainCfg.symbol,
         ledgerMirrored: true,
+        sponsored: true,
       };
     } catch (e) {
       const msg = e instanceof Error ? e.message : "mint_failed";
@@ -971,8 +1138,8 @@ export async function handleOnchainFindMatch(
     }
   }
 
-  // WP-106 default (HU): wait for opponent → SeatTicketV3 → atomic sealAndFundSession.
-  // Classic / LEGACY_OPEN_TOPUP=1: progressive openSession + topUpSession.
+  // Product default: claim the fullest compatible open session, otherwise
+  // create a table immediately. Protocol V3 pair-seal is explicit opt-in.
   if (!useSealAndFundV3(format) && process.env.LEGACY_PAIR_MATCHMAKING !== "1") {
     return openOrJoinImmediateTable({
       req,
@@ -1375,7 +1542,8 @@ async function openOrJoinImmediateTable(opts: {
   });
 
   // Prefer the fullest compatible table that still has a seat.
-  const open = await claimOpenOnchainSession({
+  // Skip DB "opened" sessions that vanished on-chain (common after Anvil reset).
+  let open = await claimOpenOnchainSession({
     selfTicketId: opts.selfTicket.id,
     profileId: opts.session.profileId,
     chainId: opts.chainId,
@@ -1383,7 +1551,30 @@ async function openOrJoinImmediateTable(opts: {
     buyInUsdc: opts.buyIn,
     format,
   });
-  if (open) {
+  while (open) {
+    const onChainOpenedAt = await readVaultSessionOpenedAt(
+      publicClient,
+      opts.vault,
+      open.sessionId as Hex,
+    );
+    if (onChainOpenedAt === 0n) {
+      opts.req.log.warn(
+        { sessionId: open.sessionId },
+        "Skipping phantom open session (DB opened, vault UnknownSession)",
+      );
+      await releaseOpenSessionClaim(open.ticket.id, open.sessionId, opts.session.profileId);
+      await blockFailedOnchainSession(open.sessionId);
+      open = await claimOpenOnchainSession({
+        selfTicketId: opts.selfTicket.id,
+        profileId: opts.session.profileId,
+        chainId: opts.chainId,
+        leagueId: opts.leagueId,
+        buyInUsdc: opts.buyIn,
+        format,
+      });
+      continue;
+    }
+
     const arena = (open.ticket.arena_account_address ?? open.ticket.wallet_address).toLowerCase();
     const reservationId = await reserveExposure({
       profileId: open.ticket.profile_id,
@@ -1427,6 +1618,19 @@ async function openOrJoinImmediateTable(opts: {
     } catch (e) {
       await releaseExposure(reservationId);
       await releaseOpenSessionClaim(open.ticket.id, open.sessionId, opts.session.profileId);
+      if (isUnknownSessionError(e)) {
+        opts.req.log.warn({ err: e, sessionId: open.sessionId }, "topUpSession UnknownSession — blocking phantom");
+        await blockFailedOnchainSession(open.sessionId);
+        open = await claimOpenOnchainSession({
+          selfTicketId: opts.selfTicket.id,
+          profileId: opts.session.profileId,
+          chainId: opts.chainId,
+          leagueId: opts.leagueId,
+          buyInUsdc: opts.buyIn,
+          format,
+        });
+        continue;
+      }
       opts.req.log.error({ err: e, sessionId: open.sessionId }, "topUpSession failed");
       return opts.reply.code(502).send({
         error: "join_session_failed",
@@ -1534,6 +1738,7 @@ async function openOrJoinImmediateTable(opts: {
   } catch (e) {
     await releaseExposure(reservationId);
     await markBatchFailed(batchId, e instanceof Error ? e.message : "open_session_failed");
+    await blockFailedOnchainSession(sessionId);
     opts.req.log.error({ err: e, sessionId }, "single-player openSession failed");
     return opts.reply.code(502).send({
       error: "open_session_failed",

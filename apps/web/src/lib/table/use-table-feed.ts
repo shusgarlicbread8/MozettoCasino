@@ -68,6 +68,8 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
       const r = await api<{ table: TableMeta; seats: SeatMeta[] }>(`/v1/tables/${tableId}`);
       setMeta(r.table);
       setSeatMeta(r.seats || []);
+      // REST snapshot is enough to leave "CONNECTING" — WS subscribe still preferred for live.
+      setConnecting(false);
       setLive((prev) => {
         if (prev?.handId || (prev && prev.street !== "waiting")) return prev;
         return {

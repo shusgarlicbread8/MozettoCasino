@@ -31,6 +31,7 @@ import { handleOnchainFindMatch, registerArenaOnchainRoutes } from "./arena-onch
 import { registerAdminRoutes } from "./admin.js";
 import { registerVerifyRoutes } from "./verify.js";
 import { registerPlan19Routes } from "./plan19-routes.js";
+import { registerDebugRoutes } from "./debug-activity.js";
 
 const GAME_HTTP = process.env.NEXT_PUBLIC_GAME_HTTP_URL ?? "http://localhost:4001";
 
@@ -55,6 +56,7 @@ registerArenaOnchainRoutes(app);
 registerAdminRoutes(app);
 registerVerifyRoutes(app);
 registerPlan19Routes(app);
+registerDebugRoutes(app);
 
 app.get("/health", async () => ({ ok: true }));
 
@@ -907,7 +909,9 @@ async function executeArenaFindMatch(
     if ("status" in withHash && withHash.status === "waiting") {
       return withHash;
     }
-    if ("status" in withHash && withHash.status === "matching") {
+    // Only skip join while we truly have no table yet. If matching already
+    // produced a tableId, seat the player (regression vs early "matching" short-circuit).
+    if ("status" in withHash && withHash.status === "matching" && !withHash.tableId) {
       return { ...withHash, joined: false };
     }
     if (withHash.alreadySeated) {
@@ -936,8 +940,11 @@ async function executeArenaFindMatch(
         lastErr = data;
         const msg = String(data.message || data.error || "");
         const retryable =
-          /opening on-chain|not opened|Insufficient available|indexer|mirror/i.test(msg) ||
+          /opening on-chain|not opened|Insufficient available|indexer|mirror|lease|durable|busy|try again/i.test(
+            msg,
+          ) ||
           res.status === 400 ||
+          res.status === 409 ||
           res.status === 503;
         if (!retryable) {
           return reply.code(res.status).send({
@@ -952,10 +959,12 @@ async function executeArenaFindMatch(
       await new Promise((r) => setTimeout(r, 800));
     }
 
+    // Do not navigate the client onto an unseated table — keep polling semantics.
     return {
       ...withHash,
       joined: false,
       waitingForChain: true,
+      status: "matching" as const,
       message:
         (lastErr.message as string) ||
         "Match opened on-chain — seating as soon as Instant balance mirror is ready.",

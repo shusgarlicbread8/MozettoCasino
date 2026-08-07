@@ -9,7 +9,7 @@ import {
   resolveAvatarState,
   toPresentationEvent,
   toPresentationKind,
-} from "./index.js";
+} from "./index";
 
 describe("WP-132 presentation adapter", () => {
   it("PLAYER_RAISED + shark → lean_forward_aggressive", () => {

@@ -338,8 +338,8 @@ export type FindArenaMatchResult = {
 
 /**
  * Ranked Arena matchmaking for Texas Hold'em (HU) or Poker Classic (6-max).
- * Buy-in is the league's fixed amount. Allocation is random within the pool —
- * players never select a public ranked table or opponent (WP-040).
+ * Buy-in is the league's fixed amount. HU allocation is random within the
+ * pool; Classic fills the fullest eligible table before creating another.
  */
 export async function findArenaMatch(opts: {
   userId: string;
@@ -489,7 +489,7 @@ export async function findArenaMatch(opts: {
       poolKey,
       decision: "join_existing",
       tableId: decision.candidate.id,
-      reasonCode: "random_within_pool",
+      reasonCode: format === "classic" ? "fullest_eligible_table" : "random_within_pool",
       candidateCount: candidates.length,
       eligibleCount: candidates.length - decision.rejects.length,
       rejected: decision.rejects,

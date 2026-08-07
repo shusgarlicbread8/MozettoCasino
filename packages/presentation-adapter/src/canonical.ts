@@ -3,7 +3,7 @@ import {
   type PresentationEventKind,
   type ProfilePreset,
   PROFILE_PRESETS,
-} from "./types.js";
+} from "./types";
 
 const ACTION_TO_KIND: Record<string, PresentationEventKind> = {
   fold: "PLAYER_FOLDED",

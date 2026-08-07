@@ -39,6 +39,7 @@ export function WalletReconnect() {
       const preferred = findPreferredConnector(connectors);
       const target =
         preferred ||
+        connectors.find((c) => /coinbase/i.test(`${c.id} ${c.name}`) && c.type === "injected") ||
         connectors.find((c) => /coinbase/i.test(`${c.id} ${c.name}`)) ||
         connectors.find((c) => /metamask/i.test(`${c.id} ${c.name}`)) ||
         connectors[0];
@@ -82,7 +83,7 @@ export function WalletReconnect() {
     return (
       <div style={bannerWarn}>
         Connected {wallet.short} account does not match your signed-in wallet{" "}
-        <span style={{ fontFamily: "var(--font-geist-mono), monospace" }}>
+        <span style={{ fontFamily: "var(--font-mono), monospace" }}>
           {short(me.walletAddress)}
         </span>
         . Switch accounts in {wallet.short}, or reconnect.
@@ -107,7 +108,7 @@ export function WalletReconnect() {
             <>
               {" "}
               as{" "}
-              <span style={{ fontFamily: "var(--font-geist-mono), monospace", color: "#BABABA" }}>
+              <span style={{ fontFamily: "var(--font-mono), monospace", color: "#BABABA" }}>
                 {short(me.walletAddress)}
               </span>
             </>

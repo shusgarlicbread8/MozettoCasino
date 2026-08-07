@@ -1,4 +1,4 @@
-import type { PotClass } from "./types.js";
+import type { PotClass } from "./types";
 
 /**
  * Classify pot relative to big blind for presentation sizing.

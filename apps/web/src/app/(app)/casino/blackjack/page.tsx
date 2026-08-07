@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { HoverDiv } from "@/components/Hoverable";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = "var(--font-mono), monospace";
 const R = "#C4342E";
 
 type Card = { r: string; s: string; color: string; bg: string; border: string };
@@ -106,7 +106,7 @@ function Cards({ cards }: { cards: Card[] }) {
             animation: "ar-deal .35s ease-out both",
           }}
         >
-          <div style={{ font: "600 25px var(--font-geist-sans), sans-serif", lineHeight: 1, color: c.color }}>{c.r}</div>
+          <div style={{ font: "600 25px var(--font-sans), sans-serif", lineHeight: 1, color: c.color }}>{c.r}</div>
           <div style={{ fontSize: 18, lineHeight: 1.2, color: c.color }}>{c.s}</div>
         </div>
       ))}
