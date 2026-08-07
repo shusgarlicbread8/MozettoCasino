@@ -17,6 +17,9 @@ importers:
 
   apps/admin:
     dependencies:
+      '@mozetto/governance':
+        specifier: workspace:*
+        version: link:../../packages/governance
       next:
         specifier: 15.5.22
         version: 15.5.22(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
@@ -54,6 +57,9 @@ importers:
       '@mozetto/chain-manifest':
         specifier: workspace:*
         version: link:../../packages/chain-manifest
+      '@mozetto/game-rules':
+        specifier: workspace:*
+        version: link:../../packages/game-rules
       '@mozetto/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
@@ -122,6 +128,25 @@ importers:
         specifier: ^5
         version: 5.9.3
 
+  packages/attestors:
+    dependencies:
+      '@mozetto/root-builder':
+        specifier: workspace:*
+        version: link:../root-builder
+      viem:
+        specifier: ^2.55.11
+        version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.5
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
   packages/blockchain:
     dependencies:
       '@mozetto/chain-manifest':
@@ -165,6 +190,47 @@ importers:
       '@types/node':
         specifier: ^22.13.10
         version: 22.20.1
+      '@types/pg':
+        specifier: ^8.15.0
+        version: 8.20.4
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.5
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/dealer-deck:
+    dependencies:
+      '@mozetto/protocol-vectors':
+        specifier: workspace:*
+        version: link:../protocol-vectors-ts
+      viem:
+        specifier: ^2.55.11
+        version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.5
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/event-store:
+    dependencies:
+      '@mozetto/protocol-vectors':
+        specifier: workspace:*
+        version: link:../protocol-vectors-ts
+      viem:
+        specifier: ^2.55.11
+        version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
       tsx:
         specifier: ^4.19.3
         version: 4.23.5
@@ -181,6 +247,85 @@ importers:
         specifier: ^2.55.11
         version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
     devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.5
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/governance:
+    dependencies:
+      '@mozetto/chain-manifest':
+        specifier: workspace:*
+        version: link:../chain-manifest
+      viem:
+        specifier: ^2.55.11
+        version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.5
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/proof-batch-publisher:
+    dependencies:
+      '@mozetto/root-builder':
+        specifier: workspace:*
+        version: link:../root-builder
+      viem:
+        specifier: ^2.55.11
+        version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.5
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/protocol-vectors-ts:
+    dependencies:
+      viem:
+        specifier: ^2.55.11
+        version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.5
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/randomness-verifier:
+    dependencies:
+      '@mozetto/dealer-deck':
+        specifier: workspace:*
+        version: link:../dealer-deck
+      '@mozetto/protocol-vectors':
+        specifier: workspace:*
+        version: link:../protocol-vectors-ts
+      viem:
+        specifier: ^2.55.11
+        version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
       tsx:
         specifier: ^4.19.3
         version: 4.23.5
@@ -190,6 +335,53 @@ importers:
 
   packages/ratings:
     devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.5
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/reconciliation:
+    dependencies:
+      '@mozetto/database':
+        specifier: workspace:*
+        version: link:../database
+      viem:
+        specifier: ^2.55.11
+        version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      '@types/pg':
+        specifier: ^8.15.0
+        version: 8.20.4
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.5
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/root-builder:
+    dependencies:
+      '@mozetto/event-store':
+        specifier: workspace:*
+        version: link:../event-store
+      '@mozetto/protocol-vectors':
+        specifier: workspace:*
+        version: link:../protocol-vectors-ts
+      viem:
+        specifier: ^2.55.11
+        version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
       tsx:
         specifier: ^4.19.3
         version: 4.23.5
@@ -199,6 +391,25 @@ importers:
 
   packages/server-env:
     devDependencies:
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/session-seal:
+    dependencies:
+      '@mozetto/protocol-vectors':
+        specifier: workspace:*
+        version: link:../protocol-vectors-ts
+      viem:
+        specifier: ^2.55.11
+        version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.5
       typescript:
         specifier: ^5.8.2
         version: 5.9.3
@@ -223,17 +434,67 @@ importers:
         specifier: ^5.8.2
         version: 5.9.3
 
+  packages/unit-economics:
+    dependencies:
+      '@mozetto/game-rules':
+        specifier: workspace:*
+        version: link:../game-rules
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.5
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/watchtower:
+    dependencies:
+      '@mozetto/proof-batch-publisher':
+        specifier: workspace:*
+        version: link:../proof-batch-publisher
+      '@mozetto/randomness-verifier':
+        specifier: workspace:*
+        version: link:../randomness-verifier
+      '@mozetto/root-builder':
+        specifier: workspace:*
+        version: link:../root-builder
+      viem:
+        specifier: ^2.55.11
+        version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.5
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
   services/agent-runtime:
     dependencies:
       '@fastify/cors':
         specifier: ^11.0.0
         version: 11.3.0
+      '@mozetto/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@mozetto/protocol-vectors':
+        specifier: workspace:*
+        version: link:../../packages/protocol-vectors-ts
       '@mozetto/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
       fastify:
         specifier: ^5.2.1
         version: 5.11.2
+      viem:
+        specifier: ^2.55.11
+        version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
       zod:
         specifier: ^3.24.2
         version: 3.25.76
@@ -262,12 +523,18 @@ importers:
       '@mozetto/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@mozetto/reconciliation':
+        specifier: workspace:*
+        version: link:../../packages/reconciliation
       '@mozetto/server-env':
         specifier: workspace:*
         version: link:../../packages/server-env
       '@mozetto/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
+      '@mozetto/unit-economics':
+        specifier: workspace:*
+        version: link:../../packages/unit-economics
       '@supabase/supabase-js':
         specifier: ^2.112.0
         version: 2.112.0
@@ -311,6 +578,9 @@ importers:
       '@mozetto/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@mozetto/reconciliation':
+        specifier: workspace:*
+        version: link:../../packages/reconciliation
       viem:
         specifier: ^2.55.11
         version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
@@ -330,12 +600,52 @@ importers:
       '@fastify/cors':
         specifier: ^11.0.0
         version: 11.3.0
+      '@mozetto/attestors':
+        specifier: workspace:*
+        version: link:../../packages/attestors
       '@mozetto/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@mozetto/dealer-deck':
+        specifier: workspace:*
+        version: link:../../packages/dealer-deck
       '@mozetto/game-rules':
         specifier: workspace:*
         version: link:../../packages/game-rules
+      '@mozetto/protocol-vectors':
+        specifier: workspace:*
+        version: link:../../packages/protocol-vectors-ts
+      fastify:
+        specifier: ^5.2.1
+        version: 5.11.2
+      viem:
+        specifier: ^2.55.11
+        version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.5
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  services/dealer-enclave:
+    dependencies:
+      '@fastify/cors':
+        specifier: ^11.0.0
+        version: 11.3.0
+      '@mozetto/dealer-deck':
+        specifier: workspace:*
+        version: link:../../packages/dealer-deck
+      '@mozetto/protocol-vectors':
+        specifier: workspace:*
+        version: link:../../packages/protocol-vectors-ts
       fastify:
         specifier: ^5.2.1
         version: 5.11.2
@@ -373,6 +683,9 @@ importers:
       '@mozetto/dealer':
         specifier: workspace:*
         version: link:../dealer
+      '@mozetto/event-store':
+        specifier: workspace:*
+        version: link:../../packages/event-store
       '@mozetto/game-rules':
         specifier: workspace:*
         version: link:../../packages/game-rules
@@ -394,9 +707,40 @@ importers:
       jose:
         specifier: ^6.2.8
         version: 6.2.8
+      viem:
+        specifier: ^2.55.11
+        version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
       zod:
         specifier: ^3.24.2
         version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.5
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  services/reconciliation-worker:
+    dependencies:
+      '@mozetto/blockchain':
+        specifier: workspace:*
+        version: link:../../packages/blockchain
+      '@mozetto/chain-manifest':
+        specifier: workspace:*
+        version: link:../../packages/chain-manifest
+      '@mozetto/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@mozetto/reconciliation':
+        specifier: workspace:*
+        version: link:../../packages/reconciliation
+      viem:
+        specifier: ^2.55.11
+        version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
     devDependencies:
       '@types/node':
         specifier: ^22.13.10
@@ -413,9 +757,15 @@ importers:
       '@fastify/cors':
         specifier: ^11.0.0
         version: 11.3.0
+      '@mozetto/attestors':
+        specifier: workspace:*
+        version: link:../../packages/attestors
       '@mozetto/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@mozetto/event-store':
+        specifier: workspace:*
+        version: link:../../packages/event-store
       '@mozetto/game-rules':
         specifier: workspace:*
         version: link:../../packages/game-rules
@@ -441,16 +791,28 @@ importers:
 
   services/settlement-worker:
     dependencies:
+      '@mozetto/attestors':
+        specifier: workspace:*
+        version: link:../../packages/attestors
       '@mozetto/database':
         specifier: workspace:*
         version: link:../../packages/database
       '@mozetto/dealer':
         specifier: workspace:*
         version: link:../dealer
+      '@mozetto/root-builder':
+        specifier: workspace:*
+        version: link:../../packages/root-builder
+      '@mozetto/shared-types':
+        specifier: workspace:*
+        version: link:../../packages/shared-types
       viem:
         specifier: ^2.55.11
         version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
     devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
       tsx:
         specifier: ^4.19.3
         version: 4.23.5
@@ -1143,6 +1505,9 @@ packages:
 
   '@types/node@22.20.1':
     resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
+
+  '@types/pg@8.20.4':
+    resolution: {integrity: sha512-Jz7UDOlIiFJuacC0TlBoLyNtmwlA/wpIyPDd3tvUqlRM+HzkWy2xUgpFpaXtbfTAFF6sIGq5lsCDBdJnhky1Xg==}
 
   '@types/react-dom@19.2.4':
     resolution: {integrity: sha512-Bsc+QHgp+P/F02XDzNCY9jnZNCUuLki36KT7VKrTXXLdHf+vHMNZnW1rVu5DNW/rCK+fya3DATySbLM4yhtKUw==}
@@ -3529,6 +3894,12 @@ snapshots:
   '@types/node@22.20.1':
     dependencies:
       undici-types: 6.21.0
+
+  '@types/pg@8.20.4':
+    dependencies:
+      '@types/node': 22.20.1
+      pg-protocol: 1.15.0
+      pg-types: 2.2.0
 
   '@types/react-dom@19.2.4(@types/react@19.2.18)':
     dependencies:

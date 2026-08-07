@@ -8,6 +8,7 @@ out
 coverage
 *.tsbuildinfo
 .cache
+/target/
 
 # Env / secrets
 .env
@@ -42,3 +43,7 @@ contracts/broadcast/
 
 !.env.example
 .admin-token.txt
+
+# WP-052 local mock VRF run artifact
+scripts/.anvil-mock-vrf-last.json
+scripts/.anvil-e2e-protocol-v3-last.json

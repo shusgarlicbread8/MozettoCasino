@@ -1,0 +1,48 @@
+# Local Postgres + Redis for reproducible bootstrap (WP-000).
+# Optional when using a remote Supabase DATABASE_URL.
+#
+#   docker compose up -d
+#   export DATABASE_URL=postgresql://mozetto:mozetto@127.0.0.1:5432/mozetto
+#   export REDIS_URL=redis://127.0.0.1:6379
+#
+# App services (api/game/dealer/verifier/indexer/worker): see
+# docker-compose.hosted.yml + docs/WP-086_HOSTED_DEPLOYMENT.md
+#
+# Versions pinned to match docs/TOOL_VERSIONS.md
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mozetto-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: mozetto
+      POSTGRES_PASSWORD: mozetto
+      POSTGRES_DB: mozetto
+    volumes:
+      - mozetto_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mozetto -d mozetto"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: mozetto-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - mozetto_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  mozetto_pg_data:
+  mozetto_redis_data:

@@ -1,0 +1,34 @@
+{
+  "_doc": "docs/WP-105_RESTRICTED_MAINNET.md",
+  "_authority": "Plan 14 Mainnet readiness gate + restricted launch posture",
+  "_rule": "Flip a required gate to true only with independently verified evidence. Gate scripts FAIL while any required value is false. finalGateApproval must stay false until audits + Stage C + all other gates are green.",
+  "required": {
+    "wp104CriticalsClosed": false,
+    "stageCComplete": false,
+    "bytecodeMatchesAuditedCommit": false,
+    "safeTimelockLive": false,
+    "keySeparationVerified": false,
+    "independentAttestorsOperational": false,
+    "productionRpcRedundancy": false,
+    "productionGroqCapacityUnderstood": false,
+    "publicVerificationComplete": false,
+    "emergencyExitTested": false,
+    "reconciliationAutomatic": false,
+    "incidentDrillsComplete": false,
+    "legalComplianceLaunchDecision": false,
+    "responsiblePlayControlsReady": false,
+    "bugBountyActive": false,
+    "restrictedCapsConfigured": false,
+    "allowlistConfigured": false,
+    "finalGateApproval": false
+  },
+  "restrictedPosture": {
+    "templates": "one NLHE only",
+    "modelPolicy": "one standardized Groq policy",
+    "buyInCap": "low — numeric threshold set before go-live",
+    "users": "allowlisted / limited",
+    "maxConcurrentSessions": "strict — numeric threshold set before go-live",
+    "houseGames": false,
+    "openAiLeague": false
+  }
+}

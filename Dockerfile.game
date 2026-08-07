@@ -3,6 +3,8 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY packages ./packages
+# game-server depends on @mozetto/dealer (workspace service)
+COPY services/dealer ./services/dealer
 COPY services/game-server ./services/game-server
 RUN pnpm install --frozen-lockfile --filter @mozetto/game-server...
 ENV NODE_ENV=production

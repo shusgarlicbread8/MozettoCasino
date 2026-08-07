@@ -1,0 +1,38 @@
+# Fly.io recipe — mozetto-api (WP-086)
+# Usage:
+#   fly apps create mozetto-api-staging
+#   fly secrets set -a mozetto-api-staging DATABASE_URL=... SESSION_SECRET=... ...
+#   fly deploy -c deploy/fly/api.toml -a mozetto-api-staging
+#
+# Replace app name / region before first deploy. Do not commit secrets.
+
+app = 'mozetto-api-staging'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'Dockerfile.api'
+
+[env]
+  NODE_ENV = 'production'
+  COOKIE_SAMESITE = 'none'
+  COOKIE_SECURE = '1'
+
+[http_service]
+  internal_port = 4000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+  [[http_service.checks]]
+    interval = '15s'
+    timeout = '5s'
+    grace_period = '30s'
+    method = 'GET'
+    path = '/health'
+
+[[vm]]
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1

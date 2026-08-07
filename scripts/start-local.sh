@@ -51,6 +51,9 @@ set("TABLE_REGISTRY_ADDRESS", anvil.tableRegistry);
 set("SETTLEMENT_HUB_ADDRESS", anvil.settlementHub);
 set("CHECKPOINT_REGISTRY_ADDRESS", anvil.checkpointRegistry);
 set("RANDOMNESS_COORDINATOR_ADDRESS", anvil.randomnessCoordinator);
+if (anvil.randomnessBeacon) {
+  set("RANDOMNESS_BEACON_ADDRESS", anvil.randomnessBeacon);
+}
 set("FEE_TREASURY_ADDRESS", anvil.feeTreasury);
 set("DEPLOYMENT_BLOCK", String(anvil.deploymentBlock));
 set("MOZETTO_CHAIN_ENV", "anvil");
@@ -94,10 +97,18 @@ nohup pnpm --filter @mozetto/web dev >/tmp/mozetto-web.log 2>&1 &
 nohup pnpm --filter @mozetto/admin dev >/tmp/mozetto-admin.log 2>&1 &
 disown -a 2>/dev/null || true
 
-sleep 4
-if ! curl -sf http://127.0.0.1:4000/health >/dev/null; then
+API_OK=0
+for _ in $(seq 1 30); do
+  if curl -sf http://127.0.0.1:4000/health >/dev/null; then
+    API_OK=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$API_OK" != "1" ]]; then
   echo "WARNING: API health check failed — see /tmp/mozetto-api.log" >&2
 fi
+bash "$ROOT/scripts/readiness-report.sh" || true
 echo "Web     http://localhost:3000"
 echo "Admin   http://localhost:3001/login?token=$(grep ^ADMIN_TOKEN= .env.local | cut -d= -f2)"
 echo "API     http://localhost:4000/health"

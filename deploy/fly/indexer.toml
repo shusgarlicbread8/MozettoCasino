@@ -1,0 +1,32 @@
+# Fly.io recipe — chain indexer (health on PORT / INDEXER_HEALTH_PORT).
+
+app = 'mozetto-indexer-staging'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'Dockerfile.indexer'
+
+[env]
+  NODE_ENV = 'production'
+  INDEXER_CONFIRMATIONS = '3'
+  INDEXER_POLL_MS = '8000'
+
+[http_service]
+  internal_port = 4010
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+  [[http_service.checks]]
+    interval = '20s'
+    timeout = '5s'
+    grace_period = '40s'
+    method = 'GET'
+    path = '/health'
+
+[[vm]]
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1

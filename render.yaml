@@ -1,5 +1,11 @@
-# Backend services for Mozetto (WebSockets are not supported on Vercel).
+# Backend services for Mozetto (WebSockets / workers are not supported on Vercel).
 # Connect this repo in Render → New → Blueprint.
+# Full recipes + env checklists: docs/WP-086_HOSTED_DEPLOYMENT.md
+#
+# Staging note (Plan 07): Render is fine for staging; do not treat it as an
+# unexamined production assumption. Prefer private networking for dealer /
+# verifier / agent in production-like environments.
+
 services:
   - type: web
     name: mozetto-api
@@ -34,31 +40,12 @@ services:
         sync: false
       - key: ADMIN_TOKEN
         sync: false
-
-  - type: web
-    name: mozetto-chain-indexer
-    runtime: docker
-    dockerfilePath: ./Dockerfile.indexer
-    plan: free
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: DATABASE_URL
-        sync: false
       - key: MOZETTO_CHAIN_ENV
         sync: false
-      - key: BASE_SEPOLIA_RPC_URL
+      - key: SESSION_RELAYER_PRIVATE_KEY
         sync: false
-      - key: BASE_RPC_URL
+      - key: INSTANT_SESSION_SIGNER_PRIVATE_KEY
         sync: false
-      - key: ANVIL_RPC_URL
-        sync: false
-      - key: ARENA_VAULT_ADDRESS
-        sync: false
-      - key: INDEXER_CONFIRMATIONS
-        value: "3"
-      - key: INDEXER_POLL_MS
-        value: "8000"
 
   - type: web
     name: mozetto-game
@@ -87,3 +74,141 @@ services:
         sync: false
       - key: REDIS_URL
         sync: false
+      - key: DEALER_URL
+        sync: false
+      - key: AGENT_RUNTIME_URL
+        sync: false
+      - key: OUTBOX_STORE
+        value: postgres
+
+  - type: web
+    name: mozetto-chain-indexer
+    runtime: docker
+    dockerfilePath: ./Dockerfile.indexer
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: MOZETTO_CHAIN_ENV
+        sync: false
+      - key: BASE_SEPOLIA_RPC_URL
+        sync: false
+      - key: BASE_RPC_URL
+        sync: false
+      - key: ANVIL_RPC_URL
+        sync: false
+      - key: ARENA_VAULT_ADDRESS
+        sync: false
+      - key: INDEXER_CONFIRMATIONS
+        value: "3"
+      - key: INDEXER_POLL_MS
+        value: "8000"
+      - key: DEPLOYMENT_BLOCK
+        sync: false
+
+  - type: web
+    name: mozetto-dealer
+    runtime: docker
+    dockerfilePath: ./Dockerfile.dealer
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: CHAIN_ID
+        sync: false
+      - key: SETTLEMENT_HUB_ADDRESS
+        sync: false
+      - key: DEALER_ATTESTOR_PRIVATE_KEY
+        sync: false
+      - key: BASE_SEPOLIA_RPC_URL
+        sync: false
+      - key: ANVIL_RPC_URL
+        sync: false
+
+  - type: web
+    name: mozetto-replay-verifier
+    runtime: docker
+    dockerfilePath: ./Dockerfile.verifier
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: CHAIN_ID
+        sync: false
+      - key: SETTLEMENT_HUB_ADDRESS
+        sync: false
+      - key: REPLAY_ATTESTOR_PRIVATE_KEY
+        sync: false
+      - key: BASE_SEPOLIA_RPC_URL
+        sync: false
+      - key: ANVIL_RPC_URL
+        sync: false
+
+  - type: web
+    name: mozetto-agent-runtime
+    runtime: docker
+    dockerfilePath: ./Dockerfile.agent
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: GROQ_API_KEY
+        sync: false
+
+  # Background poller; health HTTP still exposed for readiness probes.
+  - type: worker
+    name: mozetto-settlement-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile.worker
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: CHAIN_ID
+        sync: false
+      - key: SETTLEMENT_HUB_ADDRESS
+        sync: false
+      - key: SETTLEMENT_HUB_V3_ADDRESS
+        sync: false
+      - key: SETTLEMENT_HUB_VERSION
+        sync: false
+      - key: CHECKPOINT_REGISTRY_ADDRESS
+        sync: false
+      - key: ARENA_VAULT_ADDRESS
+        sync: false
+      - key: RANDOMNESS_COORDINATOR_ADDRESS
+        sync: false
+      - key: SETTLEMENT_PRIVATE_KEY
+        sync: false
+      - key: GAME_ATTESTOR_PRIVATE_KEY
+        sync: false
+      - key: REPLAY_ATTESTOR_PRIVATE_KEY
+        sync: false
+      - key: DEALER_ATTESTOR_PRIVATE_KEY
+        sync: false
+      - key: REPLAY_VERIFIER_URL
+        sync: false
+      - key: DEALER_URL
+        sync: false
+      - key: BASE_SEPOLIA_RPC_URL
+        sync: false
+      - key: ANVIL_RPC_URL
+        sync: false
+      - key: SETTLEMENT_POLL_MS
+        value: "15000"
+      - key: ENABLE_MOCK_VRF
+        value: "0"
+      - key: ATTESTOR_REQUIRE_DISTINCT_KEYS
+        value: "1"

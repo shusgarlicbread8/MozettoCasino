@@ -1,0 +1,180 @@
+name: CI
+
+# WP-000 baseline — install, typecheck subsets, forge test, migrations dry-run, unit tests.
+# Live Anvil + Supabase E2E is optional / manual (needs secrets + long-lived services).
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FOUNDRY_VERSION: v1.7.1
+
+jobs:
+  unit-and-typecheck:
+    name: Unit tests + typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Unit tests (game-rules, ratings, database, agent-runtime)
+        run: pnpm test:unit
+
+      - name: Chaos unit suite (WP-101)
+        run: pnpm test:chaos
+
+      - name: Audit findings register (WP-104)
+        run: pnpm audit:register-check
+
+      - name: Typecheck (API / game-server / agent-runtime / core packages)
+        run: pnpm typecheck:ci
+
+  contracts:
+    name: Forge tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+
+      - name: Forge version
+        run: forge --version
+
+      - name: Forge test
+        working-directory: contracts
+        run: forge test -vv
+
+  protocol-vectors:
+    name: Protocol vectors (TS / Rust / Solidity)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install pnpm deps
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript protocol vectors
+        run: pnpm test:protocol-vectors
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.85.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates/protocol-vectors-rs
+            crates/poker-core
+            crates/poker-eval
+            crates/poker-replay
+            crates/poker-wasm
+
+      - name: Rust protocol vectors
+        run: cargo test -p protocol-vectors-rs
+
+      - name: Rust HU poker core (WP-031)
+        run: cargo test -p poker-core -p poker-eval
+
+      - name: Poker replay CLI fixtures (WP-035)
+        run: cargo run -q -p poker-replay -- verify packages/game-rules/fixtures
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+
+      - name: Solidity protocol vectors
+        working-directory: contracts
+        run: forge test --match-contract ProtocolVectors -vv
+
+  migrations:
+    name: Database migrations dry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mozetto
+          POSTGRES_PASSWORD: mozetto
+          POSTGRES_DB: mozetto
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mozetto -d mozetto"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://mozetto:mozetto@127.0.0.1:5432/mozetto
+      DATABASE_SSL: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply migrations 001–016 on empty DB
+        run: pnpm db:migrate
+
+      - name: Re-run migrate (idempotent skip)
+        run: pnpm db:migrate
+
+  # Optional: full V2 ArenaAccount E2E needs long-lived Anvil + API + game-server + DB.
+  # Keep as manual / workflow_dispatch until secrets and service boot are CI-stable.
+  e2e-arena-account:
+    name: E2E ArenaAccount (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - run: echo "Configure DATABASE_URL + boot stack, then pnpm e2e:arena-account"
+        shell: bash

@@ -1,0 +1,213 @@
+# Hosted / staging-shaped stack for long-lived Mozetto services (WP-086).
+# Does NOT start Postgres/Redis — point DATABASE_URL / REDIS_URL at managed
+# Supabase + Redis (or use docker-compose.yml for local datastores only).
+#
+# Prerequisites:
+#   1. Copy .env.example → .env.hosted and fill values (never commit secrets)
+#   2. Migrate the target DB: DATABASE_URL=... pnpm --filter @mozetto/database migrate
+#   3. Build + run:
+#
+#   docker compose -f docker-compose.hosted.yml --env-file .env.hosted up --build
+#
+# Web (Vercel) is separate — set NEXT_PUBLIC_* to the published api/game URLs.
+# Recipes: docs/WP-086_HOSTED_DEPLOYMENT.md
+
+name: mozetto-hosted
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-4000}:4000"
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      DATABASE_URL: ${DATABASE_URL}
+      SESSION_SECRET: ${SESSION_SECRET}
+      WEB_ORIGIN: ${WEB_ORIGIN:-}
+      WEB_ORIGINS: ${WEB_ORIGINS:-}
+      COOKIE_SAMESITE: ${COOKIE_SAMESITE:-none}
+      COOKIE_SECURE: ${COOKIE_SECURE:-1}
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:-}
+      SIWE_DOMAIN: ${SIWE_DOMAIN:-}
+      SIWE_URI: ${SIWE_URI:-}
+      NEXT_PUBLIC_GAME_HTTP_URL: ${NEXT_PUBLIC_GAME_HTTP_URL:-http://game:4001}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      MOZETTO_CHAIN_ENV: ${MOZETTO_CHAIN_ENV:-base-sepolia}
+      SESSION_RELAYER_PRIVATE_KEY: ${SESSION_RELAYER_PRIVATE_KEY:-}
+      INSTANT_SESSION_SIGNER_PRIVATE_KEY: ${INSTANT_SESSION_SIGNER_PRIVATE_KEY:-}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  game:
+    build:
+      context: .
+      dockerfile: Dockerfile.game
+    restart: unless-stopped
+    ports:
+      - "${GAME_SERVER_PORT:-4001}:4001"
+    environment:
+      NODE_ENV: production
+      PORT: "4001"
+      DATABASE_URL: ${DATABASE_URL}
+      SESSION_SECRET: ${SESSION_SECRET}
+      WEB_ORIGIN: ${WEB_ORIGIN:-}
+      WEB_ORIGINS: ${WEB_ORIGINS:-}
+      COOKIE_SAMESITE: ${COOKIE_SAMESITE:-none}
+      COOKIE_SECURE: ${COOKIE_SECURE:-1}
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:-}
+      REDIS_URL: ${REDIS_URL:-}
+      DEALER_URL: ${DEALER_URL:-http://dealer:4003}
+      AGENT_RUNTIME_URL: ${AGENT_RUNTIME_URL:-http://agent:4002}
+      OUTBOX_STORE: ${OUTBOX_STORE:-postgres}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    depends_on:
+      dealer:
+        condition: service_healthy
+      agent:
+        condition: service_healthy
+
+  dealer:
+    build:
+      context: .
+      dockerfile: Dockerfile.dealer
+    restart: unless-stopped
+    ports:
+      - "${DEALER_PORT:-4003}:4003"
+    environment:
+      NODE_ENV: production
+      PORT: "4003"
+      DATABASE_URL: ${DATABASE_URL}
+      CHAIN_ID: ${CHAIN_ID:-84532}
+      SETTLEMENT_HUB_ADDRESS: ${SETTLEMENT_HUB_ADDRESS:-}
+      DEALER_ATTESTOR_PRIVATE_KEY: ${DEALER_ATTESTOR_PRIVATE_KEY:-}
+      BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:-}
+      ANVIL_RPC_URL: ${ANVIL_RPC_URL:-}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4003/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  verifier:
+    build:
+      context: .
+      dockerfile: Dockerfile.verifier
+    restart: unless-stopped
+    ports:
+      - "${REPLAY_VERIFIER_PORT:-4004}:4004"
+    environment:
+      NODE_ENV: production
+      PORT: "4004"
+      DATABASE_URL: ${DATABASE_URL}
+      CHAIN_ID: ${CHAIN_ID:-84532}
+      SETTLEMENT_HUB_ADDRESS: ${SETTLEMENT_HUB_ADDRESS:-}
+      REPLAY_ATTESTOR_PRIVATE_KEY: ${REPLAY_ATTESTOR_PRIVATE_KEY:-}
+      BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:-}
+      ANVIL_RPC_URL: ${ANVIL_RPC_URL:-}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4004/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    restart: unless-stopped
+    ports:
+      - "${AGENT_PORT:-4002}:4002"
+    environment:
+      NODE_ENV: production
+      PORT: "4002"
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  indexer:
+    build:
+      context: .
+      dockerfile: Dockerfile.indexer
+    restart: unless-stopped
+    ports:
+      - "${INDEXER_HEALTH_PORT:-4010}:4010"
+    environment:
+      NODE_ENV: production
+      PORT: "4010"
+      DATABASE_URL: ${DATABASE_URL}
+      MOZETTO_CHAIN_ENV: ${MOZETTO_CHAIN_ENV:-base-sepolia}
+      BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:-}
+      BASE_RPC_URL: ${BASE_RPC_URL:-}
+      ANVIL_RPC_URL: ${ANVIL_RPC_URL:-}
+      ARENA_VAULT_ADDRESS: ${ARENA_VAULT_ADDRESS:-}
+      INDEXER_CONFIRMATIONS: ${INDEXER_CONFIRMATIONS:-3}
+      INDEXER_POLL_MS: ${INDEXER_POLL_MS:-8000}
+      DEPLOYMENT_BLOCK: ${DEPLOYMENT_BLOCK:-0}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4010/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    ports:
+      - "${SETTLEMENT_HEALTH_PORT:-4011}:4011"
+    environment:
+      NODE_ENV: production
+      PORT: "4011"
+      DATABASE_URL: ${DATABASE_URL}
+      CHAIN_ID: ${CHAIN_ID:-84532}
+      SETTLEMENT_HUB_ADDRESS: ${SETTLEMENT_HUB_ADDRESS:-}
+      SETTLEMENT_HUB_V3_ADDRESS: ${SETTLEMENT_HUB_V3_ADDRESS:-}
+      SETTLEMENT_HUB_VERSION: ${SETTLEMENT_HUB_VERSION:-}
+      CHECKPOINT_REGISTRY_ADDRESS: ${CHECKPOINT_REGISTRY_ADDRESS:-}
+      ARENA_VAULT_ADDRESS: ${ARENA_VAULT_ADDRESS:-}
+      RANDOMNESS_COORDINATOR_ADDRESS: ${RANDOMNESS_COORDINATOR_ADDRESS:-}
+      SETTLEMENT_PRIVATE_KEY: ${SETTLEMENT_PRIVATE_KEY:-}
+      GAME_ATTESTOR_PRIVATE_KEY: ${GAME_ATTESTOR_PRIVATE_KEY:-}
+      REPLAY_ATTESTOR_PRIVATE_KEY: ${REPLAY_ATTESTOR_PRIVATE_KEY:-}
+      DEALER_ATTESTOR_PRIVATE_KEY: ${DEALER_ATTESTOR_PRIVATE_KEY:-}
+      REPLAY_VERIFIER_URL: ${REPLAY_VERIFIER_URL:-http://verifier:4004}
+      DEALER_URL: ${DEALER_URL:-http://dealer:4003}
+      BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:-}
+      ANVIL_RPC_URL: ${ANVIL_RPC_URL:-}
+      SETTLEMENT_POLL_MS: ${SETTLEMENT_POLL_MS:-15000}
+      ENABLE_MOCK_VRF: ${ENABLE_MOCK_VRF:-0}
+      ATTESTOR_REQUIRE_DISTINCT_KEYS: ${ATTESTOR_REQUIRE_DISTINCT_KEYS:-1}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4011/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    depends_on:
+      verifier:
+        condition: service_healthy
+      dealer:
+        condition: service_healthy

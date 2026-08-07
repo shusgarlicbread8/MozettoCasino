@@ -6,4 +6,6 @@ COPY packages ./packages
 COPY services/chain-indexer ./services/chain-indexer
 RUN pnpm install --frozen-lockfile --filter @mozetto/chain-indexer...
 ENV NODE_ENV=production
+# Health/metrics HTTP (PORT on hosted platforms, else INDEXER_HEALTH_PORT)
+EXPOSE 4010
 CMD ["pnpm", "--filter", "@mozetto/chain-indexer", "start"]

@@ -4,29 +4,60 @@ Autonomous AI poker platform monorepo — demo world (email) and on-chain world 
 
 - **NLHE cash** — authoritative TypeScript game server, mock AI profiles, USDC-style ledgers
 - **Dual accounts** — Demo and On-chain are separate profiles (sign out to switch worlds)
-- **Supabase Postgres** — profiles, tables, hands, events, ledger
-- **Base / Base Sepolia** — Arena vault contracts + optional on-chain faucet for testing
+- **Supabase Postgres** — profiles, tables, hands, events, ledger (or local Docker Postgres)
+- **Base / Anvil** — Arena vault + ArenaAccount V2 custody path
 
-## Quick start (local)
+Pinned tool versions: [docs/TOOL_VERSIONS.md](docs/TOOL_VERSIONS.md) (Node 22, pnpm 9.15.0, Foundry v1.7.1, Postgres 16, Redis 7).
+
+## Quick start (fresh clone → local E2E)
+
+**One command** (preferred):
 
 ```bash
-cp .env.example .env.local
-# set DATABASE_URL (Supabase pooler), Supabase keys, SESSION_SECRET
+# Requires Docker for local Postgres, or a real DATABASE_URL in .env.local
+pnpm bootstrap --docker-db --reset
+pnpm readiness
+pnpm e2e:arena-account
+```
 
+What `pnpm bootstrap` does:
+
+1. Checks Node / pnpm / Foundry prerequisites  
+2. `pnpm install --frozen-lockfile`  
+3. Creates `.env.local` from `.env.example` **only if missing** (never overwrites existing secrets)  
+4. Optionally starts Docker Postgres 16 + Redis 7 (`--docker-db`)  
+5. Applies migrations `001`–`016`  
+6. Starts/resets Anvil (chain **31337**) and deploys the V2 stack (`--reset` forces a clean chain)  
+7. Boots API, game-server, and related services (unless `--no-start`)  
+8. Prints a **readiness report** (ports, health, chain id, key addresses)
+
+### DATABASE_URL (required — be honest)
+
+| Option | When to use |
+|--------|-------------|
+| **Supabase pooler** (port `6543`) | Shared/dev project; set in `.env.local` before bootstrap |
+| **Local Docker** | `pnpm bootstrap --docker-db` sets `postgresql://mozetto:mozetto@127.0.0.1:5432/mozetto` if URL is still a placeholder |
+
+Without a real `DATABASE_URL`, migrations / API / `pnpm e2e:arena-account` will fail. Direct `db.*.supabase.co:5432` is often IPv6-only — use the pooler.
+
+### Clean reset
+
+```bash
+pnpm reset:local          # kill Anvil, redeploy contracts, sync .env.local addresses
+pnpm reset:local -- --db  # also wipe local Docker Postgres volume + re-migrate
+```
+
+### Manual sequence (equivalent)
+
+```bash
+cp .env.example .env.local   # only if missing — then set DATABASE_URL + secrets
 pnpm install
+docker compose up -d         # optional local DB
 pnpm db:migrate
-
-# Core loop (demo + on-chain custody path)
-pnpm --filter @mozetto/api dev
-pnpm --filter @mozetto/game-server dev
-pnpm --filter @mozetto/chain-indexer dev
-pnpm --filter @mozetto/dealer dev
-pnpm --filter @mozetto/replay-verifier dev
-pnpm --filter @mozetto/settlement-worker dev
-pnpm --filter @mozetto/agent-runtime dev
-pnpm --filter @mozetto/web dev
-# optional ops UI
-pnpm --filter @mozetto/admin dev
+./scripts/reset-local.sh     # Anvil + DeployLocal + codegen
+./scripts/start-local.sh     # services
+./scripts/readiness-report.sh
+pnpm e2e:arena-account
 ```
 
 Open http://localhost:3000 → **Play Demo** or **Enter On-chain**.
@@ -70,27 +101,41 @@ The Next.js app lives in `apps/web`. Root `vercel.json` builds with pnpm from th
 
 ### Admin (Vercel or local)
 
-Minimal ops UI at `apps/admin` (port **3001**). Set `ADMIN_TOKEN` (same value on API and admin app). Log in via `/login?token=…` or `x-admin-token` header. **Production: put MFA/SSO in front of this app.**
+Minimal ops UI at `apps/admin` (port **3001**). Deploy as a **separate** project from public web. Auth: `ADMIN_READ_TOKEN` (view) and/or `ADMIN_MUTATE_TOKEN` / `ADMIN_TOKEN` (privileged). Log in via `/login?token=…` or `x-admin-token`. **Production: hardware MFA/SSO in front** — see [`docs/WP-094_AUDIT_RBAC.md`](docs/WP-094_AUDIT_RBAC.md).
 
 ```bash
 pnpm --filter @mozetto/admin dev
 ```
 
-Env: `API_URL`, `ADMIN_TOKEN`, optional `WEB_ORIGIN` / `NEXT_PUBLIC_WEB_ORIGIN` for verify links.
+Env: `API_URL`, `ADMIN_TOKEN` (and optional read/mutate tokens), optional `WEB_ORIGIN` / `NEXT_PUBLIC_WEB_ORIGIN` for verify links. Never put admin tokens in `NEXT_PUBLIC_*`.
 
-### API + game server (not Vercel)
+### API + long-lived services (not Vercel)
 
-Long-lived Node + WebSockets are required for matchmaking and tables. Use **Render** (`render.yaml`), Railway, Fly, or any Docker host:
+Long-lived Node + WebSockets/workers are required for matchmaking, tables, dealer, verification, indexing, and settlement. **Do not** put these on Vercel.
 
-- `Dockerfile.api` → REST API
-- `Dockerfile.game` → WS game server
-- `Dockerfile.indexer` → chain indexer (vault events, session projection)
+Full recipes + per-service env checklists: **[`docs/WP-086_HOSTED_DEPLOYMENT.md`](docs/WP-086_HOSTED_DEPLOYMENT.md)**.
 
-**Game-server multi-replica:** set `REDIS_URL` so table leases prevent two replicas from owning the same table. Without Redis, single-replica mode is assumed (leases are no-ops).
+| Recipe | Entry |
+|--------|--------|
+| **Render Blueprint** | `render.yaml` |
+| **Fly.io** | `deploy/fly/*.toml` |
+| **Docker Compose (prod-ish)** | `docker-compose.hosted.yml` (external `DATABASE_URL` / `REDIS_URL`) |
 
-On those hosts set `DATABASE_URL`, `SESSION_SECRET`, `WEB_ORIGIN` / `WEB_ORIGINS` to your Vercel URL, `COOKIE_SAMESITE=none`, `COOKIE_SECURE=1`, Supabase keys, and SIWE `SIWE_DOMAIN` / `SIWE_URI` matching the Vercel host.
+Dockerfiles:
 
-Then point the Vercel `NEXT_PUBLIC_*` URLs at those services.
+- `Dockerfile.api` → REST API (`:4000`)
+- `Dockerfile.game` → WS game server (`:4001`)
+- `Dockerfile.agent` → agent-runtime (`:4002`)
+- `Dockerfile.dealer` → dealer (`:4003`)
+- `Dockerfile.verifier` → replay-verifier (`:4004`)
+- `Dockerfile.indexer` → chain indexer health (`:4010`)
+- `Dockerfile.worker` → settlement-worker (`:4011`)
+
+**Game-server multi-replica:** set `REDIS_URL` so table leases prevent two replicas from owning the same table (WP-080). Without Redis, single-replica only.
+
+On those hosts set `DATABASE_URL`, `SESSION_SECRET`, `WEB_ORIGIN` / `WEB_ORIGINS` to your Vercel URL, `COOKIE_SAMESITE=none`, `COOKIE_SECURE=1`, Supabase keys, and SIWE `SIWE_DOMAIN` / `SIWE_URI` matching the Vercel host. Wire internal `DEALER_URL` / `AGENT_RUNTIME_URL` / `REPLAY_VERIFIER_URL` between services.
+
+Then point the Vercel `NEXT_PUBLIC_*` URLs at the public api/game endpoints.
 
 ## Architecture
 
@@ -107,9 +152,14 @@ services/agent-runtime   Schema-validated mock AI actions
 packages/*               Shared types, DB, game rules, ratings
 contracts/               Foundry (ArenaVault, settlement hub, …)
 design/                  Original Claude Design .dc.html sources
+scripts/bootstrap.sh     Fresh-clone bootstrap + readiness
 scripts/anvil-custody-smoke.mjs  Anvil deposit flow checklist
 ```
 
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`): install, unit tests, typecheck subset, `forge test`, migrations against Postgres 16. Live Anvil E2E remains a manual local step (`pnpm e2e:arena-account`).
+
 ## Database note
 
-Direct `db.*.supabase.co` may be IPv6-only. Use the Supabase **pooler** URL (port 6543) in `DATABASE_URL`.
+Direct `db.*.supabase.co` may be IPv6-only. Use the Supabase **pooler** URL (port 6543) in `DATABASE_URL`, or local Docker via `docker compose up -d`.
