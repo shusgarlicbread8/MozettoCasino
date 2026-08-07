@@ -2333,4 +2333,5 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 | Plan 19 DB/API migration | migrations `024`–`029` + `docs/PLAN_19_DATABASE_API_MIGRATION.md` + `services/api/src/plan19-routes.ts` |
 | Hosted DB + WS cutover (WP-110) | migration `030` + scheduler persist + WS dual-accept + `docs/WP-110_HOSTED_DB_WS.md` |
 | Presentation event adapter (WP-132) | `packages/presentation-adapter` + `apps/web/src/lib/table-presentation.ts` + `docs/WP-132_PRESENTATION_ADAPTER.md` (Plan 20B deferred) |
+| Watch / spectator (WP-129) | `apps/web/src/app/(app)/live/` + `apps/web/src/lib/watch.ts` + `docs/WP-129_WATCH_SPECTATOR.md` |
 | `baseline-v2` tag | Not created yet (await user) |
