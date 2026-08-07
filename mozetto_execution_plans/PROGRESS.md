@@ -2,7 +2,7 @@
 
 **Authority:** Follows `00_READ_ME_FIRST.md`, `01_MASTER_EXECUTION_ROADMAP.md`, `16_AGENT_WORK_PACKETS.md`, `17_FINAL_DEFINITION_OF_DONE.md`.  
 **Rule:** Protocol V3 specs are **frozen** (WP-010–015). Implementations MUST match `/specs` and fail CI if vectors diverge. Do not invent new encodings.  
-**Last updated:** 2026-08-07 (WP-129 Watch / spectator DONE; WP-120–132 Wave 12 consumer UX largely DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
+**Last updated:** 2026-08-07 (WP-129 spectator server delay residual DONE; WP-120–132 Wave 12 consumer UX DONE; Wave 11 + Wave 12 parallel)
 
 ---
 
@@ -31,7 +31,7 @@
 | **Plan 11 note** | Rake/treasury + WP-111 COGS hooks DONE; Season 1 schedule + pricing remain **hypotheses** (no GameTemplate freeze) |
 | **Plan 12 note** | Ratings / anti-cheat DONE — ML collusion deferred |
 | **Plan 19 note** | Schema map DONE; hosted cutover **WP-110 DONE** (GRANTs `030`, scheduler persist, WS dual-accept) |
-| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120–132 DONE including WP-129 Watch); Plan 20B cinematic 3D remains DEFERRED |
+| **Plan 20A note** | **Consumer UX WP-120–132 DONE**; spectator server delay residual DONE; Plan 20B cinematic 3D DEFERRED |
 | **Anvil release candidate** | Normal user can Find Match → Groq AI session → verify → withdraw with **zero GAPs** (WP-106–112) |
 
 ---
@@ -54,7 +54,7 @@
 | 11 | Base Sepolia deployment | `BLOCKED` | Recipes ready; Stage A gated on Wave 11 WP-106–112 |
 | 12 | Adversarial program and audits | `BLOCKED` | Program/register scaffolds DONE; live A/B/C after Anvil RC + Sepolia deploy |
 | 13 | Restricted Base Mainnet | `BLOCKED` | WP-105 recipes/gates DONE; `finalGateApproval=false` |
-| 14 | Consumer product UX (Plan 20A) | `IN_PROGRESS` | Wave 12 WP-120–132 (WP-120–124 + WP-131 DONE); 3D production (20B) deferred |
+| 14 | Consumer product UX (Plan 20A) | `DONE` | Wave 12 WP-120–132 DONE; 3D production (20B) deferred; spectator delay enforced |
 
 ---
 
@@ -82,7 +82,7 @@
 | 17 | Final definition of done | `DONE` | — | pack authored | Completion checklist |
 | 18 | Sources and decision log | `DONE` | — | pack authored | Locked decisions log |
 | 19 | Database schema API migration | `DONE` | 2026-08-07 | 2026-08-07 | Map DONE; hosted cutover WP-110 DONE |
-| 20A | Consumer product UX | `IN_PROGRESS` | 2026-08-07 | | Wave 12 WP-120–132 — WP-125 Live table 2D DONE; WP-126/129 next |
+| 20A | Consumer product UX | `DONE` | 2026-08-07 | 2026-08-07 | Wave 12 WP-120–132 DONE; spectator delay buffer DONE; Plan 20B 3D deferred |
 | 20B | Full 3D production | `DEFERRED` | | | After 2D table + WP-132 adapter (DONE) prove themselves — no art yet |
 
 ---
@@ -261,6 +261,25 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 
 ## Session log
 
+### 2026-08-07 — WP-129 residual: server spectator delay buffer (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- Game-server `SpectatorDelayBuffer` for `role: "spectator"` WS frames (`SPECTATOR_DELAY_MS`, default 90000)
+- Players/owners unaffected; `owner_private` / `private_state` never sent on spectator channel; subscribe never leaks live tip
+- `replay_from` forbidden while subscribed as spectator
+- Deterministic tests: `services/game-server/src/spectator-delay.test.ts`
+- Docs: `docs/WP-129_WATCH_SPECTATOR.md` (honest HTTP tip bypass noted)
+
+**Commands / evidence:**
+- `pnpm --filter @mozetto/game-server test`
+- `pnpm --filter @mozetto/game-server typecheck`
+
+**Out of scope:** Spec / protocol mutations; Redis fan-out topic; delaying HTTP `GET /v1/tables/:id` live public tip.
+
+**Follow-up:** Optional HTTP tip delay; WP-125 felt polish; WP-131 mobile watch flow.
+
 ### 2026-08-07 — WP-129 Watch / spectator (DONE)
 
 **Status:** `DONE`
@@ -273,9 +292,9 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 **Commands / evidence:**
 - `pnpm --filter @mozetto/web typecheck` — pass
 
-**Out of scope:** Spec / protocol mutations; server `spectator-delayed` buffer (Plan 07 follow-up); fake HOT pots / viewer counts.
+**Out of scope:** Spec / protocol mutations; fake HOT pots / viewer counts. (Server delay buffer closed in residual session above.)
 
-**Follow-up:** Enforce delay on game-server channel; WP-125 felt polish may reuse spectator route.
+**Follow-up:** WP-125 felt polish may reuse spectator route.
 
 ### 2026-08-07 — WP-126 AI cognition presentation (DONE)
 
@@ -2333,5 +2352,5 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 | Plan 19 DB/API migration | migrations `024`–`029` + `docs/PLAN_19_DATABASE_API_MIGRATION.md` + `services/api/src/plan19-routes.ts` |
 | Hosted DB + WS cutover (WP-110) | migration `030` + scheduler persist + WS dual-accept + `docs/WP-110_HOSTED_DB_WS.md` |
 | Presentation event adapter (WP-132) | `packages/presentation-adapter` + `apps/web/src/lib/table-presentation.ts` + `docs/WP-132_PRESENTATION_ADAPTER.md` (Plan 20B deferred) |
-| Watch / spectator (WP-129) | `apps/web/src/app/(app)/live/` + `apps/web/src/lib/watch.ts` + `docs/WP-129_WATCH_SPECTATOR.md` |
+| Watch / spectator (WP-129) | `apps/web/src/app/(app)/live/` + `apps/web/src/lib/watch.ts` + game-server `spectator-delay.ts` + `docs/WP-129_WATCH_SPECTATOR.md` |
 | `baseline-v2` tag | Not created yet (await user) |

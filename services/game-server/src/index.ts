@@ -4,9 +4,12 @@ import cookie from "@fastify/cookie";
 import websocket from "@fastify/websocket";
 import { WsClientMessageSchema } from "@mozetto/shared-types";
 import { corsOriginCheck } from "@mozetto/server-env";
-import { TableRuntime } from "./table-runtime.js";
+import { getLegalActions } from "@mozetto/game-rules";
+import { TableRuntime, TURN_SECONDS } from "./table-runtime.js";
 import { resolvePlayer, resolvePlayerFromToken } from "./auth.js";
 import { defaultLeaseWaitMs, getLeaseManager } from "./lease/index.js";
+import { preferredSchemaKind } from "./outbox/schema.js";
+import { requireRealRoots } from "./roots/index.js";
 import { createWsSender, gameWsEmitMode } from "./ws-protocol.js";
 
 const app = Fastify({ logger: true });
@@ -94,6 +97,10 @@ app.get("/health", async () => ({
   ok: true,
   tableLease: leaseMode,
   actorInstanceId: leaseManager.actorInstanceId,
+  /** WP-106 golden preflight */
+  canonicalSchemaKind: preferredSchemaKind(),
+  requireRealRoots: requireRealRoots(),
+  humanPlay: process.env.HUMAN_PLAY !== "0",
   tables: [...tables.keys()].map((id) => {
     const rt = tables.get(id)!;
     const held = leaseManager.getHeld(id);
@@ -105,6 +112,9 @@ app.get("/health", async () => ({
       sequence: rt.sequence,
       leaseVersion: held?.leaseVersion ?? rt.leaseVersion,
       durableChainOk: rt.durableChainOk,
+      arenaMode: rt.arenaMode,
+      schemaKind: rt.schemaKindPrefer,
+      hasSettlementRoots: Boolean(rt.lastSettlementRoots),
     };
   }),
 }));
@@ -122,6 +132,10 @@ app.get("/v1/tables/:id", async (req, reply) => {
         folded: s.folded,
         allIn: s.allIn,
       }));
+    const legal =
+      rt.state.actingIndex != null && rt.state.street !== "waiting"
+        ? getLegalActions(rt.state).map((l) => l.action)
+        : [];
     return {
       tableId,
       street: rt.state.street,
@@ -134,11 +148,32 @@ app.get("/v1/tables/:id", async (req, reply) => {
       onchainSessionId: rt.onchainSessionId,
       sequence: rt.sequence,
       seated,
+      legalActions: legal,
+      turnSeconds: TURN_SECONDS,
+      schemaKind: rt.schemaKindPrefer,
+      hasSettlementRoots: Boolean(rt.lastSettlementRoots),
       legalHint:
         rt.state.actingIndex != null
           ? { actingIndex: rt.state.actingIndex }
           : null,
     };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "table_unavailable";
+    const code = message.includes("lease") ? 409 : 404;
+    return reply.code(code).send({ error: code === 409 ? "table_lease_conflict" : "table_not_found", message });
+  }
+});
+
+/** WP-106 — real settlement roots after at least one HAND_SETTLED (no stub seeds). */
+app.get("/v1/tables/:id/settlement-roots", async (req, reply) => {
+  const tableId = (req.params as { id: string }).id;
+  try {
+    const rt = await getRuntime(tableId);
+    const result = await rt.getSettlementRootsForGolden();
+    if (result.ok === false) {
+      return reply.code(409).send({ error: "settlement_roots_unavailable", message: result.error });
+    }
+    return result;
   } catch (e) {
     const message = e instanceof Error ? e.message : "table_unavailable";
     const code = message.includes("lease") ? 409 : 404;
@@ -364,6 +399,15 @@ app.get("/ws", { websocket: true }, (socket, req) => {
         return send({ type: "ok", command: m.command });
       }
       if (m.type === "replay_from") {
+        // WP-129: spectator WS must not bypass the delay buffer via live public replay.
+        if (current?.client.role === "spectator") {
+          return send({
+            type: "error",
+            code: "spectator_replay_forbidden",
+            message: "Spectator clients use the delayed feed only; replay_from is disabled for this role.",
+            retryable: false,
+          });
+        }
         const rt = await getRuntime(m.tableId);
         requireLease(m.tableId);
         const rows = await rt.eventsFrom(m.afterSequence);

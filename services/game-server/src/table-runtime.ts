@@ -80,6 +80,12 @@ import {
   type SeatBalanceSnapshot,
 } from "./roots/index.js";
 import type { Address } from "viem";
+import {
+  SpectatorDelayBuffer,
+  isSpectatorSafeEvent,
+  resolveSpectatorDelayMs,
+  type SpectatorOutboundMessage,
+} from "./spectator-delay.js";
 
 type Hex = `0x${string}`;
 
@@ -95,6 +101,8 @@ const TURN_MS = TURN_SECONDS * 1000;
 /** Temporary: humans play; bots/agents do not auto-act. */
 const HUMAN_PLAY = process.env.HUMAN_PLAY !== "0";
 const DEALER_URL = process.env.DEALER_URL ?? "http://localhost:4003";
+/** WP-129 — ranked spectator WS delay (Plan 07 spectator-delayed). */
+const SPECTATOR_DELAY_MS = resolveSpectatorDelayMs();
 
 type PendingHuman = {
   seatIndex: number;
@@ -156,8 +164,21 @@ export class TableRuntime {
   pendingLeaveOwners = new Set<string>();
   /** WP-108: opening state hash captured at HAND_STARTED (for HandRoot). */
   handOpeningStateHash: Hex | null = null;
+  /**
+   * WP-106 golden / WP-108: last built settlement triple after HAND_SETTLED.
+   * Surfaced via GET /v1/tables/:id/settlement-roots (no stub seeds).
+   */
+  lastSettlementRoots: ReturnType<typeof buildSettlementRootsFromTip> | null = null;
+  lastSettlementAt: string | null = null;
   /** WP-108: opening chip stacks (raw units ×1e6 when on-chain) keyed by seat. */
   handOpeningStacks = new Map<number, number>();
+  /**
+   * WP-129 — delayed public frames for spectator-role WS clients.
+   * Shared buffer per table; players/owners bypass entirely.
+   */
+  spectatorDelayMs = SPECTATOR_DELAY_MS;
+  spectatorBuffer = new SpectatorDelayBuffer({ delayMs: SPECTATOR_DELAY_MS });
+  spectatorFlushTimer: NodeJS.Timeout | null = null;
 
   constructor(
     tableId: string,
@@ -200,6 +221,11 @@ export class TableRuntime {
     });
     rt.variantId = variantId;
     rt.arenaMode = row.arena_mode === "onchain" ? "onchain" : "demo";
+    // WP-106/108: on-chain tables emit PokerEventV1 when golden/real-roots gated
+    // or CANONICAL_SCHEMA_KIND=poker_event_v1 (required for non-stub HandRoots).
+    if (rt.arenaMode === "onchain" && (requireRealRoots() || preferredSchemaKind() === "poker_event_v1")) {
+      rt.schemaKindPrefer = "poker_event_v1";
+    }
     if (rt.arenaMode === "onchain") {
       await rt.loadOnchainSession();
     }
@@ -530,6 +556,10 @@ export class TableRuntime {
 
   subscribe(client: Client) {
     this.clients.add(client);
+    if (client.role === "spectator") {
+      this.sendSpectatorSubscribe(client);
+      return;
+    }
     client.send({
       type: "snapshot",
       sequence: this.sequence,
@@ -539,6 +569,110 @@ export class TableRuntime {
 
   unsubscribe(client: Client) {
     this.clients.delete(client);
+    if (![...this.clients].some((c) => c.role === "spectator")) {
+      this.clearSpectatorFlushTimer();
+    }
+  }
+
+  /**
+   * Spectator subscribe: never send the live tip. Catch up with the latest
+   * delayed snapshot when the buffer has aged past SPECTATOR_DELAY_MS.
+   */
+  private sendSpectatorSubscribe(client: Client) {
+    client.send({
+      type: "spectator_delay",
+      workPacket: "WP-129",
+      delayMs: this.spectatorDelayMs,
+      channel: `table:${this.tableId}:spectator-delayed`,
+    });
+    if (this.spectatorDelayMs === 0) {
+      client.send({
+        type: "snapshot",
+        sequence: this.sequence,
+        state: this.spectatorView(),
+      });
+      return;
+    }
+    const snap = this.spectatorBuffer.latestDueSnapshot();
+    if (snap) {
+      client.send(snap);
+    }
+    this.scheduleSpectatorFlush();
+  }
+
+  /** Public-only table view for spectators (no holeCards / legalActions / owner equity). */
+  spectatorView() {
+    const base = publicView(this.state);
+    const labels = Object.entries(this.runoutRevealed).map(([seat, hole]) => ({
+      seatIndex: Number(seat),
+      label: madeHandLabel(hole, this.state.board),
+    }));
+    return {
+      ...base,
+      actionClock: this.actionClock(),
+      equity: this.equity,
+      // Legal all-in / showdown reveals only — still delayed with the spectator buffer.
+      runoutRevealed: this.runoutRevealed,
+      handLabels: labels,
+      allInRunout: isAllInRunout(this.state) || this.state.street === "showdown" || this.state.street === "settlement",
+      holeCards: [],
+      myHand: null,
+      myEquity: null,
+    };
+  }
+
+  private spectatorClients(): Client[] {
+    return [...this.clients].filter((c) => c.role === "spectator");
+  }
+
+  private enqueueSpectatorMessages(messages: SpectatorOutboundMessage[]) {
+    if (messages.length === 0) return;
+    if (this.spectatorDelayMs === 0) {
+      for (const c of this.spectatorClients()) {
+        for (const msg of messages) c.send(msg);
+      }
+      return;
+    }
+    this.spectatorBuffer.enqueue(messages);
+    this.scheduleSpectatorFlush();
+  }
+
+  private flushSpectatorBuffer() {
+    const due = this.spectatorBuffer.takeDue();
+    if (due.length === 0) {
+      this.scheduleSpectatorFlush();
+      return;
+    }
+    const spectators = this.spectatorClients();
+    for (const frame of due) {
+      for (const c of spectators) {
+        for (const msg of frame.messages) c.send(msg);
+      }
+    }
+    this.scheduleSpectatorFlush();
+  }
+
+  private scheduleSpectatorFlush() {
+    this.clearSpectatorFlushTimer();
+    if (this.spectatorDelayMs === 0) return;
+    if (this.spectatorClients().length === 0 && this.spectatorBuffer.msUntilNextDue() == null) {
+      return;
+    }
+    const wait = this.spectatorBuffer.msUntilNextDue();
+    if (wait == null) return;
+    this.spectatorFlushTimer = setTimeout(() => {
+      this.spectatorFlushTimer = null;
+      this.flushSpectatorBuffer();
+    }, wait);
+    // Avoid keeping the event loop alive solely for idle spectator timers in tests.
+    this.spectatorFlushTimer.unref?.();
+  }
+
+  private clearSpectatorFlushTimer() {
+    if (this.spectatorFlushTimer) {
+      clearTimeout(this.spectatorFlushTimer);
+      this.spectatorFlushTimer = null;
+    }
   }
 
   actionClock() {
@@ -601,11 +735,29 @@ export class TableRuntime {
 
   broadcast(event: TableEvent, privatePayloads?: Map<number, unknown>) {
     for (const c of this.clients) {
+      if (c.role === "spectator") continue;
+      // Owner-private events only go to the matching seated player (never opponents).
+      if (event.visibility === "owner_private") {
+        const seat = Number((event.payload as { seatIndex?: number } | undefined)?.seatIndex);
+        if (c.role !== "player" || c.seatIndex == null || c.seatIndex !== seat) continue;
+      }
       c.send({ type: "event", event });
-      if (c.seatIndex != null && privatePayloads?.has(c.seatIndex)) {
+      if (
+        c.role === "player" &&
+        c.seatIndex != null &&
+        privatePayloads?.has(c.seatIndex)
+      ) {
         c.send({ type: "private_state", payload: privatePayloads.get(c.seatIndex) });
       }
       c.send({ type: "snapshot", sequence: this.sequence, state: this.viewFor(c) });
+    }
+
+    // WP-129: delay public spectator channel; never enqueue hole-card private events.
+    if (isSpectatorSafeEvent(event)) {
+      this.enqueueSpectatorMessages([
+        { type: "event", event },
+        { type: "snapshot", sequence: this.sequence, state: this.spectatorView() },
+      ]);
     }
   }
 
@@ -1069,8 +1221,13 @@ export class TableRuntime {
   /** Push a fresh private/public snapshot to every connected client. */
   broadcastSnapshots() {
     for (const c of this.clients) {
+      if (c.role === "spectator") continue;
       c.send({ type: "snapshot", sequence: this.sequence, state: this.viewFor(c) });
     }
+    // Spectators receive the same public snapshot on the delayed channel.
+    this.enqueueSpectatorMessages([
+      { type: "snapshot", sequence: this.sequence, state: this.spectatorView() },
+    ]);
   }
 
   /**
@@ -2009,6 +2166,9 @@ export class TableRuntime {
       seats,
     });
 
+    this.lastSettlementRoots = roots;
+    this.lastSettlementAt = new Date().toISOString();
+
     await persistBalanceLeaves({
       sessionId: this.onchainSessionId,
       sequence: roots.finalSequence,
@@ -2022,6 +2182,117 @@ export class TableRuntime {
       eventRoot: roots.finalEventRoot,
       balanceRoot: roots.balanceRoot,
     });
+  }
+
+  /**
+   * WP-106 golden API — expose last real settlement roots (no keccak stubs).
+   * Prefer in-memory tip after HAND_SETTLED; optionally rebuild from live tip + seats.
+   */
+  async getSettlementRootsForGolden(): Promise<{
+    ok: true;
+    source: "cached" | "rebuild";
+    sessionId: string;
+    finalEventRoot: Hex;
+    handRoot: Hex;
+    balanceRoot: Hex;
+    finalSequence: string;
+    handNumber: number;
+    players: { wallet: Address; seat: number; startLocked: string; endBalance: string }[];
+    totalRake: string;
+    openingTotal: string;
+    endingPlayerTotal: string;
+  } | { ok: false; error: string }> {
+    if (this.arenaMode !== "onchain" || !this.onchainSessionId) {
+      return { ok: false, error: "table_not_onchain" };
+    }
+    if (this.schemaKindPrefer !== "poker_event_v1") {
+      return {
+        ok: false,
+        error: "CANONICAL_SCHEMA_KIND=poker_event_v1 required (or MOZETTO_GOLDEN/REQUIRE_REAL_ROOTS)",
+      };
+    }
+
+    let roots = this.lastSettlementRoots;
+    let source: "cached" | "rebuild" = "cached";
+
+    const buyIns = await query<{ wallet_address: string; seat: number | null; buy_in_raw: string }>(
+      `select wallet_address, seat::int as seat, buy_in_raw::text as buy_in_raw
+       from onchain_session_players where session_id = $1 order by seat nulls last`,
+      [this.onchainSessionId],
+    ).catch(() => ({ rows: [] as { wallet_address: string; seat: number | null; buy_in_raw: string }[] }));
+
+    if (!roots) {
+      const tip = this.pokerV1PrevHash ?? this.canonicalPrevHash;
+      if (!tip || tip === GENESIS_EVENT_HASH) {
+        return { ok: false, error: "missing_event_tip_play_at_least_one_hand" };
+      }
+      const seats = await this.loadSeatBalanceSnapshots();
+      if (seats.length < 2) {
+        return { ok: false, error: "insufficient_seat_balances" };
+      }
+      const opening = this.handOpeningStateHash ?? hashEngineState(this.state);
+      const ending = hashEngineState(this.state);
+      const deckRoot = deckRootFromSeedReveal(`rebuild:${this.tableId}:${this.state.handNumber}`);
+      roots = buildSettlementRootsFromTip({
+        sessionId: this.onchainSessionId,
+        finalEventRoot: tip,
+        finalSequence: BigInt(Math.max(0, this.pokerV1Sequence - 1)),
+        handNumber: Math.max(1, this.state.handNumber),
+        deckRoot,
+        openingStateHash: opening,
+        endingStateHash: ending,
+        handRake: 0n,
+        seats,
+      });
+      source = "rebuild";
+    }
+
+    // Hub settle: startLocked = session buy-in; endBalance = current table stack (raw USDC).
+    const players: { wallet: Address; seat: number; startLocked: string; endBalance: string }[] = [];
+    for (const row of buyIns.rows) {
+      const seatIdx =
+        row.seat != null
+          ? Number(row.seat)
+          : this.state.seats.findIndex((s) => s.playerId);
+      const seatState = this.state.seats.find((s) => s.seatIndex === seatIdx);
+      const startLocked = BigInt(row.buy_in_raw);
+      const endChips = seatState?.stack ?? Number(row.buy_in_raw) / 1e6;
+      const endBalance = BigInt(Math.round(endChips * 1e6));
+      players.push({
+        wallet: row.wallet_address as Address,
+        seat: seatIdx,
+        startLocked: startLocked.toString(),
+        endBalance: endBalance.toString(),
+      });
+    }
+    if (players.length < 2) {
+      return { ok: false, error: "insufficient_onchain_players" };
+    }
+
+    const openingTotal = players.reduce((a, p) => a + BigInt(p.startLocked), 0n);
+    const endingPlayerTotal = players.reduce((a, p) => a + BigInt(p.endBalance), 0n);
+    if (endingPlayerTotal > openingTotal) {
+      return {
+        ok: false,
+        error: `conservation_broken ending=${endingPlayerTotal} > opening=${openingTotal}`,
+      };
+    }
+    const totalRake = openingTotal - endingPlayerTotal;
+
+    return {
+      ok: true,
+      source,
+      sessionId: this.onchainSessionId,
+      finalEventRoot: roots.finalEventRoot,
+      handRoot: roots.handRoot,
+      balanceRoot: roots.balanceRoot,
+      finalSequence: roots.finalSequence.toString(),
+      handNumber: Math.max(1, this.state.handNumber),
+      players,
+      totalRake: totalRake.toString(),
+      openingTotal: openingTotal.toString(),
+      endingPlayerTotal: endingPlayerTotal.toString(),
+    };
   }
 
   async loadSeatBalanceSnapshots(): Promise<SeatBalanceSnapshot[]> {

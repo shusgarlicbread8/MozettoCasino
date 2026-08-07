@@ -78,7 +78,7 @@ Events driving animation: `PLAYER_ACTED`, `STREET_DEALT`, `SHOWDOWN_REVEALED`, `
 - Spec / protocol mutations
 - Plan 20B cinematic 3D art (WP-132 adapter may consume `avatarState` on action FX)
 - Full cognition Energy UI (WP-126)
-- Ranked spectator delay enforcement server-side (WP-129 policy copy only)
+- Ranked spectator delay enforcement server-side (WP-129 residual — see `docs/WP-129_WATCH_SPECTATOR.md`)
 
 ---
 
