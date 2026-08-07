@@ -275,6 +275,64 @@ function isStubRoot(hex, sessionId) {
   return forbidden.includes(hex.toLowerCase());
 }
 
+/**
+ * After Anvil --redeploy, DB may still point Alice/Bob at an old "playing" session
+ * that is not sealed on the new vault. Force those rows closed so find-match seals fresh.
+ */
+async function clearStaleOnchainMatches(ownerAddresses) {
+  if (!env.DATABASE_URL) {
+    console.log("  warn: DATABASE_URL missing — cannot clear stale onchain matches");
+    return;
+  }
+  const { query } = await import(resolve(root, "packages/database/src/client.ts"));
+  const owners = ownerAddresses.map((a) => a.toLowerCase());
+  const profiles = await query(
+    `select p.id::text as id
+     from profiles p
+     join wallet_identities wi on wi.profile_id = p.id
+     where lower(wi.address) = any($1::text[])`,
+    [owners],
+  );
+  const ids = profiles.rows.map((r) => r.id);
+  if (!ids.length) return;
+
+  await query(
+    `update table_sessions set status = 'completed', ended_at = coalesce(ended_at, now())
+     where status = 'active' and owner_id = any($1::uuid[])`,
+    [ids],
+  );
+  // CHECK: pending|opened|playing|settling|settled|blocked|emergency
+  await query(
+    `update onchain_sessions
+     set status = 'blocked'
+     where status in ('pending', 'opened', 'playing', 'settling')
+       and session_id in (
+         select osp.session_id from onchain_session_players osp
+         where osp.profile_id = any($1::uuid[])
+       )`,
+    [ids],
+  );
+  await query(
+    `update seat_tickets
+     set status = 'expired'
+     where status in ('queued', 'matched', 'opened')
+       and profile_id = any($1::uuid[])`,
+    [ids],
+  );
+  await query(
+    `update tables set is_active = false
+     where arena_mode = 'onchain'
+       and id in (
+         select os.table_id from onchain_sessions os
+         join onchain_session_players osp on osp.session_id = os.session_id
+         where osp.profile_id = any($1::uuid[])
+           and os.status = 'blocked'
+       )`,
+    [ids],
+  );
+  console.log(`  cleared stale onchain matches for ${ids.length} profile(s)`);
+}
+
 function cookieFrom(res) {
   const raw = res.headers.getSetCookie?.() || [];
   if (raw.length) return raw.map((c) => c.split(";")[0]).join("; ");
@@ -429,8 +487,8 @@ async function main() {
           cd "${root}"
           set -a; source .env.local; set +a
           export MOZETTO_GOLDEN=1 REQUIRE_REAL_ROOTS=1 CANONICAL_SCHEMA_KIND=poker_event_v1 HUMAN_PLAY=0
-          nohup pnpm --filter @mozetto/api start >/tmp/mozetto-api-wp106.log 2>&1 &
-          nohup pnpm --filter @mozetto/game-server start >/tmp/mozetto-game-wp106.log 2>&1 &
+          nohup pnpm --filter @mozetto/api start:local >/tmp/mozetto-api-wp106.log 2>&1 &
+          nohup pnpm --filter @mozetto/game-server start:local >/tmp/mozetto-game-wp106.log 2>&1 &
           for i in $(seq 1 50); do
             curl -sf "${API}/health" >/dev/null && curl -sf "${GAME}/health" >/dev/null && exit 0
             sleep 0.35
@@ -673,6 +731,8 @@ async function main() {
       const a = await siwe(PK_ALICE, "WP106 Alice");
       const b = await siwe(PK_BOB, "WP106 Bob");
 
+      await clearStaleOnchainMatches([a.account.address, b.account.address]);
+
       for (const p of [a, b]) {
         const { res, json } = await api("/v1/arena/fund-test", {
           method: "POST",
@@ -760,21 +820,51 @@ async function main() {
         );
       }
 
-      const onchainSealed = await publicClient.readContract({
+      let onchainSealed = await publicClient.readContract({
         address: VAULT,
         abi: vaultAbi,
         functionName: "sessionSealedV3",
         args: [apiSessionId],
       });
       if (!onchainSealed) {
-        throw new Error("match opened without sealAndFundSession (sessionSealedV3=false)");
+        console.log("  sessionSealedV3=false - clearing sticky matches and re-queuing...");
+        await clearStaleOnchainMatches([a.account.address, b.account.address]);
+        rA = await find(a.cookie);
+        rB = await find(b.cookie);
+        for (let i = 0; i < 16; i++) {
+          if (rA.json.tableId || rB.json.tableId) break;
+          if (rA.json.sealedV3 || rB.json.sealedV3) break;
+          await new Promise((r) => setTimeout(r, 1500));
+          rA = await find(a.cookie);
+          rB = await find(b.cookie);
+        }
+        apiTableId = rA.json.tableId || rB.json.tableId;
+        apiSessionId = rA.json.sessionId || rB.json.sessionId;
+        if (!isBytes32(apiSessionId) && apiTableId && (await healthy(GAME))) {
+          const { json: tbl } = await gameFetch(`/v1/tables/${apiTableId}`);
+          if (isBytes32(tbl.onchainSessionId)) apiSessionId = tbl.onchainSessionId;
+        }
+        if (!apiTableId || !isBytes32(apiSessionId)) {
+          throw new Error(`requeue failed: A=${JSON.stringify(rA.json)} B=${JSON.stringify(rB.json)}`);
+        }
+        onchainSealed = await publicClient.readContract({
+          address: VAULT,
+          abi: vaultAbi,
+          functionName: "sessionSealedV3",
+          args: [apiSessionId],
+        });
+      }
+      if (!onchainSealed) {
+        throw new Error(
+          `match opened without sealAndFundSession (sessionSealedV3=false) session=${apiSessionId} vault=${VAULT}`,
+        );
       }
       apiSealed = true;
       record(
         "match_api",
         "Ranked find-match → SeatTicketV3 → sealAndFundSession",
         "PASS",
-        `table=${apiTableId} session=${String(apiSessionId).slice(0, 12)}… sealedV3=true`,
+        `table=${apiTableId} session=${String(apiSessionId).slice(0, 12)}... onchainSealed=true`,
       );
     } catch (e) {
       failStage("match_api", "Ranked find-match (API)", e);

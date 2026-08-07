@@ -2227,19 +2227,22 @@
 
 **Delivered:**
 - Golden orchestrator `scripts/anvil-e2e-golden.{mjs,sh}` + `pnpm e2e:golden` / `e2e:golden:redeploy` (GAP forbidden; FAIL if required services missing)
-- API HU ranked path: SeatTicketV3 mint + `@mozetto/session-seal` → atomic `sealAndFundSession` (default; opt out `LEGACY_OPEN_TOPUP=1` / `SEAL_AND_FUND_V3=0`)
-- GameRegistry-active `NLHE_HU_STANDARD_V2` template for V3 seal; Anvil `fund-test` mirrors ledger via `creditOnchainDeposit`
-- Docs: `docs/WP-106_ANVIL_GOLDEN_E2E.md` (WP-100 marked superseded for zero-GAP runs)
+- Wrapper boots Anvil/api/game-server/agent-runtime with `MOZETTO_GOLDEN=1` `REQUIRE_REAL_ROOTS=1` `CANONICAL_SCHEMA_KIND=poker_event_v1` `HUMAN_PLAY=0`
+- After `--redeploy`: sync `.env.local` + restart API/game; clear sticky DB sessions so find-match seals on the new vault
+- API HU ranked path: SeatTicketV3 + `@mozetto/session-seal` → atomic `sealAndFundSession`
+- Game-server: `GET /v1/tables/:id/settlement-roots` + health preflight (`canonicalSchemaKind` / `requireRealRoots`)
+- Real WP-108 roots under golden gates (session-bound keccak stubs → FAIL)
+- Docs: `docs/WP-106_ANVIL_GOLDEN_E2E.md`
 
 **Commands / evidence:**
-- `bash ./scripts/anvil-e2e-golden.sh` → **overall `PASS`**, `PASS=23 FAIL=0 GAP=0 SKIP=1`
-- Stages include: find-match sealedV3, lifecycle Sealed (vault hook), mock VRF+deck, real roots (WP-108), Hub V3 settle, FeeVault sweep, withdraw, Verify Game
+- `pnpm e2e:golden:redeploy` → **overall `PASS`**, `PASS=24 FAIL=0 GAP=0 SKIP=0`
+- Stages: find-match `sessionSealedV3=true`, lifecycle Sealed, mock VRF+deck, autonomous hand settle, real roots (`game-server:rebuild`), Hub V3 settle, FeeVault sweep, withdraw, Verify Game, reconcile
 
 **Allowed mocks:** Anvil mock VRF + MockUSDC only.
 
 **Out of scope:** Spec mutations; mainnet; inventing GAP/PASS; secrets in git.
 
-**Follow-up:** Wire golden into CI with long-lived Anvil+API+game fixtures; Sepolia Stage A ops.
+**Follow-up:** Wire golden into CI with long-lived Anvil+API+game fixtures; Sepolia Stage A ops (funded deployer).
 
 ---
 
@@ -2351,7 +2354,7 @@
 | Rust pin | `1.85.0` (`rust-toolchain.toml`) |
 | Local boot | `pnpm bootstrap` → readiness; also `scripts/start-local.sh` |
 | Reset | `pnpm reset:local` (+ `--db`) |
-| E2E scripts | `pnpm e2e:arena-account`, `e2e:instant`, `e2e:mock-vrf`, `e2e:proof-batch`, `e2e:protocol-v3`, `smoke:custody` |
+| E2E scripts | `pnpm e2e:golden`, `e2e:golden:redeploy`, `e2e:arena-account`, `e2e:instant`, `e2e:mock-vrf`, `e2e:proof-batch`, `e2e:protocol-v3`, `smoke:custody` |
 | Migrations | `packages/database/migrations/001`–`031` (+ CI dry-run) |
 | Architecture prose | `docs/PLATFORM_ARCHITECTURE.md` |
 | Machine-readable manifest | `docs/architecture-manifest.v2.json` (+ `.md`; `pnpm manifest:architecture`) |
