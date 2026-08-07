@@ -47,3 +47,4 @@ contracts/broadcast/
 # WP-052 local mock VRF run artifact
 scripts/.anvil-mock-vrf-last.json
 scripts/.anvil-e2e-protocol-v3-last.json
+scripts/.anvil-e2e-golden-last.json

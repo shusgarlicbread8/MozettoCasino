@@ -2,7 +2,7 @@
 
 **Authority:** Follows `00_READ_ME_FIRST.md`, `01_MASTER_EXECUTION_ROADMAP.md`, `16_AGENT_WORK_PACKETS.md`, `17_FINAL_DEFINITION_OF_DONE.md`.  
 **Rule:** Protocol V3 specs are **frozen** (WP-010–015). Implementations MUST match `/specs` and fail CI if vectors diverge. Do not invent new encodings.  
-**Last updated:** 2026-08-07 (WP-129 spectator server delay residual DONE; WP-120–132 Wave 12 consumer UX DONE; Wave 11 + Wave 12 parallel)
+**Last updated:** 2026-08-07 (WP-106 Anvil golden PASS FAIL=0 GAP=0; Wave 11 Anvil RC gate met; Wave 12 DONE)
 
 ---
 
@@ -21,9 +21,9 @@
 | Field | Value |
 |---|---|
 | **Active wave** | **Wave 11 Production Integration** + **Wave 12 Consumer UX** (parallel) |
-| **Active packets** | WP-106–113 (Track A/C), Wave 12 Track B largely DONE (WP-120–132); Sepolia Stage A blocked until WP-106–112 green |
+| **Active packets** | Wave 11 Anvil RC gate met (WP-106–113 DONE); Wave 12 DONE; Sepolia Stage A unblocked pending ops |
 | **Architecture status** | Protocol architecture largely built (~component-complete). Remaining work is integration, productization, hosted staging — **not** “ops only.” |
-| **Blocked until (Sepolia Stage A)** | WP-106–112 green on Anvil release candidate; then funded Sepolia deploy |
+| **Blocked until (Sepolia Stage A)** | Wave 11 Anvil RC green (WP-106–112); next = funded Sepolia deploy ops |
 | **Hard stop** | No new architecture invention; live AWS Nitro during Stage A; Plan 15 expansion stays deferred |
 | **WP-100 correction** | WP-100 = `PASS_WITH_GAPS` only. Gaps reopened as WP-106–108 (sealAndFund, API match, live AI hands, real roots). |
 | **Wave 0 note** | Packets DONE; `baseline-v2` tag optional (create only when user requests) |
@@ -49,7 +49,7 @@
 | 6 | Event roots, proofs, settlement V3 | `DONE` | WP-060–066 DONE — Wave 6 settlement/proof gate met |
 | 7 | Groq GPT-OSS 120B Season 1 agent | `DONE` | WP-070–077 DONE — Wave 7 AI gate met (offline) |
 | 8 | Continuous cognition + 100 Energy | `DONE` | WP-072–076 DONE (scheduler + Energy + cadence + fallback) |
-| 9 | Full Anvil protocol integration | `IN_PROGRESS` | WP-100 `PASS_WITH_GAPS`; Wave 11 (WP-106–113) closes zero-GAP Anvil RC |
+| 9 | Full Anvil protocol integration | `DONE` | WP-100 `PASS_WITH_GAPS` closed by WP-106 golden `PASS` (FAIL=0 GAP=0) |
 | 10 | Operations, admin, public verification | `DONE` | WP-090–095 DONE — Wave 9 product integrity gate met |
 | 11 | Base Sepolia deployment | `BLOCKED` | Recipes ready; Stage A gated on Wave 11 WP-106–112 |
 | 12 | Adversarial program and audits | `BLOCKED` | Program/register scaffolds DONE; live A/B/C after Anvil RC + Sepolia deploy |
@@ -220,7 +220,7 @@
 
 | ID | Work | Status | Exit condition |
 |---|---|---|---|
-| WP-106 | True full Anvil match lifecycle | `IN_PROGRESS` | Browser/API → match → SeatTicket V3 → `sealAndFundSession` → real game → settle → withdraw; **zero GAPs** |
+| WP-106 | True full Anvil match lifecycle | `DONE` | Browser/API → match → SeatTicket V3 → `sealAndFundSession` → real game → settle → withdraw; **zero GAPs** |
 | WP-107 | Live Groq AI table integration | `DONE` | Game-server runs Groq seats + cognition + Energy + cadence for complete sessions |
 | WP-108 | Real canonical roots | `DONE` | AI gameplay produces real eventRoot/handRoot/balanceRoot (no stub settlement roots) |
 | WP-109 | Poker release hardening | `DONE` | Uncalled bets, deep 6-max, sit-out/timeout; PokerKit mandatory oracle; large generated set |
@@ -2175,6 +2175,28 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 
 ---
 
+### 2026-08-07 — WP-106 True full Anvil golden match lifecycle (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- Golden orchestrator `scripts/anvil-e2e-golden.{mjs,sh}` + `pnpm e2e:golden` / `e2e:golden:redeploy` (GAP forbidden; FAIL if required services missing)
+- API HU ranked path: SeatTicketV3 mint + `@mozetto/session-seal` → atomic `sealAndFundSession` (default; opt out `LEGACY_OPEN_TOPUP=1` / `SEAL_AND_FUND_V3=0`)
+- GameRegistry-active `NLHE_HU_STANDARD_V2` template for V3 seal; Anvil `fund-test` mirrors ledger via `creditOnchainDeposit`
+- Docs: `docs/WP-106_ANVIL_GOLDEN_E2E.md` (WP-100 marked superseded for zero-GAP runs)
+
+**Commands / evidence:**
+- `bash ./scripts/anvil-e2e-golden.sh` → **overall `PASS`**, `PASS=23 FAIL=0 GAP=0 SKIP=1`
+- Stages include: find-match sealedV3, lifecycle Sealed (vault hook), mock VRF+deck, real roots (WP-108), Hub V3 settle, FeeVault sweep, withdraw, Verify Game
+
+**Allowed mocks:** Anvil mock VRF + MockUSDC only.
+
+**Out of scope:** Spec mutations; mainnet; inventing GAP/PASS; secrets in git.
+
+**Follow-up:** Wire golden into CI with long-lived Anvil+API+game fixtures; Sepolia Stage A ops.
+
+---
+
 ### 2026-08-07 — WP-111 Economics instrumentation (DONE)
 
 **Status:** `DONE` (rates remain hypotheses — not a fee freeze)
@@ -2341,7 +2363,8 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 | Safe/timelock proposals (WP-093) | `packages/governance` + `apps/admin/src/app/governance/` + `docs/WP-093_SAFE_TIMELOCK.md` |
 | Chaos suite (WP-101) | `scripts/chaos/` + `docs/WP-101_CHAOS_SUITE.md` (`pnpm test:chaos`) |
 | Live chaos completeness (WP-113) | `scripts/chaos/live/` + `docs/WP-113_LIVE_CHAOS.md` (`CHAOS_LIVE=1 pnpm test:chaos:live`) |
-| Full Anvil protocol E2E (WP-100) | `scripts/anvil-e2e-protocol-v3.{mjs,sh}` + `docs/WP-100_ANVIL_E2E.md` (`pnpm e2e:protocol-v3`) |
+| Full Anvil protocol E2E (WP-100) | `scripts/anvil-e2e-protocol-v3.{mjs,sh}` + `docs/WP-100_ANVIL_E2E.md` (`pnpm e2e:protocol-v3`) — GAP-tolerant |
+| Anvil golden zero-GAP E2E (WP-106) | `scripts/anvil-e2e-golden.{mjs,sh}` + `docs/WP-106_ANVIL_GOLDEN_E2E.md` (`pnpm e2e:golden`) |
 | Sepolia deploy recipes (WP-102) | `contracts/script/DeploySepolia.s.sol` + `scripts/sepolia-*.{sh,mjs}` + `docs/WP-102_SEPOLIA_DEPLOYMENT.md` (`pnpm sepolia:*`) — live tx pending ops |
 | Public testnet program (WP-103) | `docs/WP-103_PUBLIC_TESTNET_PROGRAM.md` + `scripts/testnet/` (`pnpm testnet:*`) — live Stage A blocked on ops deploy |
 | Audit remediation register (WP-104) | `docs/WP-104_AUDIT_REMEDIATION.md` + `docs/audits/` (`pnpm audit:register-check`) — scaffold; external audits pending |

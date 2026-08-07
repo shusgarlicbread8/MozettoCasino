@@ -20,10 +20,13 @@ import {
   GAME_PERMISSION_TYPES,
   gamePermissionDomain,
   SEAT_TICKET_V2_TYPES,
+  SEAT_TICKET_V3_TYPES,
   seatTicketV2Domain,
+  seatTicketV3Domain,
   leagueBit,
   ALL_LEAGUE_MASK,
 } from "@mozetto/blockchain";
+import { SessionSealCoordinator } from "@mozetto/session-seal";
 import {
   assertLeague,
   claimOpenOnchainSession,
@@ -33,6 +36,7 @@ import {
   createOnchainArenaTable,
   createOnchainSessionPending,
   getActiveOnchainTableForProfile,
+  getOnchainSessionForTable,
   getAgentProfileHash,
   getPendingMatchForProfile,
   getQueuedTicketForProfile,
@@ -56,13 +60,18 @@ import {
   releaseExposure,
   sumReservedExposure,
   confirmExposure,
+  creditOnchainDeposit,
   type ArenaFormat,
 } from "@mozetto/database";
 import {
   CONTROLLER_HASH,
   NLHE_HU_STANDARD_V1_TEMPLATE_ID,
+  NLHE_HU_STANDARD_V2_TEMPLATE_ID,
   POKER_ENGINE_HASH,
   PROFILE_SET_HASH,
+  RANDOMNESS_POLICY_ID_V2,
+  SEASON1_MODEL_POLICY_HASH,
+  SETTLEMENT_POLICY_ID_V3,
   SubmitSeatTicketSchema,
   TicketParamsQuerySchema,
 } from "@mozetto/shared-types";
@@ -113,6 +122,22 @@ function rpcForChain(chainId: number) {
   if (chainId === 31337) return process.env.ANVIL_RPC_URL || "http://127.0.0.1:8545";
   if (chainId === 8453) return process.env.BASE_RPC_URL || "https://mainnet.base.org";
   return process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org";
+}
+
+/**
+ * WP-106: HU ranked Match → SeatTicketV3 → atomic sealAndFundSession (default).
+ * Opt out with LEGACY_OPEN_TOPUP=1 (openSession + topUpSession progressive fill).
+ * Classic 6-max still uses open/topUp until full-table V3 seal lands.
+ */
+function useSealAndFundV3(format: ArenaFormat = "hu"): boolean {
+  if (format !== "hu") return false;
+  if (process.env.LEGACY_OPEN_TOPUP === "1") return false;
+  return process.env.SEAL_AND_FUND_V3 !== "0";
+}
+
+/** Active ranked HU template: V2 when sealAndFund is on (GameRegistryV2), else legacy V1. */
+function rankedHuTemplateId(format: ArenaFormat = "hu"): Hex {
+  return (useSealAndFundV3(format) ? NLHE_HU_STANDARD_V2_TEMPLATE_ID : NLHE_HU_STANDARD_V1_TEMPLATE_ID) as Hex;
 }
 
 function matchmakingPool(chainId: number, leagueId: string, format: ArenaFormat = "hu"): Hex {
@@ -348,7 +373,7 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
       sessionSigner: signer?.address ?? "0x0000000000000000000000000000000000000000",
       usdc: token,
       vault,
-      gameTemplateId: NLHE_HU_STANDARD_V1_TEMPLATE_ID,
+      gameTemplateId: rankedHuTemplateId("hu"),
       leagueMask: ALL_LEAGUE_MASK,
       lifetimeCommittedCap: DEFAULT_LIFETIME_CAP.toString(),
       maxTotalAtRisk: DEFAULT_MAX_AT_RISK.toString(),
@@ -591,12 +616,16 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
         account,
       });
       await publicClient.waitForTransactionReceipt({ hash });
+      // Anvil-only: mirror mint into on-chain ledger available so join/lockBuyIn
+      // works without a live indexer (WP-106 golden). Idempotent on tx hash.
+      await creditOnchainDeposit(session.profileId, amountUsdc, hash);
       return {
         ok: true,
         txHash: hash,
         arenaAccountAddress: arena,
         amountUsdc,
         symbol: chainCfg.symbol,
+        ledgerMirrored: true,
       };
     } catch (e) {
       const msg = e instanceof Error ? e.message : "mint_failed";
@@ -661,7 +690,7 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
     const bit = leagueBit(q.data.leagueId);
 
     return {
-      gameTemplateId: NLHE_HU_STANDARD_V1_TEMPLATE_ID,
+      gameTemplateId: rankedHuTemplateId("hu"),
       buyIn: leagueBuyInRaw(q.data.leagueId).toString(),
       buyInUsdc: league.buyIn,
       nonce: nonce.toString(),
@@ -805,6 +834,8 @@ export async function handleOnchainFindMatch(
 
   const existing = await getActiveOnchainTableForProfile(session.profileId, chainId, format);
   if (existing?.table_id) {
+    // Attach custody session id when available so clients/E2E can verify sealAndFund.
+    const sess = await getOnchainSessionForTable(existing.table_id).catch(() => null);
     return {
       tableId: existing.table_id,
       tableName: existing.table_name,
@@ -815,8 +846,10 @@ export async function handleOnchainFindMatch(
       arenaMode: "onchain" as const,
       chainId,
       format,
+      sessionId: sess?.session_id,
       sessionStatus: existing.session_status,
       waitingForChain: existing.session_status === "pending",
+      sealedV3: existing.session_status === "opened" || existing.session_status === "playing",
     };
   }
 
@@ -893,6 +926,7 @@ export async function handleOnchainFindMatch(
       buyInUsdc: league.buyIn,
       profileKey: _profileKey,
       leagueBit: bit,
+      format,
     });
     if (auto.ok === false) {
       return reply.code(auto.status).send({ error: auto.error, message: auto.message });
@@ -937,10 +971,9 @@ export async function handleOnchainFindMatch(
     }
   }
 
-  // Default lifecycle: Find Match always opens a table immediately. A later
-  // player atomically claims the fullest compatible open table and is
-  // added to its custody session with topUpSession.
-  if (process.env.LEGACY_PAIR_MATCHMAKING !== "1") {
+  // WP-106 default (HU): wait for opponent → SeatTicketV3 → atomic sealAndFundSession.
+  // Classic / LEGACY_OPEN_TOPUP=1: progressive openSession + topUpSession.
+  if (!useSealAndFundV3(format) && process.env.LEGACY_PAIR_MATCHMAKING !== "1") {
     return openOrJoinImmediateTable({
       req,
       reply,
@@ -980,97 +1013,8 @@ export async function handleOnchainFindMatch(
     };
   }
 
-  const sessionId = (`0x${randomBytes(32).toString("hex")}`) as Hex;
-  const dealerRoot = keccak256(toBytes(`dealer:${sessionId}`));
-  const table = await createOnchainArenaTable({
-    leagueId,
-    buyIn: league.buyIn,
-    createdBy: session.profileId,
-    chainId,
-    format,
-  });
-
-  const batchId = await createMatchmakingBatch({
-    chainId,
-    gameTemplateId: NLHE_HU_STANDARD_V1_TEMPLATE_ID,
-    sessionId,
-  });
-  await linkTicketsToBatch([pair.self.id, pair.opponent.id], batchId, sessionId);
-
-  const selfArena = (pair.self.arena_account_address ?? pair.self.wallet_address).toLowerCase();
-  const oppArena = (pair.opponent.arena_account_address ?? pair.opponent.wallet_address).toLowerCase();
-
-  const selfResId = await reserveExposure({
-    profileId: pair.self.profile_id,
-    chainId,
-    arenaAccountAddress: selfArena,
-    buyInRaw: buyInRaw.toString(),
-    batchId,
-    sessionId,
-  });
-  const oppResId = await reserveExposure({
-    profileId: pair.opponent.profile_id,
-    chainId,
-    arenaAccountAddress: oppArena,
-    buyInRaw: buyInRaw.toString(),
-    batchId,
-    sessionId,
-  });
-
-  await createOnchainSessionPending({
-    sessionId,
-    chainId,
-    gameTemplateId: NLHE_HU_STANDARD_V1_TEMPLATE_ID,
-    tableId: table.id,
-    dealerRoot,
-    engineHash: POKER_ENGINE_HASH,
-    profileSetHash: PROFILE_SET_HASH,
-  });
-
-  // Register both players before openSession so the waiting opponent can discover
-  // this tableId while the pairer is still waiting on the chain receipt.
-  await insertOnchainSessionPlayers(sessionId, [
-    {
-      profileId: pair.self.profile_id,
-      walletAddress: selfArena,
-      arenaAccountAddress: selfArena,
-      ownerAddress: pair.self.owner_address ?? pair.self.wallet_address,
-      buyInRaw,
-      seat: 0,
-      controllerHash: pair.self.controller_hash,
-      agentProfileHash: pair.self.agent_profile_hash,
-    },
-    {
-      profileId: pair.opponent.profile_id,
-      walletAddress: oppArena,
-      arenaAccountAddress: oppArena,
-      ownerAddress: pair.opponent.owner_address ?? pair.opponent.wallet_address,
-      buyInRaw,
-      seat: 1,
-      controllerHash: pair.opponent.controller_hash,
-      agentProfileHash: pair.opponent.agent_profile_hash,
-    },
-  ]);
-
-  const tickets = [pair.self, pair.opponent].map((t) => ({
-    player: (t.arena_account_address ?? t.wallet_address) as Address,
-    gameTemplateId: t.game_template_id as Hex,
-    buyIn: BigInt(Math.round(Number(t.buy_in) * 10 ** USDC_DECIMALS)),
-    controllerHash: t.controller_hash as Hex,
-    agentProfileHash: t.agent_profile_hash as Hex,
-    expiresAt: BigInt(Math.floor(new Date(t.expires_at).getTime() / 1000)),
-    nonce: BigInt(t.nonce),
-    matchmakingPool: t.matchmaking_pool as Hex,
-    leagueBit: Number(t.league_bit ?? bit),
-    rated: t.rated !== false,
-  }));
-  const signatures = [pair.self.signature, pair.opponent.signature] as Hex[];
-
   const relayerPk = process.env.SESSION_RELAYER_PRIVATE_KEY as Hex | undefined;
   if (!relayerPk) {
-    await releaseExposure(selfResId);
-    await releaseExposure(oppResId);
-    await markBatchFailed(batchId, "SESSION_RELAYER_PRIVATE_KEY not configured");
     return reply.code(503).send({ error: "relayer_not_configured" });
   }
 
@@ -1080,39 +1024,279 @@ export async function handleOnchainFindMatch(
   const wallet = createWalletClient({ account, chain, transport: http(rpc) });
   const publicClient = createPublicClient({ chain, transport: http(rpc) });
 
+  const selfArena = (pair.self.arena_account_address ?? pair.self.wallet_address).toLowerCase() as Address;
+  const oppArena = (pair.opponent.arena_account_address ?? pair.opponent.wallet_address).toLowerCase() as Address;
+  const selfOwner = (pair.self.owner_address ?? pair.self.wallet_address).toLowerCase() as Address;
+  const oppOwner = (pair.opponent.owner_address ?? pair.opponent.wallet_address).toLowerCase() as Address;
+
+  // Random HU seat_order (WP-040): permutation of [0,1].
+  const seatOrder = Math.random() < 0.5 ? [0, 1] : [1, 0];
+  const nowSec = BigInt(Math.floor(Date.now() / 1000));
+  const sessionNonce = (`0x${randomBytes(32).toString("hex")}`) as Hex;
+  const dealerSecretRoot = keccak256(toBytes(`dealer-secret:${sessionNonce}`));
+
+  const toV3Ticket = (t: typeof pair.self) => ({
+    arenaAccount: (t.arena_account_address ?? t.wallet_address).toLowerCase() as Address,
+    gameTemplateId: t.game_template_id as Hex,
+    matchmakingPool: t.matchmaking_pool as Hex,
+    buyIn: BigInt(Math.round(Number(t.buy_in) * 10 ** USDC_DECIMALS)),
+    controllerHash: t.controller_hash as Hex,
+    profileConfigHash: t.agent_profile_hash as Hex,
+    modelPolicyHash: SEASON1_MODEL_POLICY_HASH as Hex,
+    leagueBit: Number(t.league_bit ?? bit),
+    rated: t.rated !== false,
+    expiresAt: BigInt(Math.floor(new Date(t.expires_at).getTime() / 1000)),
+    nonce: BigInt(t.nonce),
+  });
+
+  const participants = [
+    {
+      owner: selfOwner,
+      ticket: toV3Ticket(pair.self),
+      signature: pair.self.signature as Hex,
+    },
+    {
+      owner: oppOwner,
+      ticket: toV3Ticket(pair.opponent),
+      signature: pair.opponent.signature as Hex,
+    },
+  ];
+
+  let sessionId: Hex | undefined;
   let openTxHash: Hex | undefined;
+  let batchId: string | undefined;
+  let selfResId: string | undefined;
+  let oppResId: string | undefined;
+  let table: { id: string; name: string } | undefined;
+
   try {
-    openTxHash = await wallet.writeContract({
-      address: vault,
-      abi: arenaVaultV2Abi,
-      functionName: "openSession",
-      args: [
-        {
-          sessionId,
-          gameTemplateId: NLHE_HU_STANDARD_V1_TEMPLATE_ID,
-          dealerRoot,
-          engineHash: POKER_ENGINE_HASH,
-          profileSetHash: PROFILE_SET_HASH,
-          emergencyExitDelay: EMERGENCY_EXIT_DELAY,
+    if (useSealAndFundV3(format)) {
+      const coordinator = new SessionSealCoordinator({
+        vaultAddress: vault,
+        sealAndFundSession: async ({ descriptor, tickets, signatures }) => {
+          const hash = await wallet.writeContract({
+            address: vault,
+            abi: arenaVaultV2Abi,
+            functionName: "sealAndFundSession",
+            args: [descriptor, tickets, signatures],
+            chain,
+            account,
+          } as never);
+          await publicClient.waitForTransactionReceipt({ hash });
+          return hash;
         },
-        tickets,
-        signatures,
-      ],
-      chain,
-      account,
-    } as never);
-    await publicClient.waitForTransactionReceipt({ hash: openTxHash });
-    await markBatchSubmitted(batchId, openTxHash);
-    await markOnchainSessionOpened(sessionId, openTxHash);
-    await confirmExposure(selfResId, sessionId);
-    await confirmExposure(oppResId, sessionId);
+      });
+
+      const prepared = coordinator.prepare({
+        chainId: BigInt(chainId),
+        gameTemplateId: rankedHuTemplateId(format),
+        participants,
+        seatOrder,
+        sessionNonce,
+        createdAt: nowSec,
+        sealDeadline: nowSec + BigInt(TICKET_TTL_SEC),
+        policy: {
+          dealerSecretRoot,
+          randomnessPolicyId: RANDOMNESS_POLICY_ID_V2 as Hex,
+          settlementPolicyId: SETTLEMENT_POLICY_ID_V3 as Hex,
+        },
+      });
+      sessionId = prepared.descriptor.sessionId;
+
+      table = await createOnchainArenaTable({
+        leagueId,
+        buyIn: league.buyIn,
+        createdBy: session.profileId,
+        chainId,
+        format,
+      });
+      batchId = await createMatchmakingBatch({
+        chainId,
+        gameTemplateId: rankedHuTemplateId(format),
+        sessionId,
+      });
+      await linkTicketsToBatch([pair.self.id, pair.opponent.id], batchId, sessionId);
+
+      selfResId = await reserveExposure({
+        profileId: pair.self.profile_id,
+        chainId,
+        arenaAccountAddress: selfArena,
+        buyInRaw: buyInRaw.toString(),
+        batchId,
+        sessionId,
+      });
+      oppResId = await reserveExposure({
+        profileId: pair.opponent.profile_id,
+        chainId,
+        arenaAccountAddress: oppArena,
+        buyInRaw: buyInRaw.toString(),
+        batchId,
+        sessionId,
+      });
+
+      await createOnchainSessionPending({
+        sessionId,
+        chainId,
+        gameTemplateId: rankedHuTemplateId(format),
+        tableId: table.id,
+        dealerRoot: dealerSecretRoot,
+        engineHash: POKER_ENGINE_HASH,
+        profileSetHash: PROFILE_SET_HASH,
+      });
+
+      const ordered = prepared.orderedOwners.map((owner, i) => {
+        const ticket = prepared.orderedTickets[i]!;
+        const src =
+          ticket.arenaAccount.toLowerCase() === selfArena.toLowerCase() ? pair.self : pair.opponent;
+        return {
+          profileId: src.profile_id,
+          walletAddress: ticket.arenaAccount,
+          arenaAccountAddress: ticket.arenaAccount,
+          ownerAddress: owner,
+          buyInRaw,
+          seat: i,
+          controllerHash: ticket.controllerHash,
+          agentProfileHash: ticket.profileConfigHash,
+        };
+      });
+      await insertOnchainSessionPlayers(sessionId, ordered);
+
+      const sealResult = await coordinator.seal(
+        {
+          chainId: BigInt(chainId),
+          gameTemplateId: rankedHuTemplateId(format),
+          participants,
+          seatOrder,
+          sessionNonce,
+          createdAt: nowSec,
+          sealDeadline: nowSec + BigInt(TICKET_TTL_SEC),
+          policy: {
+            dealerSecretRoot,
+            randomnessPolicyId: RANDOMNESS_POLICY_ID_V2 as Hex,
+            settlementPolicyId: SETTLEMENT_POLICY_ID_V3 as Hex,
+          },
+        },
+        "submit",
+      );
+      if (!sealResult.ok || sealResult.mode !== "submit" || !sealResult.txHash) {
+        throw new Error(sealResult.ok === false ? sealResult.error : "sealAndFundSession failed");
+      }
+      openTxHash = sealResult.txHash;
+    } else {
+      // Legacy LEGACY_PAIR_MATCHMAKING=1 path: V2 openSession with both tickets.
+      sessionId = (`0x${randomBytes(32).toString("hex")}`) as Hex;
+      const dealerRoot = keccak256(toBytes(`dealer:${sessionId}`));
+      table = await createOnchainArenaTable({
+        leagueId,
+        buyIn: league.buyIn,
+        createdBy: session.profileId,
+        chainId,
+        format,
+      });
+      batchId = await createMatchmakingBatch({
+        chainId,
+        gameTemplateId: rankedHuTemplateId(format),
+        sessionId,
+      });
+      await linkTicketsToBatch([pair.self.id, pair.opponent.id], batchId, sessionId);
+
+      selfResId = await reserveExposure({
+        profileId: pair.self.profile_id,
+        chainId,
+        arenaAccountAddress: selfArena,
+        buyInRaw: buyInRaw.toString(),
+        batchId,
+        sessionId,
+      });
+      oppResId = await reserveExposure({
+        profileId: pair.opponent.profile_id,
+        chainId,
+        arenaAccountAddress: oppArena,
+        buyInRaw: buyInRaw.toString(),
+        batchId,
+        sessionId,
+      });
+
+      await createOnchainSessionPending({
+        sessionId,
+        chainId,
+        gameTemplateId: rankedHuTemplateId(format),
+        tableId: table.id,
+        dealerRoot,
+        engineHash: POKER_ENGINE_HASH,
+        profileSetHash: PROFILE_SET_HASH,
+      });
+      await insertOnchainSessionPlayers(sessionId, [
+        {
+          profileId: pair.self.profile_id,
+          walletAddress: selfArena,
+          arenaAccountAddress: selfArena,
+          ownerAddress: selfOwner,
+          buyInRaw,
+          seat: 0,
+          controllerHash: pair.self.controller_hash,
+          agentProfileHash: pair.self.agent_profile_hash,
+        },
+        {
+          profileId: pair.opponent.profile_id,
+          walletAddress: oppArena,
+          arenaAccountAddress: oppArena,
+          ownerAddress: oppOwner,
+          buyInRaw,
+          seat: 1,
+          controllerHash: pair.opponent.controller_hash,
+          agentProfileHash: pair.opponent.agent_profile_hash,
+        },
+      ]);
+
+      const tickets = [pair.self, pair.opponent].map((t) => ({
+        player: (t.arena_account_address ?? t.wallet_address) as Address,
+        gameTemplateId: t.game_template_id as Hex,
+        buyIn: BigInt(Math.round(Number(t.buy_in) * 10 ** USDC_DECIMALS)),
+        controllerHash: t.controller_hash as Hex,
+        agentProfileHash: t.agent_profile_hash as Hex,
+        expiresAt: BigInt(Math.floor(new Date(t.expires_at).getTime() / 1000)),
+        nonce: BigInt(t.nonce),
+        matchmakingPool: t.matchmaking_pool as Hex,
+        leagueBit: Number(t.league_bit ?? bit),
+        rated: t.rated !== false,
+      }));
+      openTxHash = await wallet.writeContract({
+        address: vault,
+        abi: arenaVaultV2Abi,
+        functionName: "openSession",
+        args: [
+          {
+            sessionId,
+            gameTemplateId: rankedHuTemplateId(format),
+            dealerRoot,
+            engineHash: POKER_ENGINE_HASH,
+            profileSetHash: PROFILE_SET_HASH,
+            emergencyExitDelay: EMERGENCY_EXIT_DELAY,
+          },
+          tickets,
+          [pair.self.signature, pair.opponent.signature] as Hex[],
+        ],
+        chain,
+        account,
+      } as never);
+      await publicClient.waitForTransactionReceipt({ hash: openTxHash });
+    }
+
+    await markBatchSubmitted(batchId!, openTxHash!);
+    await markOnchainSessionOpened(sessionId, openTxHash!);
+    await confirmExposure(selfResId!, sessionId);
+    await confirmExposure(oppResId!, sessionId);
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "open_session_failed";
-    req.log.error({ err: e, sessionId }, "openSession failed");
-    await releaseExposure(selfResId);
-    await releaseExposure(oppResId);
-    await markBatchFailed(batchId, msg);
-    return reply.code(502).send({ error: "open_session_failed", message: msg });
+    const msg = e instanceof Error ? e.message : "seal_or_open_failed";
+    req.log.error({ err: e, sessionId: sessionId! }, "ranked custody open failed");
+    if (selfResId) await releaseExposure(selfResId);
+    if (oppResId) await releaseExposure(oppResId);
+    if (batchId) await markBatchFailed(batchId, msg);
+    return reply.code(502).send({
+      error: useSealAndFundV3(format) ? "seal_and_fund_failed" : "open_session_failed",
+      message: msg,
+    });
   }
 
   const mirrorReady = await waitForBuyInMirrors(
@@ -1122,18 +1306,20 @@ export async function handleOnchainFindMatch(
   );
 
   return {
-    tableId: table.id,
-    tableName: table.name,
+    tableId: table!.id,
+    tableName: table!.name,
     created: true,
     alreadySeated: false,
     buyIn: league.buyIn,
     leagueId,
     arenaMode: "onchain" as const,
     chainId,
-    sessionId,
+    sessionId: sessionId!,
     sessionStatus: "opened" as const,
     waitingForChain: !mirrorReady,
     openTxHash,
+    sealedV3: useSealAndFundV3(format),
+    seatOrder,
   };
 }
 
@@ -1269,7 +1455,7 @@ async function openOrJoinImmediateTable(opts: {
   });
   const batchId = await createMatchmakingBatch({
     chainId: opts.chainId,
-    gameTemplateId: NLHE_HU_STANDARD_V1_TEMPLATE_ID,
+    gameTemplateId: rankedHuTemplateId(format),
     sessionId,
   });
   await linkTicketsToBatch([ticket.id], batchId, sessionId);
@@ -1286,7 +1472,7 @@ async function openOrJoinImmediateTable(opts: {
   await createOnchainSessionPending({
     sessionId,
     chainId: opts.chainId,
-    gameTemplateId: NLHE_HU_STANDARD_V1_TEMPLATE_ID,
+    gameTemplateId: rankedHuTemplateId(format),
     tableId: table.id,
     dealerRoot,
     engineHash: POKER_ENGINE_HASH,
@@ -1313,7 +1499,7 @@ async function openOrJoinImmediateTable(opts: {
       args: [
         {
           sessionId,
-          gameTemplateId: NLHE_HU_STANDARD_V1_TEMPLATE_ID,
+          gameTemplateId: rankedHuTemplateId(format),
           dealerRoot,
           engineHash: POKER_ENGINE_HASH,
           profileSetHash: PROFILE_SET_HASH,
@@ -1377,8 +1563,10 @@ async function createAutomaticSeamlessTicket(opts: {
   buyInUsdc: number;
   profileKey: string | null;
   leagueBit: number;
+  format?: ArenaFormat;
 }): Promise<{ ok: true } | { ok: false; status: number; error: string; message: string }> {
   const { session, chainId, vault, arena, pool, buyInRaw, buyInUsdc, leagueBit: bit } = opts;
+  const format = opts.format ?? "hu";
   const owner = (session.ownerAddress ?? session.walletAddress)!.toLowerCase() as Address;
   const signer = sessionSignerAccount();
   if (!signer) {
@@ -1530,25 +1718,51 @@ async function createAutomaticSeamlessTicket(opts: {
 
   const nonce = await suggestTicketNonce(arena, chainId);
   const expiresAt = BigInt(now + TICKET_TTL_SEC);
-  const message = {
-    player: arena,
-    gameTemplateId: NLHE_HU_STANDARD_V1_TEMPLATE_ID as Hex,
-    buyIn: buyInRaw,
-    controllerHash: CONTROLLER_HASH as Hex,
-    agentProfileHash,
-    expiresAt,
-    nonce,
-    matchmakingPool: pool,
-    leagueBit: bit,
-    rated: true,
-  };
 
-  const signature = await signer.signTypedData({
-    domain: seatTicketV2Domain(chainId, vault),
-    types: SEAT_TICKET_V2_TYPES,
-    primaryType: "SeatTicket",
-    message,
-  });
+  // HU default (WP-106): mint SeatTicketV3 so pair sealAndFundSession verifies.
+  // Classic / LEGACY_OPEN_TOPUP keeps V2 SeatTicket for openSession/topUpSession.
+  const v3 = useSealAndFundV3(format);
+  let signature: Hex;
+  if (v3) {
+    const message = {
+      arenaAccount: arena,
+      gameTemplateId: rankedHuTemplateId(format),
+      matchmakingPool: pool,
+      buyIn: buyInRaw,
+      controllerHash: CONTROLLER_HASH as Hex,
+      profileConfigHash: agentProfileHash,
+      modelPolicyHash: SEASON1_MODEL_POLICY_HASH as Hex,
+      leagueBit: bit,
+      rated: true,
+      expiresAt,
+      nonce,
+    };
+    signature = await signer.signTypedData({
+      domain: seatTicketV3Domain(chainId, vault),
+      types: SEAT_TICKET_V3_TYPES,
+      primaryType: "SeatTicketV3",
+      message,
+    });
+  } else {
+    const message = {
+      player: arena,
+      gameTemplateId: rankedHuTemplateId(format),
+      buyIn: buyInRaw,
+      controllerHash: CONTROLLER_HASH as Hex,
+      agentProfileHash,
+      expiresAt,
+      nonce,
+      matchmakingPool: pool,
+      leagueBit: bit,
+      rated: true,
+    };
+    signature = await signer.signTypedData({
+      domain: seatTicketV2Domain(chainId, vault),
+      types: SEAT_TICKET_V2_TYPES,
+      primaryType: "SeatTicket",
+      message,
+    });
+  }
 
   try {
     await insertSeatTicket({
@@ -1557,7 +1771,7 @@ async function createAutomaticSeamlessTicket(opts: {
       arenaAccountAddress: arena,
       ownerAddress: owner,
       chainId,
-      gameTemplateId: NLHE_HU_STANDARD_V1_TEMPLATE_ID,
+      gameTemplateId: rankedHuTemplateId(format),
       buyInUsdc,
       controllerHash: CONTROLLER_HASH,
       agentProfileHash,

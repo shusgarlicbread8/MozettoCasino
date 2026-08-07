@@ -4,6 +4,10 @@ import { z } from "zod";
 export const NLHE_HU_STANDARD_V1_TEMPLATE_ID =
   "0x028ae0f374b4b519f80e5091d040e5c18e795508c1fdc8838d67edcdf51043b3" as const;
 
+/** keccak256("NLHE_HU_STANDARD_V2") — GameRegistryV2 / SessionDescriptorV2 / WP-106 seal path. */
+export const NLHE_HU_STANDARD_V2_TEMPLATE_ID =
+  "0x24daa09e304051f7c98fb3bdca6dacc5940a25842d00e0b914d9938df63e734f" as const;
+
 export const POKER_ENGINE_HASH =
   "0xc4495078b280cc1544d6ec2b6b38a8647f619eaa31b655fb8675ed3a2e00822e" as const;
 
@@ -12,6 +16,16 @@ export const PROFILE_SET_HASH =
 
 export const CONTROLLER_HASH =
   "0xf6a560e6a5d18fd972f72d7dc98f22bf26dce5e8c7962ef3d565963efde2e32e" as const;
+
+/** Season 1 MODEL_POLICY_V1 hash — `specs/canonical-vectors/10_model_policy_groq.json`. */
+export const SEASON1_MODEL_POLICY_HASH =
+  "0x17b92436bd986d508c4d7adc9b46bd868eaf8894e4ccc5162d675e01999352e4" as const;
+
+/** From golden vector `01_session_hu.json` — SessionDescriptorV2 policy fields. */
+export const RANDOMNESS_POLICY_ID_V2 =
+  "0x63eca62dc1574e4721b34c4c6220893fb946025b62997c7d9a66c5ea919dd881" as const;
+export const SETTLEMENT_POLICY_ID_V3 =
+  "0xd749372430340929ee8506ac45cb96cbb96566aa8d80695f1d233120ebcb76c9" as const;
 
 const hex32 = z.string().regex(/^0x[a-fA-F0-9]{64}$/);
 const address = z.string().regex(/^0x[a-fA-F0-9]{40}$/i);

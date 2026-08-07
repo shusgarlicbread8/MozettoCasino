@@ -54,6 +54,8 @@
     "e2e:proof-batch": "bash ./scripts/anvil-proof-batch.sh",
     "e2e:protocol-v3": "bash ./scripts/anvil-e2e-protocol-v3.sh",
     "e2e:protocol-v3:redeploy": "bash ./scripts/anvil-e2e-protocol-v3.sh --redeploy",
+    "e2e:golden": "bash ./scripts/anvil-e2e-golden.sh",
+    "e2e:golden:redeploy": "bash ./scripts/anvil-e2e-golden.sh --redeploy",
     "test:db": "pnpm --filter @mozetto/database test",
     "test:chaos": "bash ./scripts/chaos/run-unit.sh",
     "test:chaos:live": "CHAOS_LIVE=1 bash ./scripts/chaos/run-live.sh all",
@@ -73,6 +75,10 @@
     "audit:register-check": "node ./scripts/audits/check-register.mjs"
   },
   "devDependencies": {
+    "@mozetto/blockchain": "workspace:*",
+    "@mozetto/session-seal": "workspace:*",
+    "@mozetto/shared-types": "workspace:*",
+    "tsx": "^4.19.3",
     "typescript": "^5.8.2",
     "viem": "^2.55.11"
   }

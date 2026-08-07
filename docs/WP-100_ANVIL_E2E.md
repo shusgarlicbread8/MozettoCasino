@@ -112,7 +112,8 @@ Conservation check on settle: `openingTotal == endingPlayerTotal + totalRake` (1
 
 ## Follow-up
 
-- Wire `--with-api` path into CI once long-lived Anvil+API+game fixtures exist.
-- Replace stub settlement roots with event-store / root-builder output after WP-084 cutover.
-- Optional: submit via `SessionSealCoordinator` → `sealAndFundSession` instead of `openSession`.
-- WP-101 chaos suite on top of this happy path.
+**Superseded for zero-GAP runs by WP-106:** `pnpm e2e:golden` / `docs/WP-106_ANVIL_GOLDEN_E2E.md`  
+(API find-match → SeatTicketV3 → `sealAndFundSession` → real game-server → Hub V3; GAP forbidden).
+
+- WP-100 remains the compose/GAP-tolerant orchestrator for partial stacks.
+- WP-101 chaos suite on top of the golden happy path.

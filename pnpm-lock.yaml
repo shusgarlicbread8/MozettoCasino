@@ -8,6 +8,18 @@ importers:
 
   .:
     devDependencies:
+      '@mozetto/blockchain':
+        specifier: workspace:*
+        version: link:packages/blockchain
+      '@mozetto/session-seal':
+        specifier: workspace:*
+        version: link:packages/session-seal
+      '@mozetto/shared-types':
+        specifier: workspace:*
+        version: link:packages/shared-types
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.5
       typescript:
         specifier: ^5.8.2
         version: 5.9.3

@@ -17,6 +17,7 @@
     "@mozetto/database": "workspace:*",
     "@mozetto/reconciliation": "workspace:*",
     "@mozetto/server-env": "workspace:*",
+    "@mozetto/session-seal": "workspace:*",
     "@mozetto/shared-types": "workspace:*",
     "@mozetto/unit-economics": "workspace:*",
     "@supabase/supabase-js": "^2.112.0",
