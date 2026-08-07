@@ -2,7 +2,7 @@
 
 **Authority:** Follows `00_READ_ME_FIRST.md`, `01_MASTER_EXECUTION_ROADMAP.md`, `16_AGENT_WORK_PACKETS.md`, `17_FINAL_DEFINITION_OF_DONE.md`.  
 **Rule:** Protocol V3 specs are **frozen** (WP-010–015). Implementations MUST match `/specs` and fail CI if vectors diverge. Do not invent new encodings.  
-**Last updated:** 2026-08-07 (WP-123 Strategy setup DONE; WP-121 + WP-120 DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
+**Last updated:** 2026-08-07 (WP-122 Play / Find Match DONE; WP-123 + WP-121 + WP-120 DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
 
 ---
 
@@ -21,7 +21,7 @@
 | Field | Value |
 |---|---|
 | **Active wave** | **Wave 11 Production Integration** + **Wave 12 Consumer UX** (parallel) |
-| **Active packets** | WP-106–113 (Track A/C), WP-122 / WP-124–132 (Track B; WP-120–121 + WP-123 DONE); Sepolia Stage A blocked until WP-106–112 green |
+| **Active packets** | WP-106–113 (Track A/C), WP-124–132 (Track B; WP-120–123 DONE); Sepolia Stage A blocked until WP-106–112 green |
 | **Architecture status** | Protocol architecture largely built (~component-complete). Remaining work is integration, productization, hosted staging — **not** “ops only.” |
 | **Blocked until (Sepolia Stage A)** | WP-106–112 green on Anvil release candidate; then funded Sepolia deploy |
 | **Hard stop** | No new architecture invention; live AWS Nitro during Stage A; Plan 15 expansion stays deferred |
@@ -31,7 +31,7 @@
 | **Plan 11 note** | Rake/treasury code DONE; Season 1 schedule = hypotheses until WP-111 empirical COGS |
 | **Plan 12 note** | Ratings / anti-cheat DONE — ML collusion deferred |
 | **Plan 19 note** | Schema map DONE; hosted cutover **WP-110 DONE** (GRANTs `030`, scheduler persist, WS dual-accept) |
-| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120–121 + WP-123 DONE → WP-122+); Plan 20B cinematic 3D remains DEFERRED |
+| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120–123 DONE → WP-124+); Plan 20B cinematic 3D remains DEFERRED |
 | **Anvil release candidate** | Normal user can Find Match → Groq AI session → verify → withdraw with **zero GAPs** (WP-106–112) |
 
 ---
@@ -242,10 +242,10 @@
 | WP-122 | Play / Find Match | `DONE` |
 | WP-123 | Strategy setup (profiles + tuning) | `DONE` |
 | WP-124 | Wallet / onboarding (ArenaAccount) | `IN_PROGRESS` |
-| WP-125 | Live table 2D premium | `NOT_STARTED` |
-| WP-126 | AI cognition presentation | `NOT_STARTED` |
+| WP-125 | Live table 2D premium | `IN_PROGRESS` |
+| WP-126 | AI cognition presentation | `IN_PROGRESS` |
 | WP-127 | Result / replay | `NOT_STARTED` |
-| WP-128 | Verify UX (trust badge → deep verify) | `NOT_STARTED` |
+| WP-128 | Verify UX (trust badge → deep verify) | `IN_PROGRESS` |
 | WP-129 | Watch / spectator | `NOT_STARTED` |
 | WP-130 | Rankings / profile | `NOT_STARTED` |
 | WP-131 | Mobile / performance | `NOT_STARTED` |
@@ -260,6 +260,25 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 ---
 
 ## Session log
+
+### 2026-08-07 — WP-122 Play / Find Match (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- Consumer Play flow on WP-120 tokens: Game → League (Bronze→Platinum) → AI profile → Tune (`/my-ai` WP-123) → Find Match
+- Searching / sealing / seating status UI; clear loading + error states
+- `profileConfigHash` returned at queue entry (`waiting`) and shown as locked in UI; integrates WP-123 strategy draft / preferred profile
+- Routes: `/poker`, `/poker/classic` via `ArenaFindMatch`
+- Docs: `docs/WP-122_PLAY_FIND_MATCH.md`
+
+**Commands / evidence:**
+- `pnpm --filter @mozetto/web typecheck` — pass
+- `pnpm --filter @mozetto/api typecheck` — blocked by pre-existing `@mozetto/session-seal` resolve (WP-106 track); WP-122 API delta is additive `profileConfigHash` fields only
+
+**Out of scope:** Spec mutations; WP-123 trait sliders (done separately); WP-124 wallet onboarding polish.
+
+**Follow-up:** WP-124 Wallet / ArenaAccount.
 
 ### 2026-08-07 — WP-123 Strategy setup (DONE)
 

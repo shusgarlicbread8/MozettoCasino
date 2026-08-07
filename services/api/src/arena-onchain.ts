@@ -974,6 +974,9 @@ export async function handleOnchainFindMatch(
       arenaMode: "onchain" as const,
       chainId,
       ticketId: selfTicket.id,
+      /** Locked at queue entry — SeatTicket.profileConfigHash / agent_profile_hash. */
+      profileConfigHash: selfTicket.agent_profile_hash,
+      profileKey: _profileKey,
     };
   }
 

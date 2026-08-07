@@ -21,6 +21,7 @@ import {
   getUserArenaMode,
   ensureModeAccounts,
   getProfileKind,
+  getAgentProfileHash,
   type ArenaFormat,
 } from "@mozetto/database";
 import { getChainConfig } from "@mozetto/blockchain";
@@ -878,34 +879,50 @@ async function executeArenaFindMatch(
   const profileKey = body.profileKey && allowed.includes(body.profileKey) ? body.profileKey : null;
   await persistAiProfile(session.profileId, profileKey, body.risk ?? "balanced");
 
+  /** Published preset hash for client lock display (SeatTicket hash is authoritative on-chain). */
+  let profileConfigHash: string | null = null;
+  if (profileKey) {
+    try {
+      profileConfigHash = await getAgentProfileHash(profileKey);
+    } catch {
+      profileConfigHash = null;
+    }
+  }
+
   const arenaMode = session.profileKind === "onchain" ? "onchain" : "demo";
 
   if (arenaMode === "onchain") {
     const onchain = await handleOnchainFindMatch(req, reply, session, leagueId, profileKey, format);
     if (!onchain || reply.sent) return;
-    if ("status" in onchain && onchain.status === "waiting") {
-      return onchain;
+    const withHash = {
+      ...onchain,
+      profileKey: (onchain as { profileKey?: string | null }).profileKey ?? profileKey,
+      profileConfigHash:
+        (onchain as { profileConfigHash?: string }).profileConfigHash ?? profileConfigHash,
+    };
+    if ("status" in withHash && withHash.status === "waiting") {
+      return withHash;
     }
-    if ("status" in onchain && onchain.status === "matching") {
-      return { ...onchain, joined: false };
+    if ("status" in withHash && withHash.status === "matching") {
+      return { ...withHash, joined: false };
     }
-    if (onchain.alreadySeated) {
-      return { ...onchain, joined: true };
+    if (withHash.alreadySeated) {
+      return { ...withHash, joined: true };
     }
-    if (!onchain.tableId) {
-      return { ...onchain, joined: false };
+    if (!withHash.tableId) {
+      return { ...withHash, joined: false };
     }
 
     const joinDeadline = Date.now() + 25_000;
     let lastErr: Record<string, unknown> = {};
     while (Date.now() < joinDeadline) {
       try {
-        const { res, data } = await joinGameTable(req, onchain.tableId, onchain.buyIn);
+        const { res, data } = await joinGameTable(req, withHash.tableId, withHash.buyIn);
         if (res.ok) {
           return {
-            ...onchain,
+            ...withHash,
             waitingForChain: false,
-            sessionStatus: onchain.sessionStatus === "pending" ? "opened" : onchain.sessionStatus,
+            sessionStatus: withHash.sessionStatus === "pending" ? "opened" : withHash.sessionStatus,
             joined: true,
             seatIndex: data.seatIndex,
             sessionId: data.sessionId,
@@ -922,7 +939,7 @@ async function executeArenaFindMatch(
           return reply.code(res.status).send({
             error: "join_failed",
             message: msg || "Could not seat at table",
-            match: onchain,
+            match: withHash,
           });
         }
       } catch (e) {
@@ -932,7 +949,7 @@ async function executeArenaFindMatch(
     }
 
     return {
-      ...onchain,
+      ...withHash,
       joined: false,
       waitingForChain: true,
       message:
@@ -965,7 +982,7 @@ async function executeArenaFindMatch(
   }
 
   if (match.alreadySeated) {
-    return { ...match, joined: true };
+    return { ...match, joined: true, profileKey, profileConfigHash };
   }
 
   try {
@@ -983,6 +1000,8 @@ async function executeArenaFindMatch(
       seatIndex: data.seatIndex,
       sessionId: data.sessionId,
       alreadySeated: Boolean(data.alreadySeated),
+      profileKey,
+      profileConfigHash,
     };
   } catch (e) {
     return reply.code(502).send({
