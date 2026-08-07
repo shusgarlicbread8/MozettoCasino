@@ -49,6 +49,7 @@ type Table = {
   comingSoon?: boolean;
 };
 
+/** Design-preview table cards only — not live lobby data. Do not treat as production rankings. */
 const TABLES: Table[] = [
   { name: "Emerald 4", league: "Bronze", game: "Poker (Classic)", blinds: "$0.25 / $0.50", seats: 5, maxSeats: 6, speed: "Fast", min: 10, max: 100, bb: 0.5, avgPot: "$14", rake: "2.5% capped", g: "classic" },
   { name: "Harbour 9", league: "Silver", game: "Poker (Classic)", blinds: "$2 / $5", seats: 4, maxSeats: 6, speed: "Standard", min: 100, max: 1000, bb: 5, avgPot: "$164", rake: "2.5% capped", g: "classic" },

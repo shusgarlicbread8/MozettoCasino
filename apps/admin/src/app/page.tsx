@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { adminFetch, fetchHealth } from "@/lib/api";
 
 type Overview = {
@@ -35,7 +36,14 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold">Dashboard</h1>
+      <div>
+        <h1 className="text-xl font-semibold">Dashboard</h1>
+        <p className="muted text-sm mt-1">
+          Chain/solvency overview (WP-091). Ops investigation:{" "}
+          <Link href="/sessions">Sessions</Link>, <Link href="/randomness">Randomness</Link>,{" "}
+          <Link href="/ai">AI health</Link> (WP-092 — read-only).
+        </p>
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="card">
@@ -91,6 +99,9 @@ export default async function DashboardPage() {
       <div className="card">
         <h2 className="text-sm font-semibold mb-2">Vault solvency</h2>
         <p className="text-sm muted">{overview?.vaultSolvencyNote ?? "—"}</p>
+        <p className="text-xs mt-2">
+          <Link href="/solvency">Open chain / solvency dashboard →</Link>
+        </p>
         {overview?.lastReconciliationRuns.slice(0, 3).map((r) => (
           <div key={r.id} className="text-xs mt-2 flex gap-3">
             <span>chain {r.chain_id}</span>

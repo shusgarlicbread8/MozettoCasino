@@ -20,8 +20,10 @@ function LoginForm() {
     <div className="card max-w-md">
       <h1 className="text-lg font-semibold mb-2">Admin login</h1>
       <p className="muted text-sm mb-4">
-        Set cookie via <code>?token=YOUR_ADMIN_TOKEN</code> or send <code>x-admin-token</code> header.
-        Production must use MFA-backed SSO in front of this app.
+        Set cookie via <code>?token=…</code> (<code>ADMIN_READ_TOKEN</code> for view-only,{" "}
+        <code>ADMIN_MUTATE_TOKEN</code> / <code>ADMIN_TOKEN</code> for privileged ops) or send{" "}
+        <code>x-admin-token</code>. Production: separate Vercel project + hardware MFA/SSO in front —
+        never put tokens in <code>NEXT_PUBLIC_*</code>.
       </p>
       {!tokenParam && (
         <p className="text-sm">

@@ -389,8 +389,8 @@ export default function LandingPage() {
               every player receives the same reasoning energy, and no AI ever sees another&apos;s cards or reasoning.
               Spectators watch on a delay.
             </p>
-            <Link href="/live" style={{ display: "inline-block", marginTop: 22, fontSize: 14 }}>
-              See a fairness panel on a live table →
+            <Link href="/verify" style={{ display: "inline-block", marginTop: 22, fontSize: 14 }}>
+              Open public Verify Game →
             </Link>
           </div>
           <div

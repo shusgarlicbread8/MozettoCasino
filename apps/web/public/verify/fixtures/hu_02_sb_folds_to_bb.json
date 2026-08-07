@@ -1,0 +1,58 @@
+{
+  "id": "hu_02_sb_folds_to_bb",
+  "description": "HU: button/SB folds preflop; BB wins pot without showdown (no rake)",
+  "coverage": [
+    "fold-win",
+    "blinds",
+    "hu"
+  ],
+  "format": "hu",
+  "seatCount": 2,
+  "config": {
+    "tableId": "freeze-hu",
+    "smallBlind": 50,
+    "bigBlind": 100,
+    "rakePct": 0,
+    "rakeCap": null
+  },
+  "seats": [
+    {
+      "seatIndex": 0,
+      "stack": 10000
+    },
+    {
+      "seatIndex": 1,
+      "stack": 10000
+    }
+  ],
+  "steps": [
+    {
+      "op": "startHand",
+      "serverSeed": "wp030-hu-fold",
+      "handId": "hand-hu-fold"
+    },
+    {
+      "op": "action",
+      "action": "fold"
+    },
+    {
+      "op": "expect",
+      "expect": {
+        "street": "settlement",
+        "pot": 0,
+        "rake": 0,
+        "winners": [
+          {
+            "seatIndex": 1,
+            "amount": 150
+          }
+        ],
+        "stacks": [
+          9950,
+          10050
+        ],
+        "stateHash": "0x9bc5b91a53df4bbd57dbc4fbb2469a1d6c9b723ecc0c98afc56338a960226b54"
+      }
+    }
+  ]
+}

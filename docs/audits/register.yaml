@@ -1,0 +1,228 @@
+# Mozetto audit / adversarial findings register (WP-104)
+# Human companion: docs/audits/FINDINGS.md
+# Validate: pnpm audit:register-check
+# schema_version bumps only when field rules change.
+
+schema_version: 1
+packet: WP-104
+updated: "2026-08-07"
+notes: >
+  Scaffold only. No paid/external multi-stream audit is claimed complete.
+  Residual rows document known gaps (e.g. WP-100 PASS_WITH_GAPS).
+  Do not invent Critical/High rows with source external-audit without report_ref.
+
+severities:
+  - Critical
+  - High
+  - Medium
+  - Low
+  - Informational
+  - Residual
+
+statuses:
+  - TEMPLATE
+  - OPEN
+  - IN_PROGRESS
+  - FIXED_PENDING_VERIFY
+  - CLOSED
+  - ACCEPTED_RISK
+  - WONT_FIX
+  - DEFERRED
+
+streams:
+  - contracts-custody
+  - randomness-dealer
+  - engine-replay
+  - wallet-auth
+  - backend-admin
+  - process
+  - cross-cutting
+
+sources:
+  - template
+  - wp-104-scaffold-example
+  - internal-review
+  - wp-100-gap
+  - residual-gap
+  - stage-c
+  - chaos
+  - watchtower
+  - reconcile
+  - verify
+  - external-audit
+
+integrity_tooling:
+  - packet: WP-101
+    doc: docs/WP-101_CHAOS_SUITE.md
+    command: pnpm test:chaos
+  - packet: WP-095
+    doc: docs/WP-095_WATCHTOWER.md
+    command: pnpm watchtower
+  - packet: WP-090
+    doc: docs/WP-090_VERIFY_GAME.md
+    command: "public /verify + verify API"
+  - packet: WP-083
+    doc: docs/WP-083_RECONCILIATION_WORKER.md
+    command: reconciliation-worker / admin solvency
+
+findings:
+  - id: MOZ-TPL-001
+    title: "Empty template — copy for new findings"
+    severity: Informational
+    status: TEMPLATE
+    stream: process
+    source: template
+    owner: ""
+    description: >
+      Placeholder row. Copy structure when filing a real finding.
+      Assign a new id (MOZ-AUD-*, MOZ-C-*, MOZ-INT-*, MOZ-RES-*).
+    impact: ""
+    report_ref: ""
+    fix_refs: []
+    verification:
+      verifier: ""
+      date: ""
+      commands: []
+      evidence: ""
+    signoff:
+      by: ""
+      rationale: ""
+      review_by: ""
+
+  - id: MOZ-EX-001
+    title: "Audit remediation register lacked machine-checkable integrity gate"
+    severity: Informational
+    status: CLOSED
+    stream: process
+    source: wp-104-scaffold-example
+    owner: WP-104
+    description: >
+      No durable findings register with severity taxonomy, CLOSED evidence rules,
+      or CI validation existed before WP-104.
+    impact: "Process/documentation only — no protocol fund-flow defect."
+    report_ref: ""
+    fix_refs:
+      - docs/WP-104_AUDIT_REMEDIATION.md
+      - docs/audits/FINDINGS.md
+      - docs/audits/register.yaml
+      - scripts/audits/check-register.mjs
+    verification:
+      verifier: "WP-104 register-check automation / CI hook"
+      date: "2026-08-07"
+      commands:
+        - pnpm audit:register-check
+      evidence: "CLOSED rows require verifier + date + commands/evidence; CI enforces schema"
+    signoff:
+      by: ""
+      rationale: ""
+      review_by: ""
+
+  - id: MOZ-RES-100-01
+    title: "WP-100 GAP — ranked match / find-match API not in default E2E"
+    severity: Residual
+    status: OPEN
+    stream: engine-replay
+    source: wp-100-gap
+    owner: unassigned
+    description: >
+      Default e2e:protocol-v3 uses on-chain openSession; API match path needs --with-api.
+    impact: "E2E coverage gap; not an invented external-audit Critical."
+    report_ref: docs/WP-100_ANVIL_E2E.md
+    fix_refs: []
+    verification:
+      verifier: ""
+      date: ""
+      commands: []
+      evidence: ""
+    signoff:
+      by: ""
+      rationale: ""
+      review_by: ""
+
+  - id: MOZ-RES-100-02
+    title: "WP-100 GAP — sealAndFundSession atomic path not exercised"
+    severity: Residual
+    status: OPEN
+    stream: contracts-custody
+    source: wp-100-gap
+    owner: unassigned
+    description: >
+      E2E uses SessionLifecycle draft→seal + vault openSession, not atomic sealAndFundSession.
+    impact: "Integration coverage gap for WP-041 submit path."
+    report_ref: docs/WP-100_ANVIL_E2E.md
+    fix_refs: []
+    verification:
+      verifier: ""
+      date: ""
+      commands: []
+      evidence: ""
+    signoff:
+      by: ""
+      rationale: ""
+      review_by: ""
+
+  - id: MOZ-RES-100-03
+    title: "WP-100 GAP — AI hands / continuous cognition not wired in E2E"
+    severity: Residual
+    status: OPEN
+    stream: engine-replay
+    source: wp-100-gap
+    owner: unassigned
+    description: >
+      Settlement uses stub roots; AI-only hands / continuous cognition not end-to-end in orchestrator.
+    impact: "Phase 9 exit PASS_WITH_GAPS; cannot claim full AI-session Anvil lifecycle."
+    report_ref: docs/WP-100_ANVIL_E2E.md
+    fix_refs: []
+    verification:
+      verifier: ""
+      date: ""
+      commands: []
+      evidence: ""
+    signoff:
+      by: ""
+      rationale: ""
+      review_by: ""
+
+  - id: MOZ-RES-054-01
+    title: "Live AWS Nitro enclave cutover deferred"
+    severity: Residual
+    status: DEFERRED
+    stream: randomness-dealer
+    source: residual-gap
+    owner: ops
+    description: >
+      WP-054 mock attestation scaffold only; production TEE needs live Nitro + measurements.
+    impact: "Dealer trust remains scaffold until live Nitro; do not claim mental poker."
+    report_ref: docs/WP-054_NITRO_ENCLAVE_DEALER.md
+    fix_refs: []
+    verification:
+      verifier: ""
+      date: ""
+      commands: []
+      evidence: ""
+    signoff:
+      by: ops
+      rationale: "Deferred to live Nitro cutover; tracked for Plan 14 dealer/randomness readiness."
+      review_by: "before-mainnet"
+
+  - id: MOZ-RES-102-01
+    title: "Base Sepolia live protocol deploy / Stage A blocked on ops"
+    severity: Residual
+    status: DEFERRED
+    stream: process
+    source: residual-gap
+    owner: ops
+    description: >
+      Recipes ready; baseSepolia.json protocol addresses null until funded broadcast.
+    impact: "Blocks live Stage C inputs; no invented addresses."
+    report_ref: docs/WP-102_SEPOLIA_DEPLOYMENT.md
+    fix_refs: []
+    verification:
+      verifier: ""
+      date: ""
+      commands: []
+      evidence: ""
+    signoff:
+      by: ops
+      rationale: "Await funded deployer + sepolia:deploy before Stage A/B/C."
+      review_by: "WP-103 Stage A gate"
