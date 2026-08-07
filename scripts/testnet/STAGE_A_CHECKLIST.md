@@ -1,6 +1,7 @@
 # Stage A checklist — team-only Base Sepolia
 
 **Authority:** `docs/WP-103_PUBLIC_TESTNET_PROGRAM.md`  
+**Ops sequence:** `docs/WAVE_13_STAGE_A_GO_LIVE.md`  
 **Prerequisite:** WP-102 exit criteria (live deploy + filled manifest). Do not tick boxes against invented addresses.
 
 Use this only after `pnpm testnet:stage-a-gate` exits **0**.
@@ -9,7 +10,7 @@ Use this only after `pnpm testnet:stage-a-gate` exits **0**.
 
 ## Pre-flight
 
-- [ ] `pnpm sepolia:check` — funded ops deployer (not Anvil #0 with ~0 ETH)
+- [ ] `pnpm sepolia:check` — funded **non-Anvil** ops deployer (≥0.05 ETH; Anvil `#0`–`#9` refused)
 - [ ] `pnpm sepolia:deploy` completed; `WRITE_CHAIN_MANIFEST=1` wrote real addresses
 - [ ] `pnpm sepolia:verify` (or documented Basescan retry)
 - [ ] Chainlink VRF adapter deployed + consumer added + `node scripts/sepolia-merge-vrf-adapter.mjs …`

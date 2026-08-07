@@ -219,6 +219,7 @@ pnpm manifest:codegen → baseSepolia protocol addresses remain null
 
 ## Follow-up
 
-- Ops: fund deployer → `pnpm sepolia:deploy` → verify → VRF adapter → commit real manifest.  
-- WP-103 public testnet program.  
-- Raise GameRegistry / fee-vault / proof-batch delays and attestor quorum for staging hardening.
+- Ops go-live sequence: `docs/WAVE_13_STAGE_A_GO_LIVE.md` (non-Anvil key → fund ≥0.05 ETH → deploy → verify → VRF → attestors → hosted → `pnpm testnet:stage-a-gate`).  
+- WP-103 public testnet program (Stage A after gate PASS).  
+- Raise GameRegistry / fee-vault / proof-batch delays and attestor quorum for staging hardening.  
+- `scripts/sepolia-deploy.sh` refuses Anvil `#0`–`#9` for live Sepolia broadcast.

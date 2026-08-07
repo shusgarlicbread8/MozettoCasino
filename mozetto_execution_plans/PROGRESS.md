@@ -2,7 +2,7 @@
 
 **Authority:** Follows `00_READ_ME_FIRST.md`, `01_MASTER_EXECUTION_ROADMAP.md`, `16_AGENT_WORK_PACKETS.md`, `17_FINAL_DEFINITION_OF_DONE.md`.  
 **Rule:** Protocol V3 specs are **frozen** (WP-010–015). Implementations MUST match `/specs` and fail CI if vectors diverge. Do not invent new encodings.  
-**Last updated:** 2026-08-07 (WP-106 Anvil golden PASS FAIL=0 GAP=0; Wave 11 Anvil RC gate met; Wave 12 DONE)
+**Last updated:** 2026-08-07 (Wave 13 Stage A go-live runbook READY; live tx still blocked on funded non-Anvil deployer)
 
 ---
 
@@ -20,11 +20,11 @@
 
 | Field | Value |
 |---|---|
-| **Active wave** | **Wave 11 Production Integration** + **Wave 12 Consumer UX** (parallel) |
-| **Active packets** | Wave 11 Anvil RC gate met (WP-106–113 DONE); Wave 12 DONE; Sepolia Stage A unblocked pending ops |
+| **Active wave** | **Wave 13 Hosted staging / Sepolia Stage A** (Wave 11 Anvil RC MET; Wave 12 DONE) |
+| **Active packets** | Wave 13 Stage A go-live runbook READY; live broadcast pending funded non-Anvil deployer |
 | **Architecture status** | Protocol architecture largely built (~component-complete). Remaining work is integration, productization, hosted staging — **not** “ops only.” |
-| **Blocked until (Sepolia Stage A)** | Funded Base Sepolia deployer → `pnpm sepolia:deploy` → verify → VRF → 3-of-N attestors → `pnpm testnet:stage-a-gate` PASS |
-| **Hard stop** | No new architecture invention; live AWS Nitro during Stage A; Plan 15 expansion stays deferred |
+| **Blocked until (Sepolia Stage A)** | Funded **non-Anvil** Base Sepolia deployer → `pnpm sepolia:deploy` → verify → VRF → 3-of-N attestors → hosted services → `pnpm testnet:stage-a-gate` PASS |
+| **Hard stop** | No Anvil keys on Sepolia broadcast; no invented addresses; no live AWS Nitro claim during Stage A; Plan 15 expansion stays deferred |
 | **WP-100 correction** | WP-100 = `PASS_WITH_GAPS` only. Gaps reopened as WP-106–108 (sealAndFund, API match, live AI hands, real roots). |
 | **Wave 0 note** | Packets DONE; `baseline-v2` tag optional (create only when user requests) |
 | **Plan 02 note** | Specs **frozen**; WP-015 TS/Rust/Solidity hashes identical |
@@ -255,11 +255,42 @@
 
 ### Wave 13 — Hosted staging / Sepolia (after Wave 11 gate)
 
-Hosted Postgres/Redis + all services → observability → fund deployer → `pnpm sepolia:deploy` → verify → VRF → 3-of-N attestors → Stage A. Production Nitro during Stage A. Then B → C → audits → WP-105 mainnet.
+| Item | Status | Notes |
+|---|---|---|
+| Stage A go-live runbook | `DONE` (recipes) | `docs/WAVE_13_STAGE_A_GO_LIVE.md` — ordered ops checklist |
+| Anvil-key refuse on Sepolia broadcast | `DONE` | `scripts/sepolia-deploy.sh` refuses Anvil `#0`–`#9` |
+| Funded non-Anvil deployer | `BLOCKED` | Ops: replace `PRIVATE_KEY`, fund ≥0.05 ETH on `84532` |
+| Live `pnpm sepolia:deploy` | `BLOCKED` | Honest nulls in `baseSepolia.json` until broadcast |
+| Basescan verify + VRF adapter | `BLOCKED` | After deploy; WP-053 merge helper |
+| Attestor 3-of-N + hosted stack | `BLOCKED` | Distinct staging keys; WP-086 / WP-110 |
+| Live AWS Nitro TEE | `DEFERRED` | Not a Stage A entry gate; WP-054 follow-up |
+| `pnpm testnet:stage-a-gate` | `FAIL` (expected) | Exit 0 only after manifest + VRF filled |
+
+**Wave 13 rule:** Do not invent Sepolia addresses. Do not broadcast with Anvil defaults. Nitro is deferred honesty, not a Stage A blocker. After gate PASS → WP-103 Stage A exercises → B → C → WP-104 → WP-105.
 
 ---
 
 ## Session log
+
+### 2026-08-07 — Wave 13 Stage A go-live runbook (DONE — recipes; live tx blocked)
+
+**Status:** `DONE` for ops **runbook + Anvil-key hardening**. Live Stage A remains **BLOCKED** until a funded non-Anvil deployer exists.
+
+**Delivered:**
+- `docs/WAVE_13_STAGE_A_GO_LIVE.md` — ordered checklist: replace `PRIVATE_KEY` → fund ≥0.05 ETH → `sepolia:deploy` → verify → VRF adapter → 3-of-N attestors → hosted services → Nitro deferred note → `testnet:stage-a-gate` PASS
+- `scripts/sepolia-deploy.sh` — refuse well-known Anvil `#0`–`#9` private keys **and** addresses on `check` / `broadcast` (hard fail before forge)
+- PROGRESS Wave 13 section expanded; pointers to WP-102 / WP-103 / WP-053 / WP-054 / WP-086
+
+**Commands / evidence:**
+- `pnpm sepolia:check` — expected **FAIL** while `.env.local` still has Anvil `#0` / ~0 ETH (`anvil_key_gate=FAIL` and/or `balance_gate=FAIL`)
+- `pnpm testnet:stage-a-gate` — expected **FAIL** (11 protocol addresses null; VRF adapter null)
+- No live broadcast attempted; no invented addresses committed
+
+**Spec clauses:** Plan 14 Stage A entry; Phase 11 Sepolia deploy gate — recipes only until ops fund.
+
+**Out of scope / intentional gaps:** Live Base Sepolia txs; inventing `baseSepolia.json` addresses; claiming Nitro TEE; Stage B/C invite traffic.
+
+**Follow-up:** Ops: non-Anvil `PRIVATE_KEY` + ≥0.05 ETH → `pnpm sepolia:deploy` → verify → VRF → attestors → hosted → `pnpm testnet:stage-a-gate` PASS → `scripts/testnet/STAGE_A_CHECKLIST.md`.
 
 ### 2026-08-07 — WP-129 residual: server spectator delay buffer (DONE)
 
@@ -2366,6 +2397,7 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 | Full Anvil protocol E2E (WP-100) | `scripts/anvil-e2e-protocol-v3.{mjs,sh}` + `docs/WP-100_ANVIL_E2E.md` (`pnpm e2e:protocol-v3`) — GAP-tolerant |
 | Anvil golden zero-GAP E2E (WP-106) | `scripts/anvil-e2e-golden.{mjs,sh}` + `docs/WP-106_ANVIL_GOLDEN_E2E.md` (`pnpm e2e:golden`) |
 | Sepolia deploy recipes (WP-102) | `contracts/script/DeploySepolia.s.sol` + `scripts/sepolia-*.{sh,mjs}` + `docs/WP-102_SEPOLIA_DEPLOYMENT.md` (`pnpm sepolia:*`) — live tx pending ops |
+| Wave 13 Stage A go-live | `docs/WAVE_13_STAGE_A_GO_LIVE.md` + Anvil-key refuse in `sepolia-deploy.sh` — live Stage A blocked on funded non-Anvil deployer |
 | Public testnet program (WP-103) | `docs/WP-103_PUBLIC_TESTNET_PROGRAM.md` + `scripts/testnet/` (`pnpm testnet:*`) — live Stage A blocked on ops deploy |
 | Audit remediation register (WP-104) | `docs/WP-104_AUDIT_REMEDIATION.md` + `docs/audits/` (`pnpm audit:register-check`) — scaffold; external audits pending |
 | Restricted mainnet recipes/gates (WP-105) | `docs/WP-105_RESTRICTED_MAINNET.md` + `scripts/mainnet/` + `deployments/base.json` (`pnpm mainnet:*`) — live mainnet BLOCKED |
