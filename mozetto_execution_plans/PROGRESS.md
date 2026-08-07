@@ -2,7 +2,7 @@
 
 **Authority:** Follows `00_READ_ME_FIRST.md`, `01_MASTER_EXECUTION_ROADMAP.md`, `16_AGENT_WORK_PACKETS.md`, `17_FINAL_DEFINITION_OF_DONE.md`.  
 **Rule:** Protocol V3 specs are **frozen** (WP-010–015). Implementations MUST match `/specs` and fail CI if vectors diverge. Do not invent new encodings.  
-**Last updated:** 2026-08-07 (WP-131 Mobile / performance DONE; WP-120–124 + WP-128–132 DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
+**Last updated:** 2026-08-07 (WP-129 Watch / spectator DONE; WP-120–132 Wave 12 consumer UX largely DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
 
 ---
 
@@ -21,7 +21,7 @@
 | Field | Value |
 |---|---|
 | **Active wave** | **Wave 11 Production Integration** + **Wave 12 Consumer UX** (parallel) |
-| **Active packets** | WP-106–113 (Track A/C), WP-126+ (Track B; WP-120–125 + WP-127–128 + WP-130–132 DONE); Sepolia Stage A blocked until WP-106–112 green |
+| **Active packets** | WP-106–113 (Track A/C), Wave 12 Track B largely DONE (WP-120–132); Sepolia Stage A blocked until WP-106–112 green |
 | **Architecture status** | Protocol architecture largely built (~component-complete). Remaining work is integration, productization, hosted staging — **not** “ops only.” |
 | **Blocked until (Sepolia Stage A)** | WP-106–112 green on Anvil release candidate; then funded Sepolia deploy |
 | **Hard stop** | No new architecture invention; live AWS Nitro during Stage A; Plan 15 expansion stays deferred |
@@ -31,7 +31,7 @@
 | **Plan 11 note** | Rake/treasury + WP-111 COGS hooks DONE; Season 1 schedule + pricing remain **hypotheses** (no GameTemplate freeze) |
 | **Plan 12 note** | Ratings / anti-cheat DONE — ML collusion deferred |
 | **Plan 19 note** | Schema map DONE; hosted cutover **WP-110 DONE** (GRANTs `030`, scheduler persist, WS dual-accept) |
-| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120–125 + WP-127–128 + WP-130–132 DONE → WP-126/129); Plan 20B cinematic 3D remains DEFERRED |
+| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120–132 DONE including WP-129 Watch); Plan 20B cinematic 3D remains DEFERRED |
 | **Anvil release candidate** | Normal user can Find Match → Groq AI session → verify → withdraw with **zero GAPs** (WP-106–112) |
 
 ---
@@ -243,10 +243,10 @@
 | WP-123 | Strategy setup (profiles + tuning) | `DONE` |
 | WP-124 | Wallet / onboarding (ArenaAccount) | `DONE` |
 | WP-125 | Live table 2D premium | `DONE` |
-| WP-126 | AI cognition presentation | `IN_PROGRESS` |
+| WP-126 | AI cognition presentation | `DONE` |
 | WP-127 | Result / replay | `DONE` |
 | WP-128 | Verify UX (trust badge → deep verify) | `DONE` |
-| WP-129 | Watch / spectator | `NOT_STARTED` |
+| WP-129 | Watch / spectator | `DONE` |
 | WP-130 | Rankings / profile | `DONE` |
 | WP-131 | Mobile / performance | `DONE` |
 | WP-132 | 3D event adapter (no art dependency) | `DONE` |
@@ -260,6 +260,42 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 ---
 
 ## Session log
+
+### 2026-08-07 — WP-129 Watch / spectator (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- `/live` watch lobby: real public sessions from `GET /v1/tables` (HU + Classic) via `lib/watch.ts`; featured = allocated seats ≥ 2; honest empty + ~90s delay policy copy
+- `/live/[tableId]` spectator: WS `role: "spectator"`, public board/pot/actions only — hole cards ignored until legal reveal
+- Docs: `docs/WP-129_WATCH_SPECTATOR.md`
+
+**Commands / evidence:**
+- `pnpm --filter @mozetto/web typecheck` — pass
+
+**Out of scope:** Spec / protocol mutations; server `spectator-delayed` buffer (Plan 07 follow-up); fake HOT pots / viewer counts.
+
+**Follow-up:** Enforce delay on game-server channel; WP-125 felt polish may reuse spectator route.
+
+### 2026-08-07 — WP-126 AI cognition presentation (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- Owner Energy bar + public cognition state machine (OBSERVING / ANALYSING / UPDATING OPPONENT MODEL / DECISION READY / ACTING)
+- agent-runtime public mapping + observe seat statuses + `GET /v1/public-cognition/...`
+- game-server owner-only WS `ai_cognition` frames on observe / decide / cadence / hand begin
+- WP-125 table feed + rail integration with honest public-event fallback when signals missing
+- Docs: `docs/WP-126_AI_COGNITION_UI.md`
+
+**Acceptance evidence:**
+- `pnpm --filter @mozetto/agent-runtime test` — WP-126 mapping + observe seats
+- `pnpm --filter @mozetto/agent-runtime typecheck`
+- No CoT / private AgentState / opponent Energy in UI frames
+
+**Out of scope:** Spec mutations; Plan 20B 3D; spectator Energy.
+
+**Follow-up:** WP-129 spectator must not receive owner frames; WP-127 analysis Energy summary polish.
 
 ### 2026-08-07 — WP-125 Live table 2D premium (DONE)
 

@@ -20,7 +20,7 @@ import { Button } from "@/components/ui";
 import { color, font, radius } from "@/lib/design-tokens";
 import { verifyHref } from "@/lib/verify/trust";
 import { CARD_BACK, engineCard } from "@/lib/table/cards";
-import { deriveSeatCognition } from "@/lib/table/cognition";
+import { deriveSeatCognition, statusFromSeatView } from "@/lib/table/cognition";
 import { useTableFeed } from "@/lib/table/use-table-feed";
 import { WS_CLIENT } from "@/lib/table/ws-client";
 
@@ -59,8 +59,14 @@ export default function TableClient() {
     connecting,
     remaining,
     ownerEnergyPct,
+    ownerCognition,
     refreshMeta,
-  } = useTableFeed({ tableId, role: "player", onMetaRefresh });
+  } = useTableFeed({
+    tableId,
+    role: "player",
+    ownerUserId: me?.profile?.id ?? null,
+    onMetaRefresh,
+  });
 
   const myLiveSeat = live?.seats?.find((s) => s.playerId && me?.profile?.id && s.playerId === me.profile.id);
   const mySeatIndex = myLiveSeat?.seatIndex;
@@ -226,7 +232,12 @@ export default function TableClient() {
     street: live?.street,
     remainingSec: myTurn ? remaining : null,
     ownerEnergyPct,
+    liveStatus: ownerCognition,
   });
+  const cognitionStatus =
+    ownerCognition.signalSource !== "unavailable"
+      ? ownerCognition
+      : statusFromSeatView(ownerCog, live?.handId ?? null);
 
   const liveHole =
     live?.holeCards?.length
@@ -514,6 +525,8 @@ export default function TableClient() {
         mode={connecting ? "CONNECTING" : "LIVE ENGINE"}
         modeColor={connecting ? color.warn : color.accent}
         cognitionPhase={ownerCog.phase}
+        cognitionStatus={cognitionStatus}
+        seated={mySeated}
         cognitionNote="Your agent acts on the clock. Public cognition states appear here — never private reasoning or opponent Energy."
         analysis={pro}
         analysisStats={myStats}

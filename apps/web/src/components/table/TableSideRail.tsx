@@ -47,6 +47,8 @@ export function TableSideRail({
   modeColor,
   cognitionPhase,
   cognitionNote,
+  cognitionStatus,
+  seated = true,
   analysis,
   analysisStats,
   log,
@@ -64,6 +66,7 @@ export function TableSideRail({
     log.length > 0
       ? log
       : [{ n: "00", name: "DEALER", act: "WAITING FOR PLAYERS", color: color.textFaint, actColor: color.textMuted }];
+  const phaseChip = (cognitionPhase ?? "observing").replace(/_/g, " ").toUpperCase();
 
   return (
     <aside
@@ -177,10 +180,12 @@ export function TableSideRail({
               letterSpacing: ".07em",
               color: color.accent,
             }}
-            data-cognition-phase={cognitionPhase}
-            title="WP-126 cognition presentation hook — no chain-of-thought"
+            data-cognition-phase={cognitionStatus?.phase ?? cognitionPhase}
+            title="WP-126 cognition presentation — no chain-of-thought"
           >
-            {cognitionPhase.replace("_", " ").toUpperCase()}
+            {cognitionStatus
+              ? cognitionStatus.phase.replace(/_/g, " ")
+              : phaseChip}
           </div>
           <div
             className="mz-mono"
@@ -198,12 +203,19 @@ export function TableSideRail({
           </div>
         </summary>
         <div className="mz-rail-status-body" style={{ padding: "0 18px 16px" }}>
-          <div className="mz-mono" style={{ fontSize: 11.5, lineHeight: 1.7, color: color.textMuted }}>
-            {cognitionNote}
-          </div>
-          <div className="mz-mono" style={{ fontSize: 9, letterSpacing: ".1em", color: color.textFaint, marginTop: 8 }}>
-            PUBLIC STATES ONLY · NO CHAIN-OF-THOUGHT
-          </div>
+          {cognitionStatus ? (
+            <AiCognitionPanel status={cognitionStatus} seated={seated} agentLabel={agentName} compact />
+          ) : (
+            <>
+              <div className="mz-mono" style={{ fontSize: 11.5, lineHeight: 1.7, color: color.textMuted }}>
+                {cognitionNote ??
+                  "Public cognition states only — never private reasoning or opponent Energy."}
+              </div>
+              <div className="mz-mono" style={{ fontSize: 9, letterSpacing: ".1em", color: color.textFaint, marginTop: 8 }}>
+                PUBLIC STATES ONLY · NO CHAIN-OF-THOUGHT
+              </div>
+            </>
+          )}
         </div>
       </details>
 
