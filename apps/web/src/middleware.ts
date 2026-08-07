@@ -10,6 +10,7 @@ const PROTECTED = [
   "/live",
   "/rankings",
   "/replays",
+  "/result",
   "/sessions",
   "/notifications",
   "/settings",

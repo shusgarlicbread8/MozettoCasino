@@ -2,7 +2,7 @@
 
 **Authority:** Follows `00_READ_ME_FIRST.md`, `01_MASTER_EXECUTION_ROADMAP.md`, `16_AGENT_WORK_PACKETS.md`, `17_FINAL_DEFINITION_OF_DONE.md`.  
 **Rule:** Protocol V3 specs are **frozen** (WP-010–015). Implementations MUST match `/specs` and fail CI if vectors diverge. Do not invent new encodings.  
-**Last updated:** 2026-08-07 (WP-129 Watch / spectator DONE; WP-128 Verify UX DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
+**Last updated:** 2026-08-07 (WP-131 Mobile / performance DONE; WP-120–124 + WP-128–132 DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
 
 ---
 
@@ -21,7 +21,7 @@
 | Field | Value |
 |---|---|
 | **Active wave** | **Wave 11 Production Integration** + **Wave 12 Consumer UX** (parallel) |
-| **Active packets** | WP-106–113 (Track A/C), WP-125–132 (Track B; WP-120–124 + WP-128–130 + WP-132 DONE; WP-129 DONE); Sepolia Stage A blocked until WP-106–112 green |
+| **Active packets** | WP-106–113 (Track A/C), WP-126+ (Track B; WP-120–125 + WP-127–128 + WP-130–132 DONE); Sepolia Stage A blocked until WP-106–112 green |
 | **Architecture status** | Protocol architecture largely built (~component-complete). Remaining work is integration, productization, hosted staging — **not** “ops only.” |
 | **Blocked until (Sepolia Stage A)** | WP-106–112 green on Anvil release candidate; then funded Sepolia deploy |
 | **Hard stop** | No new architecture invention; live AWS Nitro during Stage A; Plan 15 expansion stays deferred |
@@ -31,7 +31,7 @@
 | **Plan 11 note** | Rake/treasury + WP-111 COGS hooks DONE; Season 1 schedule + pricing remain **hypotheses** (no GameTemplate freeze) |
 | **Plan 12 note** | Ratings / anti-cheat DONE — ML collusion deferred |
 | **Plan 19 note** | Schema map DONE; hosted cutover **WP-110 DONE** (GRANTs `030`, scheduler persist, WS dual-accept) |
-| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120–124 + WP-128–130 + WP-132 DONE; WP-129 DONE → WP-125–127, WP-131); Plan 20B cinematic 3D remains DEFERRED |
+| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120–125 + WP-127–128 + WP-130–132 DONE → WP-126/129); Plan 20B cinematic 3D remains DEFERRED |
 | **Anvil release candidate** | Normal user can Find Match → Groq AI session → verify → withdraw with **zero GAPs** (WP-106–112) |
 
 ---
@@ -82,7 +82,7 @@
 | 17 | Final definition of done | `DONE` | — | pack authored | Completion checklist |
 | 18 | Sources and decision log | `DONE` | — | pack authored | Locked decisions log |
 | 19 | Database schema API migration | `DONE` | 2026-08-07 | 2026-08-07 | Map DONE; hosted cutover WP-110 DONE |
-| 20A | Consumer product UX | `IN_PROGRESS` | 2026-08-07 | | Wave 12 WP-120–132 — WP-120–124 + WP-128–132 DONE; WP-125–127 next |
+| 20A | Consumer product UX | `IN_PROGRESS` | 2026-08-07 | | Wave 12 WP-120–132 — WP-125 Live table 2D DONE; WP-126/129 next |
 | 20B | Full 3D production | `DEFERRED` | | | After 2D table + WP-132 adapter (DONE) prove themselves — no art yet |
 
 ---
@@ -242,9 +242,9 @@
 | WP-122 | Play / Find Match | `DONE` |
 | WP-123 | Strategy setup (profiles + tuning) | `DONE` |
 | WP-124 | Wallet / onboarding (ArenaAccount) | `DONE` |
-| WP-125 | Live table 2D premium | `IN_PROGRESS` |
+| WP-125 | Live table 2D premium | `DONE` |
 | WP-126 | AI cognition presentation | `IN_PROGRESS` |
-| WP-127 | Result / replay | `IN_PROGRESS` |
+| WP-127 | Result / replay | `DONE` |
 | WP-128 | Verify UX (trust badge → deep verify) | `DONE` |
 | WP-129 | Watch / spectator | `NOT_STARTED` |
 | WP-130 | Rankings / profile | `DONE` |
@@ -260,6 +260,42 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 ---
 
 ## Session log
+
+### 2026-08-07 — WP-125 Live table 2D premium (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- Premium 2D autonomous felt on WP-120 tokens: board / pot / stacks / seats / clock / animated public actions
+- Shared table feed with game-server WS dual-accept (legacy + WP-110 v2 aliases); player + spectator roles
+- Cognition presentation hooks / placeholders for WP-126 (no CoT; no opponent hole cards)
+- Owner table `/table/:id` (`TableClient`); spectator `/live/:id`; Watch lobby `/live`
+- Docs: `docs/WP-125_LIVE_TABLE_2D.md`
+
+**Commands / evidence:**
+- `pnpm --filter @mozetto/web typecheck` — pass
+
+**Out of scope:** Spec mutations; WP-126 Energy frames; Plan 20B 3D art; server-side spectator delay enforcement (WP-129).
+
+**Follow-up:** WP-126 AI cognition presentation; WP-129 delay enforcement.
+
+### 2026-08-07 — WP-131 Mobile / performance (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- Mobile shell: hide sidebar ≤900px; bottom primary tab bar (hidden on `/table/*`); compact topbar; ≥44px touch targets
+- Responsive Home / Play / Wallet (`mz-page`, stacked Find Match grids)
+- Table: felt-over-rail stack, scaled seats, collapsible status/energy rail, wrapping action bar
+- Performance: `dynamic()` lazy-load `TableClient` + `JoinTableSheet` off first paint of other routes
+- Docs: `docs/WP-131_MOBILE_PERFORMANCE.md`
+
+**Commands / evidence:**
+- `pnpm --filter @mozetto/web typecheck` — pass
+
+**Out of scope:** Spec mutations; Plan 20B 3D tiers; Lighthouse CI gate; Web3/framer root split.
+
+**Follow-up:** Optional AppShell motion code-split; WP-125/126 keep `mz-table-*` classes.
 
 ### 2026-08-07 — WP-127 Result / replay (DONE)
 
@@ -2240,6 +2276,8 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 | Attest-v3 HTTP (WP-084 follow-up) | dealer `/v1/dealer/attest-v3` + replay `/v1/attest-settlement-v3` + `docs/WP-084_ATTEST_V3_HTTP.md` |
 | Hosted deployment recipes (WP-086) | `docs/WP-086_HOSTED_DEPLOYMENT.md` + `render.yaml` + `docker-compose.hosted.yml` + `deploy/fly/` + `Dockerfile.*` |
 | Product IA / design system (WP-120) | `apps/web` tokens/nav/ui + `docs/WP-120_PRODUCT_IA_DESIGN.md` |
+| Live table 2D premium (WP-125) | `apps/web` `components/table` + `lib/table` + `/table` `/live` + `docs/WP-125_LIVE_TABLE_2D.md` |
+| Result / replay (WP-127) | `apps/web` `/result` + `/replays` + `docs/WP-127_RESULT_REPLAY.md` |
 | Public Verify Game (WP-090) | `apps/web/src/app/verify/` + `services/api/src/verify.ts` + `docs/WP-090_VERIFY_GAME.md` |
 | Admin solvency dashboard (WP-091) | `apps/admin/src/app/solvency/` + `services/api/src/admin-solvency.ts` + `docs/WP-091_ADMIN_SOLVENCY_DASHBOARD.md` |
 | Plan 11 rake / treasury | `packages/game-rules/src/rake.ts` + `packages/unit-economics/` + `docs/PLAN_11_RAKE_TREASURY.md` + `GET /v1/admin/treasury` |

@@ -91,6 +91,11 @@ export const font = {
   mono: "var(--font-mono), 'IBM Plex Mono', ui-monospace, monospace",
 } as const;
 
+/** Layout breakpoint — sidebar ↔ bottom tabs (WP-131). Keep in sync with globals.css. */
+export const breakpoint = {
+  mobileMax: 900,
+} as const;
+
 /** Canonical consumer nav (Plan 20A / WP-120). Verify is secondary. */
 export const primaryNav = [
   { id: "home", label: "Home", href: "/home" },
@@ -111,7 +116,12 @@ export type PrimaryNavId = (typeof primaryNav)[number]["id"];
 export type SecondaryNavId = (typeof secondaryNav)[number]["id"];
 
 export function resolveNavId(pathname: string): PrimaryNavId | SecondaryNavId | "home" {
-  if (pathname.startsWith("/table") || pathname.startsWith("/poker") || pathname.startsWith("/sessions")) {
+  if (
+    pathname.startsWith("/table") ||
+    pathname.startsWith("/poker") ||
+    pathname.startsWith("/sessions") ||
+    pathname.startsWith("/result")
+  ) {
     return "play";
   }
   if (pathname.startsWith("/my-ai")) return "strategy";
