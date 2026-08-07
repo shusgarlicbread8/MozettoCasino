@@ -13,6 +13,7 @@
     "@coinbase/wallet-sdk": "^4.3.6",
     "@mozetto/chain-manifest": "workspace:*",
     "@mozetto/game-rules": "workspace:*",
+    "@mozetto/presentation-adapter": "workspace:*",
     "@mozetto/shared-types": "workspace:*",
     "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.112.0",
