@@ -1,643 +1,688 @@
 "use client";
 
 /**
- * Exact React port of design/Home.dc.html main content.
- * Nav/Topbar are provided by AppShell (apps/web/src/components/AppShell.tsx) — only <main> is ported here.
- * All inline styles, mock data (TABLES/GAMES/L) and copy are preserved verbatim from the design file.
+ * WP-121 — Consumer home: Play Now first.
+ * Answers: How much can I play with? What can I play? What is my AI? How am I performing?
+ * Protocol / contract details stay secondary (Wallet / Verify).
  */
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
+import { Button, LeagueChip } from "@/components/ui";
 import { api } from "@/lib/api";
-import { useSession } from "@/lib/session";
+import {
+  color,
+  font,
+  leagueColors,
+  profileColors,
+  profileLabels,
+  radius,
+  space,
+  type ProfileId,
+} from "@/lib/design-tokens";
+import { money, useSession } from "@/lib/session";
 import { useMozettoBalances } from "@/lib/use-mozetto-balances";
 
-const MONO = "var(--font-geist-mono), 'Geist Mono', monospace";
-
-const L: Record<string, string> = {
-  Bronze: "#B87333",
-  Silver: "#B8C0C8",
-  Gold: "#C9A227",
-  Platinum: "#8FE3D2",
-  Diamond: "#8FB8FF",
-  Sovereign: "#C89BFF",
-};
-
-/** design/Home.dc.html → design page hrefs mapped onto the real app routes. */
-const BROWSE: Record<string, string> = {
-  "Poker.dc.html": "/poker",
-  "PokerClassic.dc.html": "/poker/classic",
-  "Casino.dc.html": "/casino",
-  "Tournaments.dc.html": "/tournaments",
-};
-
-type Table = {
-  id?: string;
-  name: string;
-  league: string;
-  game: string;
-  blinds: string;
-  seats: number;
-  maxSeats: number;
-  speed: string;
-  min: number;
-  max: number;
-  bb: number;
-  avgPot: string;
-  rake: string;
-  g: string;
-  comingSoon?: boolean;
-};
-
-/** Design-preview table cards only — not live lobby data. Do not treat as production rankings. */
-const TABLES: Table[] = [
-  { name: "Emerald 4", league: "Bronze", game: "Poker (Classic)", blinds: "$0.25 / $0.50", seats: 5, maxSeats: 6, speed: "Fast", min: 10, max: 100, bb: 0.5, avgPot: "$14", rake: "2.5% capped", g: "classic" },
-  { name: "Harbour 9", league: "Silver", game: "Poker (Classic)", blinds: "$2 / $5", seats: 4, maxSeats: 6, speed: "Standard", min: 100, max: 1000, bb: 5, avgPot: "$164", rake: "2.5% capped", g: "classic" },
-  { name: "Monaco 12", league: "Gold", game: "Poker (Classic)", blinds: "$25 / $50", seats: 5, maxSeats: 6, speed: "Standard", min: 1000, max: 10000, bb: 50, avgPot: "$3,850", rake: "2.5% capped", g: "classic" },
-  { name: "Viper High", league: "Platinum", game: "Texas Hold\u2019em", blinds: "$250 / $500", seats: 1, maxSeats: 2, speed: "Deep", min: 10000, max: 100000, bb: 500, avgPot: "$38,400", rake: "2% capped", g: "holdem" },
-  { name: "Seoul 2", league: "Diamond", game: "Poker (Classic)", blinds: "$2,500 / $5,000", seats: 4, maxSeats: 6, speed: "Deep", min: 100000, max: 1000000, bb: 5000, avgPot: "$184,200", rake: "1.5% capped", g: "classic" },
-  { name: "Aurora PLO 3", league: "Silver", game: "Pot-Limit Omaha", blinds: "$2 / $5", seats: 5, maxSeats: 6, speed: "Fast", min: 100, max: 1000, bb: 5, avgPot: "$288", rake: "2.5% capped", g: "plo" },
-  { name: "Kingsway PLO", league: "Gold", game: "Pot-Limit Omaha", blinds: "$25 / $50", seats: 3, maxSeats: 6, speed: "Standard", min: 1000, max: 10000, bb: 50, avgPot: "$6,120", rake: "2.5% capped", g: "plo" },
-  { name: "Six-Plus 1", league: "Bronze", game: "Short Deck", blinds: "$0.50 ante", seats: 6, maxSeats: 6, speed: "Fast", min: 10, max: 100, bb: 0.5, avgPot: "$22", rake: "2.5% capped", g: "short" },
-  { name: "Kowloon SD", league: "Gold", game: "Short Deck", blinds: "$50 ante", seats: 4, maxSeats: 6, speed: "Fast", min: 1000, max: 10000, bb: 50, avgPot: "$5,400", rake: "2.5% capped", g: "short" },
-];
-
-type Game = {
+type ArenaLeague = {
   id: string;
   name: string;
-  glyph: string;
-  color: string;
-  type: "PvP" | "HOUSE";
-  tables: string;
-  players: string;
-  topPot: string;
-  browse: string;
-  blurb: string;
+  color?: string;
+  buyIn: number;
+  open?: boolean;
+  tables: number;
+  seated: number;
 };
 
-const GAMES: Game[] = [
-  {
-    id: "holdem",
-    name: "Texas Hold\u2019em",
-    glyph: "\u2660",
-    color: "#00E676",
-    type: "PvP",
-    tables: "184 tables",
-    players: "1,204 AI",
-    topPot: "$184,200",
-    browse: "Poker.dc.html",
-    blurb: "Heads-up only. Ranked 1v1 with equal stacks — two seats. Pick a league; the platform finds your opponent.",
-  },
-  {
-    id: "classic",
-    name: "Poker (Classic)",
-    glyph: "\u2665",
-    color: "#8FE3D2",
-    type: "PvP",
-    tables: "96 tables",
-    players: "640 AI",
-    topPot: "$96,400",
-    browse: "PokerClassic.dc.html",
-    blurb: "Multiway 6-max on the same engine. Join the fullest open table in your league or open a new one.",
-  },
-  {
-    id: "plo",
-    name: "Pot-Limit Omaha",
-    glyph: "\u2666",
-    color: "#FF7A7A",
-    type: "PvP",
-    tables: "68 tables",
-    players: "412 AI",
-    topPot: "$96,400",
-    browse: "Poker.dc.html",
-    blurb: "Four hole cards, bigger equity swings and far larger pots. The same engine, a harder problem.",
-  },
-  {
-    id: "short",
-    name: "Short Deck",
-    glyph: "\u2663",
-    color: "#FFB020",
-    type: "PvP",
-    tables: "60 tables",
-    players: "288 AI",
-    topPot: "$41,800",
-    browse: "Poker.dc.html",
-    blurb: "Sixes through aces. Faster, more volatile, and a completely different hand ranking to solve.",
-  },
-  {
-    id: "tour",
-    name: "Tournaments",
-    glyph: "\u2B22",
-    color: "#8FE3D2",
-    type: "PvP",
-    tables: "12 running",
-    players: "2,408 AI",
-    topPot: "$1.2M",
-    browse: "Tournaments.dc.html",
-    blurb: "Fixed league entries, equal starting stacks and a single winner. Where reputations are actually made.",
-  },
-];
+type WalletSession = {
+  table_id?: string;
+  table_name?: string;
+  stack?: number;
+  buy_in?: number;
+};
 
-const HOT = [
-  { league: "DIAMOND", leagueColor: L.Diamond, name: "Seoul 2", pot: "$184,200", players: "4", viewers: "6,204" },
-  { league: "PLATINUM", leagueColor: L.Platinum, name: "Viper High", pot: "$38,400", players: "2", viewers: "2,880" },
-  { league: "GOLD", leagueColor: L.Gold, name: "Kingsway PLO", pot: "$12,940", players: "3", viewers: "1,412" },
-];
+type ProfileArena = {
+  rating: number;
+  matches: number;
+  wins: number;
+  losses: number;
+  provisional: boolean;
+  rank: number;
+  hands: number;
+};
 
-const LADDER = [
-  { k: "Bronze", req: "From $10 · wallet only", color: L.Bronze, status: "OPEN", statusColor: "#00E676", nameColor: "#EDEDED", op: "1" },
-  { k: "Silver", req: "From $100 · verified account", color: L.Silver, status: "OPEN", statusColor: "#00E676", nameColor: "#EDEDED", op: "1" },
-  { k: "Gold", req: "From $1,000 · 50 matches played", color: L.Gold, status: "CURRENT", statusColor: "#C9A227", nameColor: "#EDEDED", op: "1" },
-  { k: "Platinum", req: "From $10,000 · rating 1600 + ID check", color: L.Platinum, status: "VERIFY", statusColor: "#FFB020", nameColor: "#EDEDED", op: "1" },
-  { k: "Diamond", req: "From $100,000 · invitation", color: L.Diamond, status: "LOCKED", statusColor: "#5A5A5A", nameColor: "#8A8A8A", op: ".55" },
-  { k: "Sovereign", req: "From $1,000,000 · private onboarding", color: L.Sovereign, status: "PRIVATE", statusColor: "#5A5A5A", nameColor: "#8A8A8A", op: ".4" },
-];
+type NetWorthPoint = { t: string; total: number };
+
+function panelStyle(extra?: CSSProperties): CSSProperties {
+  return {
+    borderRadius: radius.xl,
+    border: `1px solid ${color.line}`,
+    background: color.inkElevated,
+    ...extra,
+  };
+}
+
+function labelStyle(c: string = color.textFaint): CSSProperties {
+  return {
+    font: `500 10px ${font.mono}`,
+    letterSpacing: "0.12em",
+    textTransform: "uppercase",
+    color: c,
+  };
+}
+
+function profileTone(key: string | undefined | null): string {
+  const k = (key || "machine").toLowerCase() as ProfileId;
+  return profileColors[k] ?? color.accent;
+}
+
+function profileName(key: string | undefined | null): string {
+  const k = (key || "machine").toLowerCase() as ProfileId;
+  return profileLabels[k] ?? "Machine";
+}
 
 export default function HomePage() {
-  const { me } = useSession();
+  const { me, loading: sessionLoading } = useSession();
   const balances = useMozettoBalances();
-  const WALLET = balances.displayWallet;
-  const [gameId, setGameId] = useState("holdem");
-  const [sessions, setSessions] = useState<any[]>([]);
-  const [arenaLive, setArenaLive] = useState({ tables: 0, seated: 0 });
   const [mounted, setMounted] = useState(false);
+  const [sessions, setSessions] = useState<WalletSession[]>([]);
+  const [leagues, setLeagues] = useState<ArenaLeague[]>([]);
+  const [arenaLoading, setArenaLoading] = useState(true);
+  const [arena, setArena] = useState<ProfileArena | null>(null);
+  const [arenaFetchDone, setArenaFetchDone] = useState(false);
+  const [todayPnl, setTodayPnl] = useState<number | null>(null);
+  const [pnlKnown, setPnlKnown] = useState(false);
 
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     const load = () => {
-      api<{ sessions: any[] }>("/v1/wallet")
+      api<{ sessions: WalletSession[] }>("/v1/wallet")
         .then((r) => setSessions(r.sessions || []))
         .catch(() => setSessions([]));
-      api<{ leagues: { tables: number; seated: number }[] }>("/v1/arena")
+      api<{ leagues: ArenaLeague[] }>("/v1/arena")
         .then((r) => {
-          const tables = r.leagues.reduce((n, l) => n + (l.tables || 0), 0);
-          const seated = r.leagues.reduce((n, l) => n + (l.seated || 0), 0);
-          setArenaLive({ tables, seated });
+          setLeagues(r.leagues || []);
+          setArenaLoading(false);
         })
-        .catch(() => setArenaLive({ tables: 0, seated: 0 }));
+        .catch(() => {
+          setLeagues([]);
+          setArenaLoading(false);
+        });
     };
     load();
     const id = setInterval(load, 5000);
     return () => clearInterval(id);
   }, []);
 
-  const sel = GAMES.find((g) => g.id === gameId) || GAMES[0];
-  const selWash = sel.color + "12";
-  const activeSession = sessions[0] || null;
+  useEffect(() => {
+    const handle = me?.profile?.handle || me?.session?.handle;
+    if (!handle) {
+      setArena(null);
+      setArenaFetchDone(!sessionLoading);
+      return;
+    }
+    setArenaFetchDone(false);
+    api<{ arena: ProfileArena }>(`/v1/profiles/${encodeURIComponent(handle)}`)
+      .then((r) => setArena(r.arena ?? null))
+      .catch(() => setArena(null))
+      .finally(() => setArenaFetchDone(true));
+  }, [me?.profile?.handle, me?.session?.handle, sessionLoading]);
 
-  const openAny = () => {
-    window.location.href = "/poker";
-  };
+  useEffect(() => {
+    if (!me?.authenticated) {
+      setTodayPnl(null);
+      setPnlKnown(false);
+      return;
+    }
+    api<{ points: NetWorthPoint[] }>("/v1/wallet/net-worth?range=1d")
+      .then((r) => {
+        const pts = r.points || [];
+        if (pts.length < 2) {
+          setTodayPnl(null);
+          setPnlKnown(false);
+          return;
+        }
+        setTodayPnl(pts[pts.length - 1]!.total - pts[0]!.total);
+        setPnlKnown(true);
+      })
+      .catch(() => {
+        setTodayPnl(null);
+        setPnlKnown(false);
+      });
+  }, [me?.authenticated, balances.isOnchain]);
+
+  const wallet = balances.displayWallet;
+  const atTables = balances.displayLocked;
+  const playable = wallet;
+  const activeSession = sessions[0] || null;
+  const liveTables = leagues.reduce((n, l) => n + (l.tables || 0), 0);
+  const liveSeated = leagues.reduce((n, l) => n + (l.seated || 0), 0);
+
+  const agent = me?.agent;
+  const profileKey = me?.config?.profile_key;
+  const agentColor = agent?.color || profileTone(profileKey);
+  const agentName = agent?.display_name || agent?.handle || "Your AI";
+  const agentVersion = agent?.current_version || "v1";
+  const userLeague = me?.profile?.league || "bronze";
+  const greeting = me?.profile?.display_name || me?.session?.displayName || me?.session?.handle || "Player";
+
+  const balancesLoading = sessionLoading || balances.loading;
 
   return (
-    <main style={{ flex: 1, width: "100%", minWidth: 0, padding: "22px 28px 56px", boxSizing: "border-box" }}>
-      {/* Game picker — Netflix-style poster cards with a felt-table backdrop */}
-      <div style={{ font: `500 10px ${MONO}`, letterSpacing: ".14em", color: "#5A5A5A", marginBottom: 10 }}>
-        BROWSE GAMES
-      </div>
-      <div style={{ display: "flex", gap: 14, overflowX: "auto", paddingBottom: 10 }}>
-        {GAMES.map((g, i) => {
-          const active = gameId === g.id;
-          const border = active ? g.color + "77" : "rgba(255,255,255,.08)";
-          const typeColor = g.type === "HOUSE" ? "#8A8A8A" : "#00E676";
-          const typeBorder = g.type === "HOUSE" ? "rgba(255,255,255,.12)" : "rgba(0,230,118,.3)";
-          return (
-            <div
-              key={g.id}
-              onClick={() => setGameId(g.id)}
-              className="mz-game-card"
-              style={{
-                flex: "none",
-                width: 216,
-                borderRadius: 16,
-                border: `1px solid ${border}`,
-                background: "#0A0A0A",
-                overflow: "hidden",
-                cursor: "pointer",
-                boxShadow: active ? `0 0 0 1px ${g.color}55, 0 10px 30px -12px ${g.color}66` : "none",
-                animation: mounted ? `ar-up .5s ease ${i * 0.06}s both` : undefined,
-              }}
-            >
-              {/* Felt-table poster */}
-              <div
-                style={{
-                  position: "relative",
-                  height: 108,
-                  background: `radial-gradient(120% 90% at 50% 20%, ${g.color}22, #060606 72%)`,
-                  overflow: "hidden",
-                  borderBottom: `1px solid ${g.color}22`,
-                }}
-              >
-                <div
-                  className="mz-game-card-felt"
-                  style={{
-                    position: "absolute",
-                    inset: -20,
-                    borderRadius: "50%",
-                    border: `2px solid ${g.color}33`,
-                    background: `radial-gradient(60% 60% at 50% 40%, ${g.color}14, transparent 70%)`,
-                  }}
-                />
-                <div
-                  style={{
-                    position: "absolute",
-                    top: "50%",
-                    left: "50%",
-                    transform: "translate(-50%,-50%)",
-                    fontSize: 52,
-                    color: g.color,
-                    opacity: 0.5,
-                  }}
-                >
-                  {g.glyph}
-                </div>
-                <div style={{ position: "absolute", top: 10, left: 10, display: "flex", gap: 6 }}>
-                  <div style={{ width: 16, height: 22, borderRadius: 3, background: "#1A1A1A", border: "1px solid rgba(255,255,255,.14)" }} />
-                  <div style={{ width: 16, height: 22, borderRadius: 3, background: "#1A1A1A", border: "1px solid rgba(255,255,255,.14)" }} />
-                </div>
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 10,
-                    right: 10,
-                    font: `500 8.5px ${MONO}`,
-                    letterSpacing: ".11em",
-                    color: typeColor,
-                    padding: "2px 7px",
-                    borderRadius: 4,
-                    border: `1px solid ${typeBorder}`,
-                    background: "rgba(5,5,5,.6)",
-                  }}
-                >
-                  {g.type}
-                </div>
-              </div>
-
-              <div style={{ padding: "13px 15px 15px" }}>
-                <div style={{ fontSize: 14.5, fontWeight: 600, letterSpacing: "-.025em" }}>{g.name}</div>
-                <div style={{ font: `400 10.5px ${MONO}`, color: "#6A6A6A", marginTop: 7 }}>
-                  {g.tables} · {g.players}
-                </div>
-                <div style={{ font: `400 10.5px ${MONO}`, color: "#4A4A4A", marginTop: 4 }}>
-                  TOP POT <span style={{ color: g.color }}>{g.topPot}</span>
-                </div>
-                <div className="mz-game-card-cta" style={{ marginTop: 10 }}>
-                  <Link
-                    href={BROWSE[g.browse] ?? "/poker"}
-                    onClick={(e) => e.stopPropagation()}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 5,
-                      font: `600 11px ${MONO}`,
-                      color: g.color,
-                    }}
-                  >
-                    Find Match →
-                  </Link>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Selected game hero */}
-      <div
-        key={sel.id}
+    <main
+      style={{
+        flex: 1,
+        width: "100%",
+        minWidth: 0,
+        padding: `${space[6]}px ${space[7]}px 56px`,
+        boxSizing: "border-box",
+        fontFamily: font.sans,
+        color: color.text,
+      }}
+    >
+      {/* Hero — Play Now first */}
+      <section
         style={{
-          borderRadius: 18,
-          border: "1px solid rgba(255,255,255,.07)",
-          background: `linear-gradient(150deg,${selWash},#0A0A0A 62%)`,
-          padding: "26px 28px",
-          marginTop: 14,
-          display: "flex",
-          alignItems: "center",
-          gap: 28,
-          animation: "ar-fade .35s ease both",
+          ...panelStyle({
+            position: "relative",
+            overflow: "hidden",
+            padding: `${space[7]}px ${space[7]}px ${space[6]}px`,
+            background: `linear-gradient(155deg, ${color.accentDim} 0%, ${color.inkElevated} 48%, ${color.ink} 100%)`,
+            border: `1px solid ${color.accentBorder}`,
+            animation: mounted ? "ar-up .45s ease both" : undefined,
+          }),
         }}
       >
-        <div style={{ flex: 1 }}>
-          <div style={{ font: `500 10px ${MONO}`, letterSpacing: ".16em", color: sel.color }}>
-            {sel.type === "HOUSE" ? "AI VERSUS THE HOUSE" : "AI VERSUS AI"}
-          </div>
-          <h1 style={{ margin: "11px 0 0", fontSize: 32, fontWeight: 600, letterSpacing: "-.04em" }}>{sel.name}</h1>
-          <p style={{ margin: "11px 0 0", fontSize: 14, lineHeight: 1.6, color: "#8A8A8A", maxWidth: 520 }}>
-            {sel.blurb}
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            inset: 0,
+            background:
+              "radial-gradient(70% 80% at 78% 40%, rgba(20,92,62,0.45) 0%, transparent 62%)",
+            animation: "mz-hero-breathe 8s ease-in-out infinite",
+            pointerEvents: "none",
+          }}
+        />
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            right: "6%",
+            top: "50%",
+            transform: "translateY(-50%)",
+            width: "min(280px, 36vw)",
+            height: "min(160px, 28vh)",
+            borderRadius: "50% / 42%",
+            border: `1px solid ${color.accentBorder}`,
+            background:
+              "radial-gradient(70% 80% at 50% 40%, rgba(61,220,138,0.14), transparent 72%)",
+            pointerEvents: "none",
+            opacity: 0.85,
+          }}
+        />
+
+        <div style={{ position: "relative", zIndex: 1, maxWidth: 560 }}>
+          <div style={labelStyle(color.accent)}>Home</div>
+          <h1
+            className="mz-display"
+            style={{
+              margin: `${space[3]}px 0 0`,
+              fontFamily: font.display,
+              fontSize: "clamp(28px, 3.6vw, 40px)",
+              fontWeight: 700,
+              letterSpacing: "-0.04em",
+              lineHeight: 1.08,
+            }}
+          >
+            Ready to play, {greeting}?
+          </h1>
+          <p
+            style={{
+              margin: `${space[3]}px 0 0`,
+              fontSize: 15,
+              lineHeight: 1.55,
+              color: color.textMuted,
+              maxWidth: 440,
+            }}
+          >
+            Your agent takes the seat. Pick a league, find a match — buy-in locks only when one forms.
           </p>
-          <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-            <div
-              onClick={openAny}
-              className="mz-hover-cta"
-              style={{
-                padding: "13px 26px",
-                borderRadius: 10,
-                background: "#00E676",
-                color: "#050505",
-                fontSize: 14,
-                fontWeight: 600,
-                cursor: "pointer",
-                transition: "box-shadow .2s",
-              }}
-            >
-              Find Match
+
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "baseline",
+              gap: space[5],
+              marginTop: space[5],
+            }}
+          >
+            <div>
+              <div style={labelStyle()}>Playable</div>
+              <div
+                style={{
+                  marginTop: 4,
+                  font: `600 28px ${font.mono}`,
+                  letterSpacing: "-0.03em",
+                  color: color.accent,
+                  fontVariantNumeric: "tabular-nums",
+                }}
+              >
+                {balancesLoading ? "…" : money(playable)}
+              </div>
             </div>
-            <Link
-              href="/live"
-              className="mz-hover-border-strong"
-              style={{
-                padding: "13px 22px",
-                borderRadius: 10,
-                border: "1px solid rgba(255,255,255,.12)",
-                fontSize: 14,
-                color: "#EDEDED",
-              }}
-            >
+            <div>
+              <div style={labelStyle()}>At tables</div>
+              <div
+                style={{
+                  marginTop: 4,
+                  font: `600 20px ${font.mono}`,
+                  color: atTables > 0 ? color.warn : color.textMuted,
+                  fontVariantNumeric: "tabular-nums",
+                }}
+              >
+                {balancesLoading ? "…" : money(atTables)}
+              </div>
+            </div>
+            {balances.pendingSettlement > 0.000001 ? (
+              <div>
+                <div style={labelStyle(color.warn)}>Settling</div>
+                <div
+                  style={{
+                    marginTop: 4,
+                    font: `600 16px ${font.mono}`,
+                    color: color.warn,
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  {money(balances.pendingSettlement)}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: space[6] }}>
+            <Button href="/poker" variant="primary" size="lg">
+              Play Now
+            </Button>
+            <Button href="/live" variant="secondary" size="lg">
               Watch live
-            </Link>
+            </Button>
+            {playable < 10 ? (
+              <Button href="/wallet" variant="ghost" size="lg">
+                Fund wallet
+              </Button>
+            ) : null}
           </div>
         </div>
+      </section>
 
-        {/* Mini live table preview — Netflix-style key art for the selected game */}
+      {/* League strip — what can I play */}
+      <section
+        style={{
+          marginTop: space[4],
+          animation: mounted ? "ar-up .5s ease .06s both" : undefined,
+        }}
+      >
         <div
           style={{
-            flex: "none",
-            width: 220,
-            height: 150,
-            borderRadius: 14,
-            position: "relative",
-            display: sel.type === "HOUSE" ? "none" : "block",
-            animation: "ar-float 5s ease-in-out infinite",
+            display: "flex",
+            alignItems: "baseline",
+            justifyContent: "space-between",
+            gap: 12,
+            marginBottom: space[3],
           }}
         >
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              borderRadius: "50% / 42%",
-              background: `radial-gradient(85% 100% at 50% 40%, ${sel.color}26, #071008 75%)`,
-              border: `1px solid ${sel.color}33`,
-              boxShadow: `inset 0 0 40px ${sel.color}22, 0 18px 40px -18px ${sel.color}44`,
-            }}
-          />
-          {[0, 1].map((seat) => (
-            <div
-              key={seat}
-              style={{
-                position: "absolute",
-                left: seat === 0 ? 26 : undefined,
-                right: seat === 1 ? 26 : undefined,
-                top: "50%",
-                transform: "translateY(-50%)",
-                width: 46,
-                height: 46,
-                borderRadius: "50%",
-                background: "#0D0D0D",
-                border: `1px solid ${sel.color}55`,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                font: `600 10px ${MONO}`,
-                color: sel.color,
-              }}
-            >
-              S{seat + 1}
-            </div>
-          ))}
-          <div
-            style={{
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              transform: "translate(-50%,-50%)",
-              display: "flex",
-              gap: 4,
-            }}
+          <div style={labelStyle()}>Leagues · Texas Hold&apos;em</div>
+          <Link
+            href="/poker"
+            style={{ font: `500 12px ${font.sans}`, color: color.accent, textDecoration: "none" }}
           >
-            {[0, 1, 2].map((c) => (
-              <div
-                key={c}
-                style={{
-                  width: 15,
-                  height: 21,
-                  borderRadius: 3,
-                  background: "linear-gradient(160deg,#161616,#0A0A0A)",
-                  border: "1px solid rgba(255,255,255,.14)",
-                  transform: `rotate(${(c - 1) * 8}deg)`,
-                }}
-              />
-            ))}
-          </div>
-          <div
-            style={{
-              position: "absolute",
-              bottom: 10,
-              left: "50%",
-              transform: "translateX(-50%)",
-              font: `500 9px ${MONO}`,
-              letterSpacing: ".1em",
-              color: sel.color,
-              opacity: 0.85,
-            }}
-          >
-            LIVE
-          </div>
+            Find Match →
+          </Link>
         </div>
-      </div>
+        <div
+          style={{
+            display: "flex",
+            gap: 10,
+            overflowX: "auto",
+            paddingBottom: 4,
+          }}
+        >
+          {arenaLoading ? (
+            <div style={{ ...panelStyle({ padding: "16px 18px", flex: 1 }), color: color.textFaint, fontSize: 13 }}>
+              Loading leagues…
+            </div>
+          ) : leagues.length === 0 ? (
+            <div style={{ ...panelStyle({ padding: "16px 18px", flex: 1 }), color: color.textMuted, fontSize: 13 }}>
+              League lobby unavailable. Open Play to retry matchmaking.
+            </div>
+          ) : (
+            leagues.map((l) => {
+              const isCurrent = userLeague.toLowerCase() === l.id.toLowerCase();
+              const lc = leagueColors[l.id.toLowerCase() as keyof typeof leagueColors] ?? l.color ?? color.textMuted;
+              return (
+                <Link
+                  key={l.id}
+                  href="/poker"
+                  style={{
+                    ...panelStyle({
+                      flex: "1 1 140px",
+                      minWidth: 148,
+                      padding: "14px 16px",
+                      textDecoration: "none",
+                      color: "inherit",
+                      border: isCurrent ? `1px solid ${lc}66` : `1px solid ${color.line}`,
+                      background: isCurrent
+                        ? `linear-gradient(165deg, ${lc}18, ${color.inkElevated} 70%)`
+                        : color.inkElevated,
+                    }),
+                  }}
+                >
+                  <LeagueChip league={l.name || l.id} size="sm" />
+                  <div
+                    style={{
+                      marginTop: 12,
+                      font: `600 18px ${font.mono}`,
+                      letterSpacing: "-0.02em",
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    {money(l.buyIn)}
+                  </div>
+                  <div style={{ marginTop: 4, font: `400 11px ${font.mono}`, color: color.textFaint }}>
+                    BUY-IN · {l.tables} LIVE · {l.seated} SEATED
+                  </div>
+                  {isCurrent ? (
+                    <div style={{ marginTop: 8, ...labelStyle(lc), fontSize: 9 }}>Your league</div>
+                  ) : null}
+                </Link>
+              );
+            })
+          )}
+        </div>
+        <p style={{ margin: `${space[3]}px 0 0`, fontSize: 12.5, color: color.textFaint }}>
+          Also available:{" "}
+          <Link href="/poker/classic" style={{ color: color.textMuted }}>
+            Poker (Classic) 6-max
+          </Link>
+          . Protocol details live in Wallet &amp; Verify.
+        </p>
+      </section>
 
-      {/* Two-column layout */}
-      <div
+      {/* AI + performance + live / session */}
+      <section
         style={{
           display: "grid",
-          gridTemplateColumns: "1fr 330px",
-          gap: 14,
-          marginTop: 14,
-          alignItems: "start",
+          gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+          gap: space[4],
+          marginTop: space[4],
           animation: mounted ? "ar-up .5s ease .12s both" : undefined,
         }}
       >
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {/* Ranked Arena — no public table browser */}
-          <div style={{ borderRadius: 16, border: "1px solid rgba(255,255,255,.07)", background: "#0A0A0A", padding: "28px 28px 26px" }}>
-            <div style={{ font: `500 9.5px ${MONO}`, letterSpacing: ".14em", color: "#00E676" }}>RANKED ARENA</div>
-            <div style={{ fontSize: 22, fontWeight: 600, letterSpacing: "-.03em", marginTop: 10 }}>
-              Matchmaking finds your seat
-            </div>
-            <p style={{ margin: "10px 0 0", fontSize: 13.5, color: "#7A7A7A", lineHeight: 1.55, maxWidth: 520 }}>
-              Pick a league and an AI profile, then Find Match. Buy-in is fixed per league — no range to type.
-              Opponents and tables are assigned by the platform, and if your wallet is short we&apos;ll prompt a top-up.
-            </p>
-            <div style={{ display: "flex", gap: 28, marginTop: 22, font: `400 12px ${MONO}` }}>
-              <div>
-                <div style={{ color: "#5A5A5A", letterSpacing: ".08em", fontSize: 10 }}>LIVE MATCHES</div>
-                <div style={{ color: "#EDEDED", fontSize: 20, fontWeight: 600, marginTop: 4 }}>{arenaLive.tables}</div>
-              </div>
-              <div>
-                <div style={{ color: "#5A5A5A", letterSpacing: ".08em", fontSize: 10 }}>SEATED</div>
-                <div style={{ color: "#EDEDED", fontSize: 20, fontWeight: 600, marginTop: 4 }}>{arenaLive.seated}</div>
-              </div>
-              <div>
-                <div style={{ color: "#5A5A5A", letterSpacing: ".08em", fontSize: 10 }}>YOUR WALLET</div>
-                <div style={{ color: "#00E676", fontSize: 20, fontWeight: 600, marginTop: 4 }}>
-                  ${WALLET.toLocaleString()}
+        {/* AI ready */}
+        <div style={panelStyle({ padding: "20px 22px" })}>
+          <div style={labelStyle(agent ? color.accent : color.textFaint)}>Your AI</div>
+          {sessionLoading ? (
+            <p style={{ margin: "14px 0 0", color: color.textFaint, fontSize: 13 }}>Loading agent…</p>
+          ) : agent ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 14 }}>
+                <div
+                  style={{
+                    width: 52,
+                    height: 52,
+                    borderRadius: radius.lg,
+                    border: `1px solid ${agentColor}55`,
+                    background: `${agentColor}18`,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 22,
+                    color: agentColor,
+                    flex: "none",
+                  }}
+                >
+                  {agent.glyph || "◆"}
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontFamily: font.display,
+                      fontSize: 20,
+                      fontWeight: 650,
+                      letterSpacing: "-0.03em",
+                    }}
+                  >
+                    {agentName}
+                  </div>
+                  <div style={{ marginTop: 4, font: `400 12px ${font.mono}`, color: color.textMuted }}>
+                    {profileName(profileKey).toUpperCase()} · {agentVersion}
+                  </div>
                 </div>
               </div>
-            </div>
-            <div style={{ display: "flex", gap: 10, marginTop: 22 }}>
-              <Link
-                href="/poker"
-                style={{
-                  padding: "12px 22px",
-                  borderRadius: 10,
-                  background: "#00E676",
-                  color: "#050505",
-                  fontSize: 13.5,
-                  fontWeight: 600,
-                  textDecoration: "none",
-                }}
-              >
-                Find Match
-              </Link>
-              <Link
-                href="/live"
-                style={{
-                  padding: "12px 22px",
-                  borderRadius: 10,
-                  border: "1px solid rgba(255,255,255,.12)",
-                  color: "#EDEDED",
-                  fontSize: 13.5,
-                  textDecoration: "none",
-                }}
-              >
-                Watch random
-              </Link>
-            </div>
-          </div>
+              <p style={{ margin: "14px 0 0", fontSize: 13, color: color.textMuted, lineHeight: 1.5 }}>
+                Loadout ready for ranked matchmaking. Tune traits before you queue.
+              </p>
+              <div style={{ marginTop: space[4] }}>
+                <Button href="/my-ai" variant="secondary" size="sm">
+                  Open AI / Strategy
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p style={{ margin: "14px 0 0", fontSize: 14, color: color.textMuted, lineHeight: 1.5 }}>
+                No agent loadout yet. Create a profile before Find Match.
+              </p>
+              <div style={{ marginTop: space[4] }}>
+                <Button href="/my-ai" variant="primary" size="sm">
+                  Set up your AI
+                </Button>
+              </div>
+            </>
+          )}
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {/* Active session */}
+        {/* Performance */}
+        <div style={panelStyle({ padding: "20px 22px" })}>
+          <div style={labelStyle()}>Performance</div>
           <div
             style={{
-              borderRadius: 16,
-              border: activeSession ? "1px solid rgba(0,230,118,.2)" : "1px solid rgba(255,255,255,.07)",
-              background: activeSession ? "linear-gradient(160deg,rgba(0,230,118,.06),#0A0A0A)" : "#0A0A0A",
-              padding: "18px 20px",
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: space[4],
+              marginTop: 14,
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div>
+              <div style={labelStyle()}>HU rating</div>
               <div
                 style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: "50%",
-                  background: activeSession ? "#00E676" : "#5A5A5A",
-                  animation: activeSession ? "ar-pulse 1.6s infinite" : "none",
-                }}
-              />
-              <div
-                style={{
-                  font: `500 9.5px ${MONO}`,
-                  letterSpacing: ".14em",
-                  color: activeSession ? "#00E676" : "#5A5A5A",
+                  marginTop: 6,
+                  font: `600 26px ${font.mono}`,
+                  letterSpacing: "-0.03em",
+                  fontVariantNumeric: "tabular-nums",
                 }}
               >
-                {activeSession ? "ACTIVE SESSION" : "NO ACTIVE SESSION"}
+                {!arenaFetchDone ? "…" : arena ? arena.rating : "—"}
+              </div>
+              <div style={{ marginTop: 4, fontSize: 12, color: color.textFaint }}>
+                {!arenaFetchDone
+                  ? "Loading…"
+                  : arena
+                    ? arena.provisional
+                      ? `Provisional · ${arena.matches} matches`
+                      : `#${arena.rank} · ${arena.wins}–${arena.losses}`
+                    : "Play a ranked match to rate"}
               </div>
             </div>
-            <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: "-.025em", marginTop: 12 }}>
-              {activeSession ? activeSession.table_name || "Table" : "Sit at a table to start"}
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14, font: `400 11.5px ${MONO}` }}>
-              <span style={{ color: "#6A6A6A" }}>TABLE BALANCE</span>
-              <span style={{ color: "#EDEDED" }}>
-                {activeSession ? `$${Number(activeSession.stack || 0).toLocaleString()}` : "—"}
-              </span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, font: `400 11.5px ${MONO}` }}>
-              <span style={{ color: "#6A6A6A" }}>AT TABLES</span>
-              <span style={{ color: "#FFB020" }}>${Number(balances.displayLocked).toLocaleString()}</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, font: `400 11.5px ${MONO}` }}>
-              <span style={{ color: "#6A6A6A" }}>WALLET</span>
-              <span style={{ color: "#EDEDED" }}>${WALLET.toLocaleString()}</span>
-            </div>
-            <Link
-              href={activeSession ? `/table/${activeSession.table_id}` : "/poker"}
-              className="mz-open-cta"
-              style={{
-                display: "block",
-                marginTop: 16,
-                padding: "11px 0",
-                borderRadius: 10,
-                background: "#00E676",
-                color: "#050505",
-                textAlign: "center",
-                fontSize: 13,
-                fontWeight: 600,
-              }}
-            >
-              {activeSession ? "Open table" : "Find Match"}
-            </Link>
-          </div>
-
-          {/* Your leagues */}
-          <div style={{ borderRadius: 16, border: "1px solid rgba(255,255,255,.07)", background: "#0A0A0A", overflow: "hidden" }}>
-            <div style={{ padding: "14px 18px", borderBottom: "1px solid rgba(255,255,255,.06)", fontSize: 14, fontWeight: 600, letterSpacing: "-.02em" }}>
-              Your leagues
-            </div>
-            {LADDER.map((l) => (
+            <div>
+              <div style={labelStyle()}>Today P&amp;L</div>
               <div
-                key={l.k}
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  padding: "12px 18px",
-                  borderBottom: "1px solid rgba(255,255,255,.04)",
-                  opacity: l.op,
+                  marginTop: 6,
+                  font: `600 26px ${font.mono}`,
+                  letterSpacing: "-0.03em",
+                  fontVariantNumeric: "tabular-nums",
+                  color:
+                    pnlKnown && todayPnl != null
+                      ? todayPnl >= 0
+                        ? color.accent
+                        : color.danger
+                      : color.textMuted,
                 }}
               >
-                <div style={{ width: 5, height: 22, borderRadius: 3, background: l.color, flex: "none" }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 550, letterSpacing: "-.01em", color: l.nameColor }}>{l.k}</div>
-                  <div style={{ font: `400 10px ${MONO}`, color: "#5A5A5A", marginTop: 2 }}>{l.req}</div>
-                </div>
-                <div style={{ font: `500 9.5px ${MONO}`, letterSpacing: ".08em", color: l.statusColor }}>{l.status}</div>
+                {pnlKnown && todayPnl != null
+                  ? `${todayPnl >= 0 ? "+" : "−"}${money(Math.abs(todayPnl))}`
+                  : "—"}
               </div>
-            ))}
-          </div>
-
-          {/* Next tournament */}
-          <div style={{ borderRadius: 16, border: "1px solid rgba(255,255,255,.07)", background: "#0A0A0A", padding: "18px 20px" }}>
-            <div style={{ font: `500 9.5px ${MONO}`, letterSpacing: ".14em", color: "#4A4A4A" }}>NEXT TOURNAMENT</div>
-            <div style={{ fontSize: 15.5, fontWeight: 600, letterSpacing: "-.025em", marginTop: 10 }}>Gold Invitational</div>
-            <div style={{ font: `400 11.5px ${MONO}`, color: "#7A7A7A", marginTop: 6 }}>
-              $1,000 ENTRY · 64 SEATS · $58,000 POOL
+              <div style={{ marginTop: 4, fontSize: 12, color: color.textFaint }}>
+                {pnlKnown
+                  ? "Net worth · last 24h"
+                  : balances.isOnchain
+                    ? "No snapshots yet"
+                    : "On-chain snapshots only"}
+              </div>
             </div>
-            <div style={{ font: `400 11px ${MONO}`, color: "#4A4A4A", marginTop: 4 }}>STARTS IN 3H 12M</div>
-            <Link
-              href="/tournaments"
-              className="mz-register-cta"
-              style={{
-                display: "block",
-                marginTop: 16,
-                padding: "10px 0",
-                borderRadius: 9,
-                border: "1px solid rgba(0,230,118,.35)",
-                textAlign: "center",
-                fontSize: 12.5,
-                fontWeight: 550,
-                color: "#00E676",
-              }}
-            >
-              Register
-            </Link>
           </div>
+          {arena && arena.hands > 0 ? (
+            <div style={{ marginTop: space[4], font: `400 12px ${font.mono}`, color: color.textFaint }}>
+              {arena.hands.toLocaleString()} hands ·{" "}
+              <Link href="/rankings" style={{ color: color.textMuted }}>
+                Rankings
+              </Link>
+            </div>
+          ) : (
+            <div style={{ marginTop: space[4] }}>
+              <Button href="/rankings" variant="ghost" size="sm">
+                View rankings
+              </Button>
+            </div>
+          )}
         </div>
-      </div>
 
+        {/* Active session or live teaser */}
+        <div
+          style={panelStyle({
+            padding: "20px 22px",
+            border: activeSession ? `1px solid ${color.accentBorder}` : `1px solid ${color.line}`,
+            background: activeSession
+              ? `linear-gradient(160deg, ${color.accentDim}, ${color.inkElevated})`
+              : color.inkElevated,
+          })}
+        >
+          {activeSession ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: "50%",
+                    background: color.accent,
+                    animation: "ar-pulse 1.6s infinite",
+                  }}
+                />
+                <div style={labelStyle(color.accent)}>Active session</div>
+              </div>
+              <div
+                style={{
+                  marginTop: 12,
+                  fontFamily: font.display,
+                  fontSize: 18,
+                  fontWeight: 650,
+                  letterSpacing: "-0.02em",
+                }}
+              >
+                {activeSession.table_name || "Table"}
+              </div>
+              <div
+                style={{
+                  marginTop: 10,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  font: `400 12px ${font.mono}`,
+                  color: color.textMuted,
+                }}
+              >
+                <span>STACK</span>
+                <span style={{ color: color.text }}>{money(Number(activeSession.stack || 0))}</span>
+              </div>
+              <div style={{ marginTop: space[4] }}>
+                <Button
+                  href={activeSession.table_id ? `/table/${activeSession.table_id}` : "/poker"}
+                  variant="primary"
+                  size="sm"
+                >
+                  Open table
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: "50%",
+                    background: liveTables > 0 ? color.live : color.textFaint,
+                    animation: liveTables > 0 ? "ar-pulse 1.6s infinite" : undefined,
+                  }}
+                />
+                <div style={labelStyle(liveTables > 0 ? color.live : color.textFaint)}>Live matches</div>
+              </div>
+              <div
+                style={{
+                  marginTop: 14,
+                  display: "flex",
+                  gap: space[6],
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      font: `600 28px ${font.mono}`,
+                      letterSpacing: "-0.03em",
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    {arenaLoading ? "…" : liveTables}
+                  </div>
+                  <div style={{ ...labelStyle(), marginTop: 4 }}>Tables</div>
+                </div>
+                <div>
+                  <div
+                    style={{
+                      font: `600 28px ${font.mono}`,
+                      letterSpacing: "-0.03em",
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    {arenaLoading ? "…" : liveSeated}
+                  </div>
+                  <div style={{ ...labelStyle(), marginTop: 4 }}>Seated</div>
+                </div>
+              </div>
+              <p style={{ margin: "14px 0 0", fontSize: 13, color: color.textMuted, lineHeight: 1.5 }}>
+                {liveTables > 0
+                  ? "Ranked tables are running. Watch a random match or queue your own."
+                  : "No live tables right now — Play Now to open the first seat in your league."}
+              </p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: space[4] }}>
+                <Button href="/live" variant="secondary" size="sm">
+                  Watch
+                </Button>
+                <Button href="/poker" variant="ghost" size="sm">
+                  Queue
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </section>
     </main>
   );
 }

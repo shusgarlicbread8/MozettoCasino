@@ -2,7 +2,7 @@
 
 **Authority:** Follows `00_READ_ME_FIRST.md`, `01_MASTER_EXECUTION_ROADMAP.md`, `16_AGENT_WORK_PACKETS.md`, `17_FINAL_DEFINITION_OF_DONE.md`.  
 **Rule:** Protocol V3 specs are **frozen** (WP-010–015). Implementations MUST match `/specs` and fail CI if vectors diverge. Do not invent new encodings.  
-**Last updated:** 2026-08-07 (WP-120 Product IA / design system DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
+**Last updated:** 2026-08-07 (WP-121 Home Play Now first DONE; WP-120 DONE; Wave 11 + Wave 12 parallel; Plan 20A IN_PROGRESS)
 
 ---
 
@@ -21,7 +21,7 @@
 | Field | Value |
 |---|---|
 | **Active wave** | **Wave 11 Production Integration** + **Wave 12 Consumer UX** (parallel) |
-| **Active packets** | WP-106–113 (Track A/C), WP-121–132 (Track B; WP-120 DONE); Sepolia Stage A blocked until WP-106–112 green |
+| **Active packets** | WP-106–113 (Track A/C), WP-122–132 (Track B; WP-120–121 DONE); Sepolia Stage A blocked until WP-106–112 green |
 | **Architecture status** | Protocol architecture largely built (~component-complete). Remaining work is integration, productization, hosted staging — **not** “ops only.” |
 | **Blocked until (Sepolia Stage A)** | WP-106–112 green on Anvil release candidate; then funded Sepolia deploy |
 | **Hard stop** | No new architecture invention; live AWS Nitro during Stage A; Plan 15 expansion stays deferred |
@@ -30,8 +30,8 @@
 | **Plan 02 note** | Specs **frozen**; WP-015 TS/Rust/Solidity hashes identical |
 | **Plan 11 note** | Rake/treasury code DONE; Season 1 schedule = hypotheses until WP-111 empirical COGS |
 | **Plan 12 note** | Ratings / anti-cheat DONE — ML collusion deferred |
-| **Plan 19 note** | Schema map DONE; hosted migrate + WS v2 + GRANTs + scheduler persist hooks → **WP-110** |
-| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120 DONE → WP-121+); Plan 20B cinematic 3D remains DEFERRED |
+| **Plan 19 note** | Schema map DONE; hosted cutover **WP-110 DONE** (GRANTs `030`, scheduler persist, WS dual-accept) |
+| **Plan 20A note** | **Consumer UX IN_PROGRESS** (WP-120–121 DONE → WP-122+); Plan 20B cinematic 3D remains DEFERRED |
 | **Anvil release candidate** | Normal user can Find Match → Groq AI session → verify → withdraw with **zero GAPs** (WP-106–112) |
 
 ---
@@ -54,7 +54,7 @@
 | 11 | Base Sepolia deployment | `BLOCKED` | Recipes ready; Stage A gated on Wave 11 WP-106–112 |
 | 12 | Adversarial program and audits | `BLOCKED` | Program/register scaffolds DONE; live A/B/C after Anvil RC + Sepolia deploy |
 | 13 | Restricted Base Mainnet | `BLOCKED` | WP-105 recipes/gates DONE; `finalGateApproval=false` |
-| 14 | Consumer product UX (Plan 20A) | `IN_PROGRESS` | Wave 12 WP-120–132; 3D production (20B) deferred |
+| 14 | Consumer product UX (Plan 20A) | `IN_PROGRESS` | Wave 12 WP-120–132 (WP-120–121 DONE); 3D production (20B) deferred |
 
 ---
 
@@ -81,8 +81,8 @@
 | 16 | Agent work packets | `DONE` | — | pack authored | Assignment catalog (+ Wave 11/12 packets) |
 | 17 | Final definition of done | `DONE` | — | pack authored | Completion checklist |
 | 18 | Sources and decision log | `DONE` | — | pack authored | Locked decisions log |
-| 19 | Database schema API migration | `DONE` | 2026-08-07 | 2026-08-07 | Map DONE; hosted cutover = WP-110 |
-| 20A | Consumer product UX | `IN_PROGRESS` | 2026-08-07 | | Wave 12 WP-120–132 — mass-market UX now |
+| 19 | Database schema API migration | `DONE` | 2026-08-07 | 2026-08-07 | Map DONE; hosted cutover WP-110 DONE |
+| 20A | Consumer product UX | `IN_PROGRESS` | 2026-08-07 | | Wave 12 WP-120–132 — WP-120–121 DONE; WP-122+ next |
 | 20B | Full 3D production | `DEFERRED` | | | After 2D table + WP-132 adapter prove themselves |
 
 ---
@@ -221,10 +221,10 @@
 | ID | Work | Status | Exit condition |
 |---|---|---|---|
 | WP-106 | True full Anvil match lifecycle | `IN_PROGRESS` | Browser/API → match → SeatTicket V3 → `sealAndFundSession` → real game → settle → withdraw; **zero GAPs** |
-| WP-107 | Live Groq AI table integration | `IN_PROGRESS` | Game-server runs Groq seats + cognition + Energy + cadence for complete sessions |
+| WP-107 | Live Groq AI table integration | `DONE` | Game-server runs Groq seats + cognition + Energy + cadence for complete sessions |
 | WP-108 | Real canonical roots | `IN_PROGRESS` | AI gameplay produces real eventRoot/handRoot/balanceRoot (no stub settlement roots) |
 | WP-109 | Poker release hardening | `NOT_STARTED` | Uncalled bets, deep 6-max, sit-out/timeout; PokerKit mandatory oracle; large generated set |
-| WP-110 | Hosted DB + WS cutover | `IN_PROGRESS` | Migrations 024–029 applied; GRANTs; AgentState/Energy DB; WS v2 |
+| WP-110 | Hosted DB + WS cutover | `DONE` | Migrations 017–030; GRANTs; scheduler DB persist; WS v2 dual-accept |
 | WP-111 | Economics instrumentation | `NOT_STARTED` | Actual Groq/chain/VRF/relayer/cloud COGS + rake contribution per hand |
 | WP-112 | Hosted proof pipeline | `NOT_STARTED` | Continuous CheckpointSource → publisher → SQL proofs → Verify page |
 | WP-113 | Live chaos completeness | `NOT_STARTED` | Multi-container Redis/RPC/VRF/dealer/worker/settlement failure drills |
@@ -238,9 +238,9 @@
 | ID | Surface | Status |
 |---|---|---|
 | WP-120 | Product IA / design system | `DONE` |
-| WP-121 | Home (Play Now first) | `NOT_STARTED` |
-| WP-122 | Play / Find Match | `NOT_STARTED` |
-| WP-123 | Strategy setup (profiles + tuning) | `NOT_STARTED` |
+| WP-121 | Home (Play Now first) | `DONE` |
+| WP-122 | Play / Find Match | `IN_PROGRESS` |
+| WP-123 | Strategy setup (profiles + tuning) | `IN_PROGRESS` |
 | WP-124 | Wallet / onboarding (ArenaAccount) | `NOT_STARTED` |
 | WP-125 | Live table 2D premium | `NOT_STARTED` |
 | WP-126 | AI cognition presentation | `NOT_STARTED` |
@@ -260,6 +260,23 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 ---
 
 ## Session log
+
+### 2026-08-07 — WP-121 Home (Play Now first) (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- Rebuilt `apps/web/src/app/(app)/home/page.tsx` on WP-120 tokens / `Button` / `LeagueChip`
+- Play Now hero + bankroll; league strip from `/v1/arena`; AI ready from `/v1/me`; rating from `/v1/profiles/:handle`; today P&L from net-worth when snapshots exist
+- Removed design-mock game browser / fake HOT pots / mock tournament CTA
+- Docs: `docs/WP-121_HOME.md`
+
+**Commands / evidence:**
+- `pnpm --filter @mozetto/web typecheck` — pass
+
+**Out of scope:** Spec mutations; Find Match overlay (WP-122); strategy sliders (WP-123); protocol field changes.
+
+**Follow-up:** WP-122 Play / Find Match; WP-123 Strategy setup.
 
 ### 2026-08-07 — WP-120 Product IA / design system (DONE)
 
@@ -288,7 +305,7 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 
 **Priority order:** WP-106 → 107 → 108 → 109 ‖ WP-120 → 121… ‖ WP-110 → 111 → 112 → 113 → Anvil RC → Sepolia Stage A.
 
-**DB:** `pnpm db:migrate` applied **017–029** to configured `DATABASE_URL` (2026-08-07). WP-110 still owns per-service GRANTs + WS v2 + scheduler persist hooks.
+**DB:** `pnpm db:migrate` applied **017–030** to configured `DATABASE_URL` (2026-08-07). WP-110 closed GRANTs + WS dual-accept + scheduler persist hooks.
 
 ### 2026-08-07 — Plan 12 Ratings / anti-cheat / collusion (DONE)
 
@@ -1873,6 +1890,33 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 
 ---
 
+### 2026-08-07 — WP-107 Live Groq AI table integration (DONE)
+
+**Status:** `DONE`
+
+**Delivered:**
+- `LiveSessionManager` — observe → cognition → Energy → Groq/mock decide → validate → cadence schedule
+- HTTP: `POST /v1/act`, `POST /v1/observe`, `POST /v1/hand/begin`, `GET /v1/metrics`, enriched `/health`
+- Game-server `AgentRuntimeController` + public-event observe fan-out + table-clock cadence wait
+- Env: `AGENT_RUNTIME_MODE`, `AGENT_CADENCE_WAIT`, `AI_CONTROLLER`, store factories respected
+- Metrics stubs: illegal-action rate, fallback rate, Energy/hand, latency p50/p95
+- Smoke harness: `pnpm smoke:groq-table` (mock CI-safe; `--mode live` + `GROQ_API_KEY` for Groq)
+- Docs: `docs/WP-107_LIVE_GROQ_TABLE.md`
+- Export: `@mozetto/agent-runtime/live`
+
+**Commands / evidence:**
+- `pnpm --filter @mozetto/agent-runtime test` — includes WP-107 live suites
+- `pnpm smoke:groq-table -- --hands 3 --mode mock` — multi-hand autonomous HU
+- `pnpm smoke:groq-table -- --hands 100 --mode mock` — scale path documented
+
+**Security notes:** `GROQ_API_KEY` remains gitignored (`.env.local`); never committed or printed. No CoT in HTTP responses.
+
+**Out of scope:** `/specs` mutations; WP-106 Anvil browser golden path; WP-108 real settlement roots; WP-111 full COGS.
+
+**Follow-up:** Wire smoke into hosted AI tables; WP-111 consume `/v1/metrics` for economics.
+
+---
+
 ## Baseline inventory (post-WP-000)
 
 | Item | Current state |
@@ -1942,5 +1986,7 @@ Hosted Postgres/Redis + all services → observability → fund deployer → `pn
 | Audit remediation register (WP-104) | `docs/WP-104_AUDIT_REMEDIATION.md` + `docs/audits/` (`pnpm audit:register-check`) — scaffold; external audits pending |
 | Restricted mainnet recipes/gates (WP-105) | `docs/WP-105_RESTRICTED_MAINNET.md` + `scripts/mainnet/` + `deployments/base.json` (`pnpm mainnet:*`) — live mainnet BLOCKED |
 | Watchtower prototype (WP-095) | `packages/watchtower` + `docs/WP-095_WATCHTOWER.md` (`pnpm watchtower`) |
+| Live Groq AI table (WP-107) | `services/agent-runtime/src/live/` + game-server wire + `docs/WP-107_LIVE_GROQ_TABLE.md` (`pnpm smoke:groq-table`) |
 | Plan 19 DB/API migration | migrations `024`–`029` + `docs/PLAN_19_DATABASE_API_MIGRATION.md` + `services/api/src/plan19-routes.ts` |
+| Hosted DB + WS cutover (WP-110) | migration `030` + scheduler persist + WS dual-accept + `docs/WP-110_HOSTED_DB_WS.md` |
 | `baseline-v2` tag | Not created yet (await user) |
