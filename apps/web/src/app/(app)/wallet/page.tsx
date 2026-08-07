@@ -157,12 +157,11 @@ export default function WalletPage() {
 
   return (
     <main
+      className="mz-page"
       style={{
         flex: 1,
         width: "100%",
         minWidth: 0,
-        padding: `${space[6]}px ${space[7]}px 56px`,
-        boxSizing: "border-box",
         fontFamily: font.sans,
         color: color.text,
       }}

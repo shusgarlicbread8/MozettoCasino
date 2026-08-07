@@ -16,8 +16,8 @@ type Common = {
 };
 
 const sizePad: Record<ButtonSize, string> = {
-  sm: "7px 14px",
-  md: "11px 20px",
+  sm: "9px 14px",
+  md: "12px 20px",
   lg: "14px 28px",
 };
 

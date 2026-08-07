@@ -52,6 +52,7 @@ export function Topbar() {
 
   return (
     <header
+      className="mz-topbar"
       style={{
         height: 52,
         flex: "none",
@@ -70,16 +71,18 @@ export function Topbar() {
       <div style={{ display: "flex", alignItems: "center", gap: 14, flex: 1, minWidth: 0 }}>
         <Link
           href="/live"
+          className="mz-touch"
           style={{
             display: "flex",
             alignItems: "center",
             gap: 7,
-            padding: "4px 9px",
+            padding: "8px 10px",
             borderRadius: 6,
             background: "rgba(255,90,90,.1)",
             border: "1px solid rgba(255,90,90,.22)",
             flex: "none",
             textDecoration: "none",
+            minHeight: 36,
           }}
         >
           <div
@@ -102,6 +105,7 @@ export function Topbar() {
           </span>
         </Link>
         <div
+          className="mz-topbar-tagline"
           style={{
             font: `400 12px ${font.sans}`,
             color: color.textMuted,
@@ -113,8 +117,9 @@ export function Topbar() {
           Competitive AI poker · verifiable settlement
         </div>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, flex: "none" }}>
+      <div className="mz-topbar-actions" style={{ display: "flex", alignItems: "center", gap: 12, flex: "none" }}>
         <div
+          className="mz-topbar-account"
           title={accountTitle}
           style={{
             padding: "5px 10px",
@@ -130,6 +135,7 @@ export function Topbar() {
         </div>
         <Link
           href="/wallet"
+          className="mz-topbar-balances mz-touch"
           style={{ display: "flex", alignItems: "center", gap: 14, textDecoration: "none", color: color.text }}
         >
           <div style={{ textAlign: "right" }}>
@@ -156,11 +162,12 @@ export function Topbar() {
             </div>
           </div>
         </Link>
-        <Button href="/poker" variant="primary" size="sm">
+        <Button href="/poker" variant="primary" size="sm" className="mz-topbar-play">
           Play Now
         </Button>
         <button
           type="button"
+          className="mz-topbar-signout mz-touch"
           onClick={() => {
             void (async () => {
               const ok = await leaveIfSeated(
@@ -178,16 +185,20 @@ export function Topbar() {
             fontSize: 12,
             cursor: "pointer",
             fontFamily: font.sans,
+            minHeight: 36,
           }}
         >
           Sign out
         </button>
-        <div style={{ width: 1, height: 22, background: color.line }} />
-        <div
+        <div className="mz-topbar-divider" style={{ width: 1, height: 22, background: color.line }} />
+        <button
+          type="button"
+          className="mz-touch"
+          aria-label="Notifications"
           onClick={() => setOpen((v) => !v)}
           style={{
-            width: 32,
-            height: 32,
+            width: 40,
+            height: 40,
             borderRadius: 8,
             border: `1px solid ${color.line}`,
             display: "flex",
@@ -197,6 +208,8 @@ export function Topbar() {
             position: "relative",
             fontSize: 12,
             color: color.textMuted,
+            background: "transparent",
+            padding: 0,
           }}
         >
           ◔
@@ -219,15 +232,17 @@ export function Topbar() {
               {notifs.length}
             </div>
           ) : null}
-        </div>
+        </button>
       </div>
       {open ? (
         <div
+          className="mz-notif-panel"
           style={{
             position: "absolute",
             top: 56,
             right: 14,
             width: 376,
+            maxWidth: "calc(100vw - 28px)",
             borderRadius: 15,
             border: `1px solid ${color.lineStrong}`,
             background: "rgba(12,18,16,.98)",

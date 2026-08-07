@@ -170,12 +170,11 @@ export default function HomePage() {
 
   return (
     <main
+      className="mz-page"
       style={{
         flex: 1,
         width: "100%",
         minWidth: 0,
-        padding: `${space[6]}px ${space[7]}px 56px`,
-        boxSizing: "border-box",
         fontFamily: font.sans,
         color: color.text,
       }}
@@ -206,6 +205,7 @@ export default function HomePage() {
         />
         <div
           aria-hidden
+          className="mz-hero-deco"
           style={{
             position: "absolute",
             right: "6%",

@@ -419,12 +419,11 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
 
   return (
     <main
+      className="mz-page"
       style={{
         flex: 1,
         width: "100%",
         minWidth: 0,
-        padding: `${space[6]}px ${space[7]}px 56px`,
-        boxSizing: "border-box",
       }}
     >
       <div
@@ -565,10 +564,9 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
       </ol>
 
       <div
+        className="mz-play-grid"
         style={{
           marginTop: space[7],
-          display: "grid",
-          gridTemplateColumns: "minmax(0, 1.25fr) minmax(320px, 0.85fr)",
           gap: space[5],
           alignItems: "start",
         }}
@@ -584,13 +582,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
           >
             1 · LEAGUE (Bronze → Platinum)
           </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-              gap: 10,
-            }}
-          >
+          <div className="mz-league-grid">
             {list.map((l, i) => {
               const on = leagueId === l.id;
               return (
@@ -604,7 +596,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
                     setError(null);
                     if (phase === "error") setPhase("idle");
                   }}
-                  className="mz-hover-lift"
+                  className="mz-hover-lift mz-touch"
                   style={{
                     textAlign: "left",
                     borderRadius: radius.lg,
@@ -613,6 +605,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
                       ? `linear-gradient(160deg,${l.color}22,${color.inkElevated} 72%)`
                       : color.inkElevated,
                     padding: "14px 14px",
+                    minHeight: 44,
                     cursor: l.open && !inputsLocked ? "pointer" : "not-allowed",
                     opacity: l.open ? 1 : 0.45,
                     color: color.text,
@@ -669,13 +662,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
               Tune traits →
             </Link>
           </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-              gap: 10,
-            }}
-          >
+          <div className="mz-profile-grid">
             {PROFILES.map((p, i) => {
               const on = profile === p.id;
               return (
@@ -684,7 +671,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
                   type="button"
                   disabled={inputsLocked}
                   onClick={() => pickProfile(p.id)}
-                  className="mz-hover-lift"
+                  className="mz-hover-lift mz-touch"
                   style={{
                     textAlign: "left",
                     borderRadius: radius.lg,
@@ -693,6 +680,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
                       ? `linear-gradient(160deg,${p.color}18,${color.inkElevated} 70%)`
                       : color.inkElevated,
                     padding: "16px 18px",
+                    minHeight: 44,
                     cursor: inputsLocked ? "not-allowed" : "pointer",
                     color: color.text,
                     transition: "transform .18s ease, border-color .18s ease",

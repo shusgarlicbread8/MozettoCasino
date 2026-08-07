@@ -60,6 +60,7 @@ export function Nav() {
 
   return (
     <aside
+      className="mz-desktop-nav"
       style={{
         width: 220,
         flex: "none",

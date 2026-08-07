@@ -1,4 +1,5 @@
 import { Nav } from "./Nav";
+import { MobileTabBar } from "./MobileTabBar";
 import { Topbar } from "./Topbar";
 import { PageFade } from "./PageFade";
 import { WalletReconnect } from "./WalletReconnect";
@@ -11,17 +12,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <SessionProvider>
       <LeaveGuardProvider>
         <div
-          className="mz-atmosphere"
+          className="mz-atmosphere mz-app-shell"
           style={{ display: "flex", minHeight: "100vh", width: "100%", background: color.ink }}
         >
           <Nav />
-          <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, width: "100%" }}>
+          <div
+            className="mz-app-main"
+            style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, width: "100%" }}
+          >
             <Topbar />
             <PageFade>
               <WalletReconnect />
               {children}
             </PageFade>
           </div>
+          <MobileTabBar />
         </div>
       </LeaveGuardProvider>
     </SessionProvider>
