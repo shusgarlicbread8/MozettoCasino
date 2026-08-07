@@ -1,0 +1,55 @@
+{
+  "vectorId": "10_model_policy_groq",
+  "specRefs": [
+    "MOZETTO_CONTROLLER_V1.md",
+    "MOZETTO_PROTOCOL_V3.md"
+  ],
+  "hashStatus": "computed",
+  "hashingAlgorithm": "keccak256(abi.encode(...))",
+  "humanReadableInput": {
+    "description": "Season 1 Groq openai/gpt-oss-120b model policy",
+    "provider": "groq",
+    "model": "openai/gpt-oss-120b",
+    "toolsDisabled": true,
+    "temperatureMilli_initialDefault": 0,
+    "maxOutputTokens_initialDefault": 256,
+    "note": "temperatureMilli and maxOutputTokens are initial defaults / hypotheses — recalibrate only via new policy version"
+  },
+  "encodingRecipe": "keccak256(abi.encode(DOMAIN_MODEL_POLICY_V1, policyId, policyVersion, providerId, modelId, reasoningEffortPolicy, outputMode, maxOutputTokens, temperatureMilli, masterPolicyHash, profileSetHash, energyPolicyHash, contextTruncationPolicy, fallbackPolicyHash, toolsDisabled))",
+  "fieldHashes": {
+    "providerId": "0xee4e78d9100f09fd731986dda992e94f8336fd6f347a7781b405c087c875a9bb",
+    "modelId": "0xef1e61108815d160396825dfc53f2d5f45f26f70a6c8de9fcd7795e6a7ffcab6"
+  },
+  "canonicalBytesHex": "0x3030df61232e22e536d79ad43c3dd26adebe41ca3bffe649695223884382ddd20fbf1494eb068f077fef4fb606895e525a371d83450c76e84b41647dc0b47aa40000000000000000000000000000000000000000000000000000000000000001ee4e78d9100f09fd731986dda992e94f8336fd6f347a7781b405c087c875a9bbef1e61108815d160396825dfc53f2d5f45f26f70a6c8de9fcd7795e6a7ffcab650bebe8a60073e2bc71cd38c39b5d152f4528290e55bb35d9ce1d8870ccb8dba9921bb05d2574a4f800d05be884036e7a1750b1567ce052e466d97b9eb62287e00000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000fe325efd60580de12027b2aa0725d8eeb369a68801d9800e2b3d758acae50c1a05845c8bed189086a29479a06a3d0dfebebfc7c53af7455f94afcc08b4dc1eb93a01fbfadb8320bc735f5a7ea615ff18f26fb473868538852866f40c943988a36feb4ac3e2d9d09a15c9e8c82090de49a98c9da47a6859ffa24cd0bfc9fb3a2a1abe5aa585307b1f57a8262096ab60c6a0d820c3f227fec79649ac60f859c9470000000000000000000000000000000000000000000000000000000000000001",
+  "keccak256": "0x17b92436bd986d508c4d7adc9b46bd868eaf8894e4ccc5162d675e01999352e4",
+  "expectedDecodedStructure": {
+    "policyId": "0x0fbf1494eb068f077fef4fb606895e525a371d83450c76e84b41647dc0b47aa4",
+    "policyVersion": 1,
+    "providerId": "0xee4e78d9100f09fd731986dda992e94f8336fd6f347a7781b405c087c875a9bb",
+    "modelId": "0xef1e61108815d160396825dfc53f2d5f45f26f70a6c8de9fcd7795e6a7ffcab6",
+    "reasoningEffortPolicy": "0x50bebe8a60073e2bc71cd38c39b5d152f4528290e55bb35d9ce1d8870ccb8dba",
+    "outputMode": "0x9921bb05d2574a4f800d05be884036e7a1750b1567ce052e466d97b9eb62287e",
+    "maxOutputTokens": 256,
+    "temperatureMilli": 0,
+    "masterPolicyHash": "0xfe325efd60580de12027b2aa0725d8eeb369a68801d9800e2b3d758acae50c1a",
+    "profileSetHash": "0x05845c8bed189086a29479a06a3d0dfebebfc7c53af7455f94afcc08b4dc1eb9",
+    "energyPolicyHash": "0x3a01fbfadb8320bc735f5a7ea615ff18f26fb473868538852866f40c943988a3",
+    "contextTruncationPolicy": "0x6feb4ac3e2d9d09a15c9e8c82090de49a98c9da47a6859ffa24cd0bfc9fb3a2a",
+    "fallbackPolicyHash": "0x1abe5aa585307b1f57a8262096ab60c6a0d820c3f227fec79649ac60f859c947",
+    "toolsDisabled": true
+  },
+  "expectedFailureMutations": [
+    {
+      "mutation": "swap model to another id silently",
+      "expect": "hash change required; active season MUST NOT mutate"
+    },
+    {
+      "mutation": "toolsDisabled=false",
+      "expect": "hash change; Season 1 MUST keep tools disabled"
+    },
+    {
+      "mutation": "hash raw JSON policy",
+      "expect": "non-conformant"
+    }
+  ]
+}

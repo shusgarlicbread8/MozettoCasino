@@ -1,0 +1,43 @@
+{
+  "vectorId": "13_proof_batch_root",
+  "specRefs": [
+    "MOZETTO_PROOF_BATCH_V1.md"
+  ],
+  "hashStatus": "computed",
+  "hashingAlgorithm": "keccak256(abi.encode(...))",
+  "humanReadableInput": {
+    "description": "Global proof batch sequence 7 linking three table checkpoint roots",
+    "checkpointFrequency_initialDefault": "every 2–5 seconds during testing — hypothesis, versioned policy",
+    "sequence": 7
+  },
+  "checkpointRoots": [
+    "0x553ce0fcb00a6ed83b31fef83d939c2477aef3fd43418ed3f27afc27e313f46e",
+    "0xdf8dbaded31eb9e25c3c4a33504dd87acd1629b7683e5de84cb52b3b4dca47f3",
+    "0x69475502c9ba09064ea4441e98c3c10bbd0f89a5187ac76acb3d8ed7bed83d25"
+  ],
+  "globalRoot": "0xc171999ea5e2ce6a50c378cf847104c9ce3195eedb4c89f44a1a21f1fd68935b",
+  "previousBatchRoot": "0x776ce025f467c8b59a5b2c281830d441fc1fc98dacb649844d2095f80f62dbce",
+  "canonicalBytesHex": "0xae74b82cff078eb3df96f2b6bdb2957f84f82b22c2530c88f2a45d21d3bfe40f0000000000000000000000000000000000000000000000000000000000000007776ce025f467c8b59a5b2c281830d441fc1fc98dacb649844d2095f80f62dbcec171999ea5e2ce6a50c378cf847104c9ce3195eedb4c89f44a1a21f1fd68935b3bdbfdc9d2fe694b2a90dc3e514a9c2bdc2989c2b8c8e6f9c90042ee934ceca40000000000000000000000000000000000000000000000000000000066b2f848",
+  "keccak256": "0x1527fd14daa379b9b64fb4bf97933723c68334992686d83f46f7e97ffdb487ec",
+  "expectedDecodedStructure": {
+    "sequence": "7",
+    "previousBatchRoot": "0x776ce025f467c8b59a5b2c281830d441fc1fc98dacb649844d2095f80f62dbce",
+    "globalRoot": "0xc171999ea5e2ce6a50c378cf847104c9ce3195eedb4c89f44a1a21f1fd68935b",
+    "dataManifestHash": "0x3bdbfdc9d2fe694b2a90dc3e514a9c2bdc2989c2b8c8e6f9c90042ee934ceca4",
+    "createdAt": "1723005000"
+  },
+  "expectedFailureMutations": [
+    {
+      "mutation": "sequence 7 with previousBatchRoot of sequence 5",
+      "expect": "continuity MUST fail"
+    },
+    {
+      "mutation": "duplicate sequence",
+      "expect": "rejected"
+    },
+    {
+      "mutation": "permute checkpoint leaf order",
+      "expect": "globalRoot changes"
+    }
+  ]
+}

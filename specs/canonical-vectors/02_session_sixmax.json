@@ -1,0 +1,62 @@
+{
+  "vectorId": "02_session_sixmax",
+  "specRefs": [
+    "MOZETTO_PROTOCOL_V3.md",
+    "MOZETTO_SESSION_V2.md"
+  ],
+  "hashStatus": "computed",
+  "hashingAlgorithm": "keccak256(abi.encode(...))",
+  "humanReadableInput": {
+    "description": "Six-max session with seats 0..5, 50 USDC buy-in each",
+    "chainId": 31337,
+    "seatCount": 6,
+    "buyInUsdcBaseUnits": "50000000"
+  },
+  "encodingRecipe": {
+    "sameAs": "01_session_hu.json with TEMPLATE_SIXMAX and 6 leaves"
+  },
+  "intermediate": {
+    "participantLeaves": [
+      "0xba2d3cc82e07ddfce9682886330d2d8bbb214cfd924fe39e4862a66b6c7baea9",
+      "0x8b8f90702d2e3a09de85ce19a1a42b808fa0bdc2ef3844f6dac659cb4379dcc0",
+      "0x62b0c323f7270d54f0148f19afa20d6924cd3bcf5255fbae6af887908b04d6f6",
+      "0x9ede69ed323471ecab96ec11b1adbf594aecdd9a85be68fb355bbae5e9faa360",
+      "0xf9b67faaee966f04e5ae7fc1dfae8e98ce739570fce5d2a38d29a3c00ccf5736",
+      "0xfa9c265b8c3dc9672dd3e54789e335c124c8e95fcf0a07c4ff14e5d1da22edbf"
+    ],
+    "participantRoot": "0xa3dc02dcb50a09cb1ce9b6906d296bb6b6f4f124fc3798c36a9b3e67f4dd930a",
+    "sessionId": "0xa34f7f52610181ee033bd6e1af8588317064baa06dce162267c96f51f9df1fe7"
+  },
+  "canonicalBytesHex": "0x8f03a2bb14c07d4673e3c4b69bafcde48db175d6a206f87993133f1242b999a90000000000000000000000000000000000000000000000000000000000007a690000000000000000000000000000000000000000000000000000000000000003a34f7f52610181ee033bd6e1af8588317064baa06dce162267c96f51f9df1fe73dd8f4cda77d9b1f0c62e64d95e48d6dc56d9fd7bdd9c67e0650102197da3cfba3dc02dcb50a09cb1ce9b6906d296bb6b6f4f124fc3798c36a9b3e67f4dd930ac154e1cc976c344dc3f2b17b322a5c53291c91f0383dad750c2de98465e7a5e8336de611e6a6bc630a2bee8922031ede58feb31975eab830615e07e06a6537a482257fda53462a5726592f17a52f70dfc77802d20ea38764150e49cc03a1438323937affec19b32b00b9956c9f91a8be65f5b9801d7d0e5636fc1103bf0f960263eca62dc1574e4721b34c4c6220893fb946025b62997c7d9a66c5ea919dd881d749372430340929ee8506ac45cb96cbb96566aa8d80695f1d233120ebcb76c90000000000000000000000000000000000000000000000000000000066b2ec900000000000000000000000000000000000000000000000000000000066b2eee86eee458c910ecb1f9c6e101357da9e2c5b8c7c78a1a8961c7828b3c89641c038",
+  "keccak256": "0x2ecdc5fdc852754c677811d37743bc5388154958a3c2507274ca9ee43c25cb5b",
+  "expectedDecodedStructure": {
+    "chainId": "31337",
+    "protocolVersion": 3,
+    "sessionId": "0xa34f7f52610181ee033bd6e1af8588317064baa06dce162267c96f51f9df1fe7",
+    "gameTemplateId": "0x3dd8f4cda77d9b1f0c62e64d95e48d6dc56d9fd7bdd9c67e0650102197da3cfb",
+    "participantRoot": "0xa3dc02dcb50a09cb1ce9b6906d296bb6b6f4f124fc3798c36a9b3e67f4dd930a",
+    "openingBalanceRoot": "0xc154e1cc976c344dc3f2b17b322a5c53291c91f0383dad750c2de98465e7a5e8",
+    "controllerRoot": "0x336de611e6a6bc630a2bee8922031ede58feb31975eab830615e07e06a6537a4",
+    "profileRoot": "0x82257fda53462a5726592f17a52f70dfc77802d20ea38764150e49cc03a14383",
+    "dealerSecretRoot": "0x23937affec19b32b00b9956c9f91a8be65f5b9801d7d0e5636fc1103bf0f9602",
+    "randomnessPolicyId": "0x63eca62dc1574e4721b34c4c6220893fb946025b62997c7d9a66c5ea919dd881",
+    "settlementPolicyId": "0xd749372430340929ee8506ac45cb96cbb96566aa8d80695f1d233120ebcb76c9",
+    "createdAt": "1723002000",
+    "sealDeadline": "1723002600",
+    "sessionNonce": "0x6eee458c910ecb1f9c6e101357da9e2c5b8c7c78a1a8961c7828b3c89641c038"
+  },
+  "expectedFailureMutations": [
+    {
+      "mutation": "omit seat 3 leaf",
+      "expect": "root and sessionId change"
+    },
+    {
+      "mutation": "use HU template id",
+      "expect": "descriptor hash changes"
+    },
+    {
+      "mutation": "seat index 6",
+      "expect": "invalid — seat MUST be 0..5 for six-max"
+    }
+  ]
+}

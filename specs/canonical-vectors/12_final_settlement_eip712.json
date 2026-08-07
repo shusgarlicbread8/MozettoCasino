@@ -1,0 +1,66 @@
+{
+  "vectorId": "12_final_settlement_eip712",
+  "specRefs": [
+    "MOZETTO_SETTLEMENT_V3.md"
+  ],
+  "hashStatus": "computed",
+  "hashingAlgorithm": "EIP-712 typed data keccak256; domain MozettoPokerSettlement v3",
+  "humanReadableInput": {
+    "description": "FinalSettlementV3 for HU session with conservation openingTotal == endingPlayerTotal + totalRake",
+    "conservation": {
+      "openingTotal": "200000000",
+      "endingPlayerTotal": "198900000",
+      "totalRake": "1100000",
+      "check": "200000000 == 198900000 + 1100000"
+    },
+    "eip712": {
+      "name": "MozettoPokerSettlement",
+      "version": "3",
+      "chainId": 31337,
+      "verifyingContract": "0xBEbeBeBEbeBebeBeBEBEbebEBeBeBebeBeBebebe"
+    }
+  },
+  "typehash": "0x5d5b7d1109f458f5a23795ebf08d5f89055557496a0da8330ab396616c685bc5",
+  "structHash": "0xdb10e42c79b0bdc1441fd1f3e1b8432d335f0590b2502f0e1fa0bf3b48a5236a",
+  "domainSeparator": "0xd95b0139b39c8ed2fdb772aa8eb0a916e7590edb3486ba2b1baa001e26684190",
+  "canonicalBytesHex": "0x28a83ccdc6b6e1ca3112928b8e3b410b773872d2ab0bbd5a5aee67e4c7599b99",
+  "keccak256": "0x28a83ccdc6b6e1ca3112928b8e3b410b773872d2ab0bbd5a5aee67e4c7599b99",
+  "eip712Digest": "0x28a83ccdc6b6e1ca3112928b8e3b410b773872d2ab0bbd5a5aee67e4c7599b99",
+  "expectedDecodedStructure": {
+    "sessionId": "0x654f13f5a29326f85b98aec33995d2df102e3ea01334b3f27c6d79fa04e2de5f",
+    "finalSequence": "42",
+    "finalEventRoot": "0x62eaa1cadf74df45c105656e9e04309be79e9db121fe3ebaca9ea3aba4eb5ba7",
+    "handRoot": "0xd5b78f89bddb9ae9cd114aece50cdad20764aa1fa2534391a4839c06defa4340",
+    "balanceRoot": "0x84f98bbd54d94dbdf521105c7a90d5c91f300f3782c84a5d2a67bd841da94d04",
+    "randomnessEpochId": "0x6c255fb14b3c0c3ef574bf7a6f5c1f64db35d0e4940b5f0a373fcf3890ae91a2",
+    "openingTotal": "200000000",
+    "endingPlayerTotal": "198900000",
+    "totalRake": "1100000",
+    "proofBatchSequence": "7",
+    "modelPolicyHash": "0x17b92436bd986d508c4d7adc9b46bd868eaf8894e4ccc5162d675e01999352e4",
+    "profileSetHash": "0x05845c8bed189086a29479a06a3d0dfebebfc7c53af7455f94afcc08b4dc1eb9",
+    "gameTemplateId": "0x24daa09e304051f7c98fb3bdca6dacc5940a25842d00e0b914d9938df63e734f",
+    "engineHash": "0xfbaa172ca206187431a693cc6e030f2a05b550eaf7a54f3e62a3f86072b4d232",
+    "deadline": "1723010000",
+    "chainId": "31337",
+    "verifyingContract": "0xBEbeBeBEbeBebeBeBEBEbebEBeBeBebeBeBebebe"
+  },
+  "expectedFailureMutations": [
+    {
+      "mutation": "endingPlayerTotal + totalRake != openingTotal",
+      "expect": "conservation MUST fail"
+    },
+    {
+      "mutation": "EIP-712 version '2'",
+      "expect": "digest mismatch vs V3"
+    },
+    {
+      "mutation": "wrong chainId",
+      "expect": "domain separator changes"
+    },
+    {
+      "mutation": "duplicate settlement same roots",
+      "expect": "root reuse rejected"
+    }
+  ]
+}

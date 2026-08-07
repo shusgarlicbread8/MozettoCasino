@@ -1,0 +1,74 @@
+{
+  "vectorId": "07_card_leaf_merkle",
+  "specRefs": [
+    "MOZETTO_RANDOMNESS_V2.md",
+    "MOZETTO_PROTOCOL_V3.md"
+  ],
+  "hashStatus": "computed",
+  "hashingAlgorithm": "keccak256(abi.encode(...)); Merkle positional",
+  "humanReadableInput": {
+    "description": "Identity deck 0..51 with deterministic salts; prove position 0 cardCode=0 (2c)",
+    "handId": "0x1fded9312702c3bdbd6f6e2e6e59caa6be478071b208be09a728a172a0c031c7",
+    "cardMapping": "card = suitIndex*13 + rankIndex; 0=2c ... 51=As",
+    "position0": {
+      "cardCode": 0,
+      "label": "2c"
+    }
+  },
+  "encodingRecipe": {
+    "cardLeaf": "keccak256(abi.encode(DOMAIN_CARD_LEAF_V1, handId, position, cardCode, cardSalt))"
+  },
+  "leaf0": {
+    "canonicalBytesHex": "0x4ca49ec723edf82cc262bebc717727a455b3d169250b172e84b2d05ae97454c91fded9312702c3bdbd6f6e2e6e59caa6be478071b208be09a728a172a0c031c700000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000070369cdcefbe06de3bae5d9d8b40cfc88d551567ee1212c786b4c4b562c3058",
+    "keccak256": "0x49cd1b0302033ff46647718f531ff59fbad5f175dac27b4e079e6debc5396c20",
+    "cardSalt": "0x070369cdcefbe06de3bae5d9d8b40cfc88d551567ee1212c786b4c4b562c3058"
+  },
+  "deckRoot": "0xaeff219fdb6580e6b3d79df073f359ae5d2c4ef37a241d0689b81297704b38c7",
+  "merkleProofPosition0": [
+    {
+      "sibling": "0x331cfefcfe539ab1b024b74d02e4c2c562bca9d606bb19b20faafb95c92366c2",
+      "isLeft": false
+    },
+    {
+      "sibling": "0xcbc26322d079590c0d5fa63d6c8fb5cc61e65b4278cb3c4042527942c4be535b",
+      "isLeft": false
+    },
+    {
+      "sibling": "0xcb2a8cdab9e37155e58bac486e02f03bd73110a2d8893eeb1a56d06e452fdb1e",
+      "isLeft": false
+    },
+    {
+      "sibling": "0xc7412ac223fea1cbc46badf1815bec8a6c2fa7eb8e3d7b59e57ca7595cf2c898",
+      "isLeft": false
+    },
+    {
+      "sibling": "0x3ad7257fc9ff537ef31d28c88ef40d346f8fce00de33d7a35476eb3cf355615a",
+      "isLeft": false
+    },
+    {
+      "sibling": "0xba2bff58e8173556555bfd455e9902652183b57bc3672be742f6b079093b9db9",
+      "isLeft": false
+    }
+  ],
+  "canonicalBytesHex": "0x4ca49ec723edf82cc262bebc717727a455b3d169250b172e84b2d05ae97454c91fded9312702c3bdbd6f6e2e6e59caa6be478071b208be09a728a172a0c031c700000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000070369cdcefbe06de3bae5d9d8b40cfc88d551567ee1212c786b4c4b562c3058",
+  "keccak256": "0x49cd1b0302033ff46647718f531ff59fbad5f175dac27b4e079e6debc5396c20",
+  "expectedDecodedStructure": {
+    "deckRoot": "0xaeff219fdb6580e6b3d79df073f359ae5d2c4ef37a241d0689b81297704b38c7",
+    "leafCount": 52,
+    "paddedLeafCount": 64
+  },
+  "expectedFailureMutations": [
+    {
+      "mutation": "flip cardCode 0→1 with same salt",
+      "expect": "leaf and proof fail"
+    },
+    {
+      "mutation": "wrong position in proof",
+      "expect": "root mismatch"
+    },
+    {
+      "mutation": "duplicate card codes in deck",
+      "expect": "deck validity MUST fail"
+    }
+  ]
+}

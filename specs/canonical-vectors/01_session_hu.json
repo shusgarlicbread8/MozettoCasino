@@ -1,0 +1,96 @@
+{
+  "vectorId": "01_session_hu",
+  "specRefs": [
+    "MOZETTO_PROTOCOL_V3.md",
+    "MOZETTO_SESSION_V2.md"
+  ],
+  "hashStatus": "computed",
+  "hashingAlgorithm": "keccak256(abi.encode(...))",
+  "humanReadableInput": {
+    "description": "Two-player HU session descriptor on Anvil with sealed participants",
+    "chainId": 31337,
+    "protocolVersion": 3,
+    "seats": [
+      {
+        "owner": "0x1111111111111111111111111111111111111111",
+        "arenaAccount": "0xa111111111111111111111111111111111111111",
+        "seat": 0,
+        "buyInUsdcBaseUnits": "100000000",
+        "rated": true
+      },
+      {
+        "owner": "0x2222222222222222222222222222222222222222",
+        "arenaAccount": "0xA222222222222222222222222222222222222222",
+        "seat": 1,
+        "buyInUsdcBaseUnits": "100000000",
+        "rated": true
+      }
+    ],
+    "blinds": {
+      "smallBlind": "500000",
+      "bigBlind": "1000000"
+    }
+  },
+  "encodingRecipe": {
+    "participantLeaf": "keccak256(abi.encode(DOMAIN_PARTICIPANT_LEAF_V1, owner, arenaAccount, seat, buyIn, controllerHash, profileHash, ratingPool, rated, seatTicketNonce))",
+    "sessionId": "keccak256(abi.encode(DOMAIN_SESSION_ID_V1, chainId, gameTemplateId, participantRoot, sessionNonce, createdAt))",
+    "sessionDescriptor": "keccak256(abi.encode(DOMAIN_SESSION_V2, chainId, protocolVersion, sessionId, gameTemplateId, participantRoot, openingBalanceRoot, controllerRoot, profileRoot, dealerSecretRoot, randomnessPolicyId, settlementPolicyId, createdAt, sealDeadline, sessionNonce))",
+    "merkle": "pad to power-of-2 with bytes32(0); parent = keccak256(left || right) positional"
+  },
+  "intermediate": {
+    "domains": {
+      "PARTICIPANT_LEAF_V1": "0xb33b3d4212cc58299f582a5fd8f0ae49784cf04540c116df8a35e81239e16c6b",
+      "SESSION_V2": "0x8f03a2bb14c07d4673e3c4b69bafcde48db175d6a206f87993133f1242b999a9",
+      "SESSION_ID_V1": "0x899b72736cfacc683cedfee116b0d90769c642594f8b49cda2f60c67a3c79d24"
+    },
+    "participantLeaves": [
+      "0x67397b0ce40d16beeb1364e472e2479d60db6e83afdded5ab88e23c34d5c8879",
+      "0xd34598e356fcb7bad6f481bbf7dbc8afff4f6429905f68438e16ab7a198fb30e"
+    ],
+    "participantRoot": "0x465e0c15e06655a7069984ebc1c90c4c22c92b51d1caa3afac3452887f4b706e",
+    "openingBalanceRoot": "0xc27ec8b521f9b8255d56152797f2ba073203f4849bbc4025ebe3d5188b569775",
+    "controllerRoot": "0x196d2286bc7bc0db8cc2726f682882ca6b366beaecea9a51a74b7b8c3aef13bc",
+    "profileRoot": "0xbc919e586f290c0cbe955e6e496e9cc12cdaf709848a55376bb9e70078648aea",
+    "dealerSecretRoot": "0x23937affec19b32b00b9956c9f91a8be65f5b9801d7d0e5636fc1103bf0f9602",
+    "sessionIdPreimage": {
+      "canonicalBytesHex": "0x899b72736cfacc683cedfee116b0d90769c642594f8b49cda2f60c67a3c79d240000000000000000000000000000000000000000000000000000000000007a6924daa09e304051f7c98fb3bdca6dacc5940a25842d00e0b914d9938df63e734f465e0c15e06655a7069984ebc1c90c4c22c92b51d1caa3afac3452887f4b706ec508dfbfb17586266eb5cab73cec6655f2654b6b54fd9fbc66802af5b828040a0000000000000000000000000000000000000000000000000000000066b2e8a8",
+      "hash": "0x654f13f5a29326f85b98aec33995d2df102e3ea01334b3f27c6d79fa04e2de5f"
+    }
+  },
+  "canonicalBytesHex": "0x8f03a2bb14c07d4673e3c4b69bafcde48db175d6a206f87993133f1242b999a90000000000000000000000000000000000000000000000000000000000007a690000000000000000000000000000000000000000000000000000000000000003654f13f5a29326f85b98aec33995d2df102e3ea01334b3f27c6d79fa04e2de5f24daa09e304051f7c98fb3bdca6dacc5940a25842d00e0b914d9938df63e734f465e0c15e06655a7069984ebc1c90c4c22c92b51d1caa3afac3452887f4b706ec27ec8b521f9b8255d56152797f2ba073203f4849bbc4025ebe3d5188b569775196d2286bc7bc0db8cc2726f682882ca6b366beaecea9a51a74b7b8c3aef13bcbc919e586f290c0cbe955e6e496e9cc12cdaf709848a55376bb9e70078648aea23937affec19b32b00b9956c9f91a8be65f5b9801d7d0e5636fc1103bf0f960263eca62dc1574e4721b34c4c6220893fb946025b62997c7d9a66c5ea919dd881d749372430340929ee8506ac45cb96cbb96566aa8d80695f1d233120ebcb76c90000000000000000000000000000000000000000000000000000000066b2e8a80000000000000000000000000000000000000000000000000000000066b2eb00c508dfbfb17586266eb5cab73cec6655f2654b6b54fd9fbc66802af5b828040a",
+  "keccak256": "0xcab83aae1f94a37e9d03128fba411d3b73d3c9c1b8d139d3cfd4b14bce5680aa",
+  "expectedDecodedStructure": {
+    "chainId": "31337",
+    "protocolVersion": 3,
+    "sessionId": "0x654f13f5a29326f85b98aec33995d2df102e3ea01334b3f27c6d79fa04e2de5f",
+    "gameTemplateId": "0x24daa09e304051f7c98fb3bdca6dacc5940a25842d00e0b914d9938df63e734f",
+    "participantRoot": "0x465e0c15e06655a7069984ebc1c90c4c22c92b51d1caa3afac3452887f4b706e",
+    "openingBalanceRoot": "0xc27ec8b521f9b8255d56152797f2ba073203f4849bbc4025ebe3d5188b569775",
+    "controllerRoot": "0x196d2286bc7bc0db8cc2726f682882ca6b366beaecea9a51a74b7b8c3aef13bc",
+    "profileRoot": "0xbc919e586f290c0cbe955e6e496e9cc12cdaf709848a55376bb9e70078648aea",
+    "dealerSecretRoot": "0x23937affec19b32b00b9956c9f91a8be65f5b9801d7d0e5636fc1103bf0f9602",
+    "randomnessPolicyId": "0x63eca62dc1574e4721b34c4c6220893fb946025b62997c7d9a66c5ea919dd881",
+    "settlementPolicyId": "0xd749372430340929ee8506ac45cb96cbb96566aa8d80695f1d233120ebcb76c9",
+    "createdAt": "1723001000",
+    "sealDeadline": "1723001600",
+    "sessionNonce": "0xc508dfbfb17586266eb5cab73cec6655f2654b6b54fd9fbc66802af5b828040a"
+  },
+  "expectedFailureMutations": [
+    {
+      "mutation": "swap seat indices of participants then recompute root",
+      "expect": "sessionId and descriptor hash change"
+    },
+    {
+      "mutation": "change buyIn of seat 0 by 1",
+      "expect": "participant leaf and roots diverge"
+    },
+    {
+      "mutation": "reuse DOMAIN_EVENT_V1 instead of DOMAIN_SESSION_V2",
+      "expect": "hash mismatch vs golden"
+    },
+    {
+      "mutation": "hash JSON.stringify(session)",
+      "expect": "MUST fail conformance — JSON not consensus"
+    }
+  ]
+}

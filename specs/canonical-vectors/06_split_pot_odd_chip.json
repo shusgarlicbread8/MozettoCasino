@@ -1,0 +1,41 @@
+{
+  "vectorId": "06_split_pot_odd_chip",
+  "specRefs": [
+    "MOZETTO_POKER_EVENT_V1.md"
+  ],
+  "hashStatus": "computed_rule",
+  "hashingAlgorithm": "integer split; odd chip to earliest seat clockwise from button (canonical)",
+  "humanReadableInput": {
+    "description": "HU split pot of 1_000_001 base units (odd chip). Button is seat 0; odd chip goes to seat 1 (left of button).",
+    "pot": "1000001",
+    "winners": [
+      0,
+      1
+    ],
+    "buttonSeat": 0,
+    "oddChipRule": "Among tied winners, odd residual base units are awarded one-at-a-time to the winner with the lowest seat index strictly greater than buttonSeat (wrapping), until residual is 0."
+  },
+  "expectedDecodedStructure": {
+    "awards": {
+      "seat0": "500000",
+      "seat1": "500001"
+    },
+    "oddChipRecipient": 1
+  },
+  "canonicalBytesHex": "0x00000000000000000000000000000000000000000000000000000000000f4241000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000007a120000000000000000000000000000000000000000000000000000000000007a121",
+  "keccak256": "0x7d432a5afa0ff9b058016b0418b3966251ac30a747d386703995eb50b1380c0c",
+  "expectedFailureMutations": [
+    {
+      "mutation": "give odd chip to button seat 0",
+      "expect": "fails odd-chip rule"
+    },
+    {
+      "mutation": "discard odd chip",
+      "expect": "breaks conservation"
+    },
+    {
+      "mutation": "split as 500000.5",
+      "expect": "forbidden float"
+    }
+  ]
+}

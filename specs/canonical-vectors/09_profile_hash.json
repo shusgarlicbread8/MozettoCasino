@@ -1,0 +1,61 @@
+{
+  "vectorId": "09_profile_hash",
+  "specRefs": [
+    "MOZETTO_CONTROLLER_V1.md",
+    "MOZETTO_PROTOCOL_V3.md"
+  ],
+  "hashStatus": "computed",
+  "hashingAlgorithm": "keccak256(abi.encode(...))",
+  "humanReadableInput": {
+    "description": "Shark preset profile for Alice — axes 0..100, no free text",
+    "profile": {
+      "profileId": "0xe74581a765d0a42dc15d12699d5853fbc52d08ac5090110662785e62f0b8cf48",
+      "profileVersion": 1,
+      "presetId": "0xad7a1ba466d2b41c36ac52e4a5c2770810c173e4c0c1634bfbc6e4e97b4591de",
+      "aggression": 82,
+      "riskTolerance": 70,
+      "deception": 55,
+      "opponentAdaptation": 48,
+      "trapPreference": 40,
+      "tempo": 75,
+      "variancePreference": 68,
+      "energyConservation": 35,
+      "allowedSchedulerWeights": 16711935,
+      "createdAt": "1723000000",
+      "ownerCustomizationVersion": 1
+    }
+  },
+  "encodingRecipe": "keccak256(abi.encode(DOMAIN_PROFILE_V1, profileId, profileVersion, presetId, 8x uint8 axes, allowedSchedulerWeights, createdAt, ownerCustomizationVersion))",
+  "canonicalBytesHex": "0xfbb2de187dfd4cf4750bf5fbf0c8da92c1017ba06ce4f25010ee7d1e25e03ddce74581a765d0a42dc15d12699d5853fbc52d08ac5090110662785e62f0b8cf480000000000000000000000000000000000000000000000000000000000000001ad7a1ba466d2b41c36ac52e4a5c2770810c173e4c0c1634bfbc6e4e97b4591de00000000000000000000000000000000000000000000000000000000000000520000000000000000000000000000000000000000000000000000000000000046000000000000000000000000000000000000000000000000000000000000003700000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000000000000000000028000000000000000000000000000000000000000000000000000000000000004b000000000000000000000000000000000000000000000000000000000000004400000000000000000000000000000000000000000000000000000000000000230000000000000000000000000000000000000000000000000000000000ff00ff0000000000000000000000000000000000000000000000000000000066b2e4c00000000000000000000000000000000000000000000000000000000000000001",
+  "keccak256": "0xdfe013128742944f883872ce7bc3343e7067f4a5fdae043a388625e8a8d9108c",
+  "expectedDecodedStructure": {
+    "profileId": "0xe74581a765d0a42dc15d12699d5853fbc52d08ac5090110662785e62f0b8cf48",
+    "profileVersion": 1,
+    "presetId": "0xad7a1ba466d2b41c36ac52e4a5c2770810c173e4c0c1634bfbc6e4e97b4591de",
+    "aggression": 82,
+    "riskTolerance": 70,
+    "deception": 55,
+    "opponentAdaptation": 48,
+    "trapPreference": 40,
+    "tempo": 75,
+    "variancePreference": 68,
+    "energyConservation": 35,
+    "allowedSchedulerWeights": 16711935,
+    "createdAt": "1723000000",
+    "ownerCustomizationVersion": 1
+  },
+  "expectedFailureMutations": [
+    {
+      "mutation": "include free-text prompt in hash preimage",
+      "expect": "MUST NOT — ranked Season 1 forbids"
+    },
+    {
+      "mutation": "aggression 101",
+      "expect": "invalid axis"
+    },
+    {
+      "mutation": "change tempo only",
+      "expect": "profile hash changes"
+    }
+  ]
+}
