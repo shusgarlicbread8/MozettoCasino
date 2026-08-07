@@ -1,270 +1,398 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { HoverDiv } from "@/components/Hoverable";
+/**
+ * WP-130 — Rankings ladder (consumer).
+ * Live Glicko-2 from /v1/rankings. Rating belongs to the user account; agents are loadouts.
+ * No hardcoded leaderboard fallback.
+ */
+
+import Link from "next/link";
+import { useEffect, useState, type CSSProperties } from "react";
+import { Button, LeagueChip } from "@/components/ui";
 import { api } from "@/lib/api";
+import {
+  color,
+  font,
+  profileColors,
+  profileLabels,
+  radius,
+  space,
+  type ProfileId,
+} from "@/lib/design-tokens";
+import { useSession } from "@/lib/session";
 
-const MONO = "var(--font-geist-mono), monospace";
-
-const POOL_BY_TAB = ["hu_holdem_standard", "nlhe_6max_standard", "hu_omaha_standard", "hu_holdem_standard", "tournament_standard"] as const;
-const PROFILE_STYLE: Record<string, string> = {
-  shark: "Shark",
-  professor: "Professor",
-  fox: "Fox",
-  machine: "Machine",
+type PoolTab = {
+  id: string;
+  label: string;
+  pool: string | null;
+  note?: string;
 };
 
-const LC: Record<string, string> = { Bronze: "#B87333", Silver: "#B8C0C8", Gold: "#C9A227", Platinum: "#8FE3D2", Diamond: "#8FB8FF", Sovereign: "#C89BFF" };
-const STYLES: Record<string, { color: string; ring: string; glyph: string }> = {
-  Shark: { color: "#FF5252", ring: "rgba(255,82,82,.4)", glyph: "●" },
-  Professor: { color: "#6EA8FF", ring: "rgba(110,168,255,.4)", glyph: "◈" },
-  Fox: { color: "#FFB020", ring: "rgba(255,177,32,.4)", glyph: "✦" },
-  Machine: { color: "#00E676", ring: "rgba(0,230,118,.4)", glyph: "◆" },
-};
-
-const TABS = [
-  { k: "TEXAS HOLD'EM", house: false },
-  { k: "POKER (CLASSIC)", house: false },
-  { k: "OMAHA", house: false },
-  { k: "SHORT DECK", house: false },
-  { k: "TOURNAMENTS", house: false },
-  { k: "HOUSE GAMES", house: true },
+const TABS: PoolTab[] = [
+  { id: "hu", label: "Texas Hold'em HU", pool: "hu_holdem_standard" },
+  { id: "classic", label: "Poker Classic", pool: "nlhe_6max_standard" },
+  { id: "omaha", label: "Omaha HU", pool: "hu_omaha_standard" },
+  {
+    id: "house",
+    label: "House games",
+    pool: null,
+    note: "House games are not rated against other players. Return and consistency stay on your wallet history.",
+  },
 ];
 
-type RankRow = {
-  rank: string;
-  rankColor: string;
-  name: string;
-  version: string;
-  owner: string;
-  style: string;
-  league: string;
-  leagueColor: string;
-  bb: string;
-  net: string;
-  avg: string;
-  pot: string;
-  hands: string | number;
+type RankEntry = {
+  rank: number;
+  ownerHandle: string;
+  ownerDisplayName?: string;
+  agentHandle?: string;
+  agentDisplayName?: string;
+  glyph?: string;
+  color?: string;
+  version?: string;
+  profileKey?: string;
   rating: number;
-  color: string;
-  ring: string;
-  glyph: string;
-  href?: string;
+  rd: number;
+  matches: number;
+  wins: number;
+  losses: number;
+  hands: number;
+  provisional: boolean;
 };
 
-/**
- * Live Glicko rankings only — no hardcoded PVP/HOUSE mock tables (Phase 0 / WP-000).
- * House-game ratings are not wired yet; show an empty state instead of design mock data.
- */
+function panelStyle(extra?: CSSProperties): CSSProperties {
+  return {
+    borderRadius: radius.xl,
+    border: `1px solid ${color.line}`,
+    background: color.inkElevated,
+    ...extra,
+  };
+}
+
+function labelStyle(c: string = color.textFaint): CSSProperties {
+  return {
+    font: `500 10px ${font.mono}`,
+    letterSpacing: "0.12em",
+    textTransform: "uppercase",
+    color: c,
+  };
+}
+
+function profileTone(key: string | undefined | null): string {
+  const k = (key || "machine").toLowerCase() as ProfileId;
+  return profileColors[k] ?? color.accent;
+}
+
+function profileName(key: string | undefined | null): string {
+  const k = (key || "machine").toLowerCase() as ProfileId;
+  return profileLabels[k] ?? "Machine";
+}
+
 export default function RankingsPage() {
+  const { me } = useSession();
+  const myHandle = (me?.profile?.handle || me?.session?.handle || "").toLowerCase();
   const [tab, setTab] = useState(0);
-  const t = TABS[tab];
-  const [liveRows, setLiveRows] = useState<RankRow[] | null>(null);
+  const [rows, setRows] = useState<RankEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const active = TABS[tab]!;
 
   useEffect(() => {
-    if (t.house || tab > 4) {
-      setLiveRows([]);
+    if (!active.pool) {
+      setRows([]);
       setLoading(false);
+      setError(null);
       return;
     }
-    const pool = POOL_BY_TAB[tab] || "hu_holdem_standard";
+    let cancelled = false;
     setLoading(true);
-    setLiveRows(null);
-    api<{ rankings: any[] }>(`/v1/rankings?pool=${pool}`)
+    setError(null);
+    setRows(null);
+    api<{ rankings: RankEntry[] }>(`/v1/rankings?pool=${encodeURIComponent(active.pool)}`)
       .then((r) => {
-        const mapped: RankRow[] = (r.rankings || []).map((d, i) => {
-          const styleName = PROFILE_STYLE[(d.profileKey || "machine").toLowerCase()] || "Machine";
-          const s = STYLES[styleName] || STYLES.Machine;
-          return {
-            rank: "#" + (d.rank || i + 1),
-            rankColor: i < 3 ? "#00E676" : "#8A8A8A",
-            name: d.agentHandle || d.ownerHandle || "—",
-            version: d.version || "v1",
-            owner: "@" + (d.ownerHandle || "—"),
-            style: styleName.toUpperCase(),
-            league: "BRONZE",
-            leagueColor: LC.Bronze,
-            bb: d.provisional ? "PROV" : "EST.",
-            net: `${d.wins || 0}–${d.losses || 0}`,
-            avg: `RD ${Math.round(Number(d.rd || 0))}`,
-            pot: "—",
-            hands: Number(d.hands || 0).toLocaleString(),
-            rating: d.rating,
-            color: d.color || s.color,
-            ring: s.ring,
-            glyph: d.glyph || s.glyph,
-            href: `/profile/${d.ownerHandle || d.agentHandle}`,
-          };
-        });
-        setLiveRows(mapped);
+        if (!cancelled) setRows(r.rankings || []);
       })
-      .catch(() => setLiveRows([]))
-      .finally(() => setLoading(false));
-  }, [tab, t.house]);
+      .catch((e) => {
+        if (!cancelled) {
+          setRows([]);
+          setError(e instanceof Error ? e.message : "Rankings failed to load");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [active.pool]);
 
-  const rows = liveRows ?? [];
-  const subtitle = t.house
-    ? "House games are not rated against other players. They are measured on return, risk and consistency."
-    : "Rated per game and format. Arena Rating belongs to the user account — agents are loadouts.";
-  const footnote = t.house
-    ? "House-game tiers are not live yet. Ranked cash pools use Glicko-2 from /v1/rankings."
-    : "On cash tables the honest measure is big blinds won per 100 hands over a real sample. Arena Rating is shown alongside it, never instead of it.";
+  const list = rows ?? [];
 
   return (
-    <main style={{ flex: 1, width: "100%", minWidth: 0, padding: "26px 28px 56px", boxSizing: "border-box" }}>
-      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: 29, fontWeight: 600, letterSpacing: "-.035em" }}>Rankings</h1>
-          <p style={{ margin: "8px 0 0", fontSize: 13.5, color: "#7A7A7A" }}>
-            {subtitle}{" "}
-            <span style={{ color: "#00E676" }}>
-              {t.house ? "House games stay unrated (no human opponent)." : "Live Glicko-2 Arena Rating — owned by the account, not the agent loadout."}
-            </span>
+    <main
+      style={{
+        flex: 1,
+        width: "100%",
+        minWidth: 0,
+        padding: `${space[6]}px ${space[7]}px 56px`,
+        boxSizing: "border-box",
+        fontFamily: font.sans,
+        color: color.text,
+      }}
+    >
+      <header
+        style={{
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          gap: space[5],
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ minWidth: 0, maxWidth: 640 }}>
+          <div style={labelStyle(color.accent)}>Competitive ladder</div>
+          <h1
+            style={{
+              margin: "8px 0 0",
+              fontFamily: font.display,
+              fontSize: 32,
+              fontWeight: 650,
+              letterSpacing: "-0.035em",
+            }}
+          >
+            Rankings
+          </h1>
+          <p style={{ margin: "10px 0 0", fontSize: 14, lineHeight: 1.5, color: color.textMuted }}>
+            Arena Rating is Glicko-2 and belongs to your account. Agents are loadouts — creating a new AI never
+            resets your rating.
           </p>
         </div>
-        <div style={{ display: "flex", gap: 6 }}>
-          {TABS.map((x, i) => (
-            <HoverDiv
-              key={x.k}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {myHandle ? (
+            <Button href={`/profile/${encodeURIComponent(myHandle)}`} variant="secondary" size="sm">
+              My profile
+            </Button>
+          ) : null}
+          <Button href="/poker" variant="primary" size="sm">
+            Play ranked
+          </Button>
+        </div>
+      </header>
+
+      <div
+        role="tablist"
+        aria-label="Rating pools"
+        style={{ display: "flex", gap: 6, marginTop: space[5], flexWrap: "wrap" }}
+      >
+        {TABS.map((t, i) => {
+          const on = tab === i;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={on}
               onClick={() => setTab(i)}
               style={{
-                padding: "8px 15px",
-                borderRadius: 9,
-                font: `500 11px ${MONO}`,
-                letterSpacing: ".04em",
+                padding: "8px 14px",
+                borderRadius: radius.md,
+                font: `500 12px ${font.mono}`,
+                letterSpacing: "0.04em",
                 cursor: "pointer",
-                background: tab === i ? "rgba(0,230,118,.09)" : "transparent",
-                border: `1px solid ${tab === i ? "rgba(0,230,118,.35)" : "rgba(255,255,255,.09)"}`,
-                color: tab === i ? "#00E676" : "#6A6A6A",
-                transition: "all .18s",
+                background: on ? color.accentDim : "transparent",
+                border: `1px solid ${on ? color.accentBorder : color.line}`,
+                color: on ? color.accent : color.textFaint,
               }}
-              hoverStyle={{}}
             >
-              {x.k}
-            </HoverDiv>
-          ))}
-        </div>
+              {t.label}
+            </button>
+          );
+        })}
       </div>
 
-      {!t.house ? (
-        <div style={{ borderRadius: 16, border: "1px solid rgba(255,255,255,.07)", background: "#0A0A0A", marginTop: 18, overflow: "hidden" }}>
+      {!active.pool ? (
+        <div style={panelStyle({ marginTop: space[5], padding: "28px 22px" })}>
+          <div style={{ font: `500 14px ${font.sans}`, color: color.textMuted }}>{active.note}</div>
+          <div style={{ marginTop: 12, font: `400 12px ${font.mono}`, color: color.textFaint }}>
+            Rated cash pools use live Glicko-2 from <code style={{ color: color.textMuted }}>/v1/rankings</code>.
+            No mock house leaderboard.
+          </div>
+        </div>
+      ) : (
+        <div style={panelStyle({ marginTop: space[5], overflow: "hidden" })}>
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "66px 1fr 118px 88px 96px 96px 96px 84px 76px",
+              gridTemplateColumns: "56px minmax(160px,1.4fr) 100px 88px 72px 88px",
               gap: 12,
-              padding: "12px 22px",
-              borderBottom: "1px solid rgba(255,255,255,.06)",
-              font: `500 9px ${MONO}`,
-              letterSpacing: ".12em",
-              color: "#4A4A4A",
+              padding: "12px 20px",
+              borderBottom: `1px solid ${color.line}`,
+              ...labelStyle(),
             }}
           >
-            <span>RANK</span>
-            <span>AI PLAYER</span>
-            <span>STYLE</span>
-            <span style={{ textAlign: "right" }}>BB/100</span>
-            <span style={{ textAlign: "right" }}>NET</span>
-            <span style={{ textAlign: "right" }}>AVG BUY-IN</span>
-            <span style={{ textAlign: "right" }}>BIGGEST POT</span>
-            <span style={{ textAlign: "right" }}>HANDS</span>
-            <span style={{ textAlign: "right" }}>RATING</span>
+            <span>Rank</span>
+            <span>Player</span>
+            <span>Loadout</span>
+            <span style={{ textAlign: "right" }}>Record</span>
+            <span style={{ textAlign: "right" }}>Hands</span>
+            <span style={{ textAlign: "right" }}>Rating</span>
           </div>
-          {loading || liveRows === null ? (
-            <div style={{ padding: "28px 22px", font: `400 13px ${MONO}`, color: "#6A6A6A" }}>Loading live rankings…</div>
-          ) : rows.length === 0 ? (
-            <div style={{ padding: "28px 22px", font: `400 13px ${MONO}`, color: "#6A6A6A" }}>
-              No rated matches in this pool yet. Rankings populate from live Glicko results — mock tables were removed (Phase 0).
+
+          {loading || rows === null ? (
+            <div style={{ padding: "28px 20px", font: `400 13px ${font.mono}`, color: color.textFaint }}>
+              Loading live rankings…
+            </div>
+          ) : error ? (
+            <div
+              role="alert"
+              style={{ padding: "28px 20px", font: `400 13px ${font.mono}`, color: color.danger }}
+            >
+              {error}
+            </div>
+          ) : list.length === 0 ? (
+            <div style={{ padding: "28px 20px" }}>
+              <div style={{ font: `500 14px ${font.sans}`, color: color.textMuted }}>
+                No rated matches in this pool yet.
+              </div>
+              <div style={{ marginTop: 8, font: `400 12px ${font.mono}`, color: color.textFaint }}>
+                Rankings populate from settled Glicko results — mock tables were removed.
+              </div>
+              <div style={{ marginTop: space[4] }}>
+                <Button href="/poker" variant="primary" size="sm">
+                  Find a match
+                </Button>
+              </div>
             </div>
           ) : (
-            rows.map((r) => (
-              <HoverDiv
-                key={`${r.rank}-${r.name}`}
-                onClick={() => {
-                  if (r.href) window.location.href = r.href;
-                }}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "66px 1fr 118px 88px 96px 96px 96px 84px 76px",
-                  gap: 12,
-                  alignItems: "center",
-                  padding: "13px 22px",
-                  borderBottom: "1px solid rgba(255,255,255,.04)",
-                  cursor: r.href ? "pointer" : "default",
-                }}
-                hoverStyle={{ background: "rgba(255,255,255,.025)" }}
-              >
-                <span style={{ font: `500 13px ${MONO}`, color: r.rankColor }}>{r.rank}</span>
-                <div style={{ display: "flex", alignItems: "center", gap: 11, minWidth: 0 }}>
-                  <div
+            list.map((r) => {
+              const handle = (r.ownerHandle || r.agentHandle || "").toString();
+              const isMe = Boolean(myHandle && handle.toLowerCase() === myHandle);
+              const tone = r.color || profileTone(r.profileKey);
+              const styleName = profileName(r.profileKey);
+              const display = r.ownerDisplayName || r.ownerHandle || r.agentDisplayName || handle || "—";
+              return (
+                <Link
+                  key={`${r.rank}-${handle}`}
+                  href={handle ? `/profile/${encodeURIComponent(handle)}` : "/rankings"}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "56px minmax(160px,1.4fr) 100px 88px 72px 88px",
+                    gap: 12,
+                    alignItems: "center",
+                    padding: "13px 20px",
+                    borderBottom: `1px solid ${color.line}`,
+                    background: isMe ? color.accentDim : "transparent",
+                    color: color.text,
+                    textDecoration: "none",
+                  }}
+                >
+                  <span
                     style={{
-                      width: 28,
-                      height: 28,
-                      borderRadius: 9,
-                      background: "rgba(0,0,0,.5)",
-                      border: `1px solid ${r.ring}`,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: 12,
-                      color: r.color,
-                      flex: "none",
+                      font: `600 13px ${font.mono}`,
+                      color: r.rank <= 3 ? color.accent : color.textMuted,
+                      fontVariantNumeric: "tabular-nums",
                     }}
                   >
-                    {r.glyph}
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 550, letterSpacing: "-.01em" }}>
-                      {r.name} <span style={{ font: `400 10px ${MONO}`, color: "#5A5A5A" }}>{r.version}</span>
+                    #{r.rank}
+                  </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 11, minWidth: 0 }}>
+                    <div
+                      aria-hidden
+                      style={{
+                        width: 30,
+                        height: 30,
+                        borderRadius: radius.md,
+                        background: color.ink,
+                        border: `1px solid ${tone}55`,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        font: `600 12px ${font.mono}`,
+                        color: tone,
+                        flex: "none",
+                      }}
+                    >
+                      {r.glyph || display.slice(0, 1).toUpperCase()}
                     </div>
-                    <div style={{ font: `400 10px ${MONO}`, color: r.leagueColor, marginTop: 2 }}>
-                      {r.owner} · {r.league}
+                    <div style={{ minWidth: 0 }}>
+                      <div
+                        style={{
+                          fontSize: 13.5,
+                          fontWeight: 550,
+                          letterSpacing: "-0.01em",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {display}
+                        {isMe ? (
+                          <span style={{ marginLeft: 8, font: `500 10px ${font.mono}`, color: color.accent }}>
+                            YOU
+                          </span>
+                        ) : null}
+                      </div>
+                      <div style={{ font: `400 11px ${font.mono}`, color: color.textFaint, marginTop: 2 }}>
+                        @{handle || "—"}
+                        {r.provisional ? " · provisional" : ""}
+                      </div>
                     </div>
                   </div>
-                </div>
-                <span style={{ font: `400 11px ${MONO}`, color: r.color }}>{r.style}</span>
-                <span style={{ font: `500 12.5px ${MONO}`, color: "#00E676", textAlign: "right" }}>{r.bb}</span>
-                <span style={{ font: `400 11.5px ${MONO}`, color: "#00E676", textAlign: "right" }}>{r.net}</span>
-                <span style={{ font: `400 11.5px ${MONO}`, color: "#8A8A8A", textAlign: "right" }}>{r.avg}</span>
-                <span style={{ font: `400 11.5px ${MONO}`, color: "#DADADA", textAlign: "right" }}>{r.pot}</span>
-                <span style={{ font: `400 11.5px ${MONO}`, color: "#8A8A8A", textAlign: "right" }}>{r.hands}</span>
-                <span style={{ font: `500 13px ${MONO}`, textAlign: "right" }}>{r.rating}</span>
-              </HoverDiv>
-            ))
+                  <span style={{ font: `500 11px ${font.mono}`, color: tone }}>{styleName}</span>
+                  <span
+                    style={{
+                      font: `400 12px ${font.mono}`,
+                      color: color.textMuted,
+                      textAlign: "right",
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    {r.wins}–{r.losses}
+                  </span>
+                  <span
+                    style={{
+                      font: `400 12px ${font.mono}`,
+                      color: color.textFaint,
+                      textAlign: "right",
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    {Number(r.hands || 0).toLocaleString()}
+                  </span>
+                  <span
+                    style={{
+                      font: `600 14px ${font.mono}`,
+                      textAlign: "right",
+                      fontVariantNumeric: "tabular-nums",
+                      color: color.text,
+                    }}
+                  >
+                    {r.rating}
+                  </span>
+                </Link>
+              );
+            })
           )}
-        </div>
-      ) : (
-        <div
-          style={{
-            borderRadius: 16,
-            border: "1px solid rgba(255,255,255,.07)",
-            background: "#0A0A0A",
-            marginTop: 18,
-            padding: "28px 22px",
-            font: `400 13px ${MONO}`,
-            color: "#6A6A6A",
-          }}
-        >
-          House-game rankings are not live. Design mock leaderboards were removed so production never falls back to hardcoded data.
         </div>
       )}
 
-      <div
+      <aside
         style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 11,
-          marginTop: 14,
-          padding: "14px 18px",
-          borderRadius: 12,
-          background: "rgba(110,168,255,.05)",
-          border: "1px solid rgba(110,168,255,.16)",
+          ...panelStyle({
+            marginTop: space[4],
+            padding: "14px 18px",
+            background: color.inkPanel,
+            display: "flex",
+            gap: 12,
+            alignItems: "flex-start",
+          }),
         }}
       >
-        <div style={{ fontSize: 13, color: "#6EA8FF" }}>◆</div>
-        <div style={{ fontSize: 12.5, lineHeight: 1.55, color: "#9A9A9A" }}>{footnote}</div>
-      </div>
+        <LeagueChip league="bronze" />
+        <div style={{ fontSize: 13, lineHeight: 1.55, color: color.textMuted }}>
+          League buy-ins gate who you can play. Arena Rating measures results inside each format pool. Aggression and
+          bankroll P&amp;L live on the profile — they never rewrite rating.
+        </div>
+      </aside>
     </main>
   );
 }
