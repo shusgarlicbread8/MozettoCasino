@@ -1,12 +1,17 @@
 "use client";
 
+/**
+ * Seamless Play — GamePermission grant UI (WP-124).
+ * Caps only; Mozetto cannot withdraw ArenaAccount idle funds.
+ */
+
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { useAccount, useSignTypedData } from "wagmi";
+import { Button } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
+import { color, font, radius, space } from "@/lib/design-tokens";
 import { useSession } from "@/lib/session";
 import { confirmInWallet, useWalletBrand } from "@/lib/wallet-brand";
-
-const MONO = "var(--font-geist-mono), 'Geist Mono', monospace";
 
 type PlayStatus = {
   enabled: boolean;
@@ -53,6 +58,12 @@ type PlayStatus = {
   gasNote: string;
 };
 
+function usdc(raw: string | number): string {
+  const n = typeof raw === "number" ? raw : Number(raw) / 1e6;
+  if (!Number.isFinite(n)) return "—";
+  return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
 export function PlayPermissionsPanel({
   onUpdated,
   compact,
@@ -72,13 +83,16 @@ export function PlayPermissionsPanel({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
       const s = await api<PlayStatus>("/v1/arena/play-status");
       setStatus(s);
+      setLoadError(false);
     } catch {
       setStatus(null);
+      setLoadError(true);
     }
   }, []);
 
@@ -214,122 +228,198 @@ export function PlayPermissionsPanel({
   if ((me?.profileKind ?? me?.arenaMode) !== "onchain") return null;
 
   const enabled = Boolean(status?.enabled);
+  const perm = status?.permission;
   const shell: CSSProperties = compact
     ? {
-        border: "1px solid rgba(0,230,118,.22)",
-        background: "rgba(0,230,118,.04)",
-        padding: "14px 16px",
-        borderRadius: 2,
+        border: `1px solid ${enabled ? color.accentBorder : "rgba(232,184,74,.35)"}`,
+        background: enabled ? color.accentDim : "rgba(232,184,74,.06)",
+        padding: `${space[4]}px ${space[4]}px`,
+        borderRadius: radius.lg,
       }
     : {
-        border: "1px solid rgba(255,255,255,.1)",
-        background: "#0D0D0D",
-        padding: "20px 22px",
-        borderRadius: 2,
+        border: `1px solid ${color.line}`,
+        background: color.inkElevated,
+        padding: `${space[5]}px ${space[5]}px`,
+        borderRadius: radius.xl,
       };
+
+  if (loadError && !status) {
+    return (
+      <div style={shell}>
+        <div
+          style={{
+            font: `500 10px ${font.mono}`,
+            letterSpacing: "0.12em",
+            textTransform: "uppercase",
+            color: color.textFaint,
+          }}
+        >
+          Seamless play
+        </div>
+        <p style={{ margin: `${space[2]}px 0 0`, fontSize: 13, color: color.textMuted, lineHeight: 1.5 }}>
+          Could not load play status. Check you are signed in on-chain, then refresh.
+        </p>
+        <div style={{ marginTop: space[3] }}>
+          <Button variant="secondary" size="sm" onClick={() => void refresh()}>
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={shell}>
       <div
         style={{
-          fontFamily: MONO,
-          fontSize: 10,
-          letterSpacing: "0.14em",
-          color: enabled ? "#00E676" : "#FFB020",
-          marginBottom: 8,
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          gap: 12,
+          flexWrap: "wrap",
         }}
       >
-        {enabled ? "SEAMLESS PLAY · ON" : "SEAMLESS PLAY · OFF"}
-      </div>
-      <p style={{ margin: "0 0 12px", color: "#B8B8B8", fontSize: 13, lineHeight: 1.45 }}>
-        {enabled
-          ? "Find Match locks buy-ins from your Arena Account with no wallet popups."
-          : "Enable once to let Mozetto enter ranked games under your caps. Mozetto cannot withdraw."}
-      </p>
-      {status?.arenaAccountAddress && !compact && (
-        <p style={{ margin: "0 0 12px", fontFamily: MONO, fontSize: 11, color: "#6A6A6A" }}>
-          Arena Account {status.arenaAccountAddress.slice(0, 6)}…{status.arenaAccountAddress.slice(-4)}
-        </p>
-      )}
-      {status?.permission && enabled && (
-        <ul style={{ margin: "0 0 14px", paddingLeft: 18, color: "#8A8A8A", fontSize: 12, lineHeight: 1.55 }}>
-          <li>Max buy-in {(Number(status.permission.maxSingleBuyIn) / 1e6).toLocaleString()} {status.symbol}</li>
-          <li>
-            Remaining at-risk {(Number(status.permission.remainingAtRisk) / 1e6).toLocaleString()} ·{" "}
-            {status.permission.activeGames}/{status.permission.maxConcurrentGames} games
-          </li>
-          <li>Expires {new Date(status.permission.validUntil * 1000).toLocaleString()}</li>
-        </ul>
-      )}
-      {!ownerOk && (
-        <p style={{ color: "#FF6B6B", fontSize: 12, marginBottom: 10 }}>
-          Reconnect the same {wallet.name} account that signed in.
-        </p>
-      )}
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        {!enabled ? (
-          <button
-            type="button"
-            disabled={busy || !ownerOk || !status?.deployed}
-            onClick={() => (sheetOpen ? void enableSeamless() : setSheetOpen(true))}
-            style={{
-              border: "none",
-              background: "#00E676",
-              color: "#04140C",
-              fontFamily: MONO,
-              fontSize: 11,
-              letterSpacing: "0.08em",
-              padding: "10px 16px",
-              cursor: busy ? "wait" : "pointer",
-              opacity: busy || !ownerOk ? 0.6 : 1,
-            }}
-          >
-            {sheetOpen ? (busy ? "ENABLING…" : "CONFIRM IN WALLET") : "ENABLE SEAMLESS PLAY"}
-          </button>
-        ) : (
-          <button
-            type="button"
-            disabled={busy || !ownerOk}
-            onClick={() => void revoke()}
-            style={{
-              border: "1px solid rgba(255,255,255,.2)",
-              background: "transparent",
-              color: "#EDEDED",
-              fontFamily: MONO,
-              fontSize: 11,
-              letterSpacing: "0.08em",
-              padding: "10px 16px",
-              cursor: "pointer",
-            }}
-          >
-            REVOKE
-          </button>
-        )}
-      </div>
-      {sheetOpen && !enabled && (
         <div
           style={{
-            marginTop: 14,
-            paddingTop: 14,
-            borderTop: "1px solid rgba(255,255,255,.08)",
-            fontSize: 12,
-            color: "#A0A0A0",
+            font: `500 10px ${font.mono}`,
+            letterSpacing: "0.12em",
+            textTransform: "uppercase",
+            color: enabled ? color.accent : color.warn,
+          }}
+        >
+          Seamless play · {enabled ? "On" : "Off"}
+        </div>
+        {status?.arenaAccountAddress && !compact ? (
+          <div style={{ font: `400 11px ${font.mono}`, color: color.textFaint }}>
+            {status.arenaAccountAddress.slice(0, 6)}…{status.arenaAccountAddress.slice(-4)}
+          </div>
+        ) : null}
+      </div>
+
+      <p style={{ margin: `${space[2]}px 0 0`, color: color.textMuted, fontSize: 13.5, lineHeight: 1.5 }}>
+        {enabled
+          ? "Find Match locks buy-ins from your Arena Account with no wallet popups."
+          : "Enable once so Mozetto can enter ranked games under your caps. Mozetto cannot withdraw available funds."}
+      </p>
+
+      {perm && enabled ? (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+            gap: space[3],
+            marginTop: space[4],
+          }}
+        >
+          <Cap label="Max single game" value={`${usdc(perm.maxSingleBuyIn)} ${status?.symbol ?? ""}`} />
+          <Cap
+            label="Max at risk"
+            value={`${usdc(perm.remainingAtRisk)} / ${usdc(perm.maxTotalAtRisk)}`}
+          />
+          <Cap
+            label="Expiry"
+            value={new Date(perm.validUntil * 1000).toLocaleString(undefined, {
+              dateStyle: "medium",
+              timeStyle: "short",
+            })}
+          />
+          <Cap label="Games" value={`${perm.activeGames}/${perm.maxConcurrentGames}`} />
+        </div>
+      ) : null}
+
+      {!status && !loadError ? (
+        <p style={{ margin: `${space[3]}px 0 0`, fontSize: 13, color: color.textFaint }}>Loading…</p>
+      ) : null}
+
+      {!ownerOk && status ? (
+        <p style={{ color: color.danger, fontSize: 12.5, margin: `${space[3]}px 0 0` }}>
+          Reconnect the same {wallet.name} account that signed in.
+        </p>
+      ) : null}
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: space[4] }}>
+        {!enabled ? (
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={busy || !ownerOk || !status?.deployed}
+            onClick={() => (sheetOpen ? void enableSeamless() : setSheetOpen(true))}
+          >
+            {sheetOpen ? (busy ? "Enabling…" : "Confirm in wallet") : "Enable seamless play"}
+          </Button>
+        ) : (
+          <Button variant="danger" size="sm" disabled={busy || !ownerOk} onClick={() => void revoke()}>
+            Revoke
+          </Button>
+        )}
+      </div>
+
+      {sheetOpen && !enabled ? (
+        <div
+          style={{
+            marginTop: space[4],
+            paddingTop: space[4],
+            borderTop: `1px solid ${color.line}`,
+            fontSize: 12.5,
+            color: color.textMuted,
             lineHeight: 1.55,
           }}
         >
-          <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.12em", color: "#EDEDED", marginBottom: 8 }}>
-            YOU ARE GRANTING
+          <div
+            style={{
+              font: `500 10px ${font.mono}`,
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              color: color.text,
+              marginBottom: 8,
+            }}
+          >
+            You are granting
           </div>
           <ul style={{ margin: 0, paddingLeft: 18 }}>
-            <li>Ranked NLHE only · USDC only</li>
+            <li>Ranked NLHE only · {status?.symbol ?? "USDC"} only</li>
             <li>Entry into Mozetto Arena vault under buy-in / at-risk / concurrent caps</li>
             <li>Cannot withdraw · cannot send elsewhere · cannot raise limits</li>
           </ul>
-          <p style={{ margin: "10px 0 0", color: "#6A6A6A" }}>{status?.gasNote}</p>
+          {status?.gasNote ? (
+            <p style={{ margin: `${space[3]}px 0 0`, color: color.textFaint }}>{status.gasNote}</p>
+          ) : null}
         </div>
-      )}
-      {msg && <p style={{ margin: "10px 0 0", color: "#00E676", fontSize: 12 }}>{msg}</p>}
-      {err && <p style={{ margin: "10px 0 0", color: "#FF6B6B", fontSize: 12 }}>{err}</p>}
+      ) : null}
+
+      {msg ? (
+        <p style={{ margin: `${space[3]}px 0 0`, color: color.accent, fontSize: 12.5 }}>{msg}</p>
+      ) : null}
+      {err ? (
+        <p style={{ margin: `${space[3]}px 0 0`, color: color.danger, fontSize: 12.5 }}>{err}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function Cap({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div
+        style={{
+          font: `500 10px ${font.mono}`,
+          letterSpacing: "0.1em",
+          textTransform: "uppercase",
+          color: color.textFaint,
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          marginTop: 4,
+          font: `500 13px ${font.mono}`,
+          color: color.text,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {value}
+      </div>
     </div>
   );
 }

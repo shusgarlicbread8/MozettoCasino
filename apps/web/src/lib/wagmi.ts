@@ -140,6 +140,28 @@ export function getWagmiConfig() {
   });
 }
 
+/** ArenaAccount V2 — owner-only idle withdraw (platform cannot call). */
+export const arenaAccountAbi = [
+  {
+    type: "function",
+    name: "withdraw",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "to", type: "address" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "owner",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "address" }],
+  },
+] as const;
+
 export const arenaVaultAbi = [
   {
     type: "function",

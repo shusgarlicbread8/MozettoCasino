@@ -3,7 +3,9 @@
 import { useState } from "react";
 import { useAccount, useChainId } from "wagmi";
 import { SoftSwap } from "@/components/PageFade";
+import { Button } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
+import { color, font, radius, space } from "@/lib/design-tokens";
 import { useSession } from "@/lib/session";
 import { useMozettoBalances } from "@/lib/use-mozetto-balances";
 import { useWalletBrand } from "@/lib/wallet-brand";
@@ -32,7 +34,7 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
   if (!canFaucet) {
     if (chainId === 8453) return null;
     return (
-      <div style={{ marginTop: 14, fontSize: 12.5, color: "#7A7A7A", lineHeight: 1.5 }}>
+      <div style={{ marginTop: space[4], fontSize: 13, color: color.textMuted, lineHeight: 1.5 }}>
         Get Test mUSDC is available on Anvil (local). On Sepolia, send USDC to your Arena Account
         address shown on the wallet page.
       </div>
@@ -59,7 +61,7 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
         body: JSON.stringify({ amountUsdc }),
       });
       setMsg(
-        `Minted ${res.amountUsdc} mUSDC into your Arena Account (${res.arenaAccountAddress.slice(0, 6)}…${res.arenaAccountAddress.slice(-4)}). Enable seamless play, then Find Match.`,
+        `Minted ${res.amountUsdc} mUSDC into your Arena Account (${res.arenaAccountAddress.slice(0, 6)}…${res.arenaAccountAddress.slice(-4)}). Enable Seamless Play, then Find Match.`,
       );
       balances.refetch();
       onUpdated?.();
@@ -75,86 +77,101 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
   return (
     <div
       style={{
-        marginTop: 16,
-        padding: 16,
-        borderRadius: 12,
-        border: "1px solid rgba(0,230,118,.28)",
-        background: "rgba(0,230,118,.06)",
+        marginTop: space[4],
+        padding: space[4],
+        borderRadius: radius.lg,
+        border: `1px solid ${color.accentBorder}`,
+        background: color.accentDim,
       }}
     >
-      <div style={{ font: "600 11px var(--font-geist-mono), monospace", color: "#00E676" }}>
-        CHAIN TEST · mUSDC → ARENA ACCOUNT
+      <div
+        style={{
+          font: `500 10px ${font.mono}`,
+          letterSpacing: "0.12em",
+          textTransform: "uppercase",
+          color: color.accent,
+        }}
+      >
+        Chain test · mUSDC → Arena Account
       </div>
-      <p style={{ margin: "8px 0 0", fontSize: 13, color: "#9A9A9A", lineHeight: 1.5 }}>
+      <p style={{ margin: `${space[2]}px 0 0`, fontSize: 13, color: color.textMuted, lineHeight: 1.5 }}>
         Mints into your Arena Account (playable balance), not your connected {wallet.name} EOA.
-        MetaMask may still list older MockUSDC contracts — only the active token matters.
-        {!isConnected && (
+        {!isConnected ? (
           <>
             {" "}
-            <span style={{ color: "#FFB020" }}>Wallet disconnected — reconnect to continue.</span>
+            <span style={{ color: color.warn }}>Wallet disconnected — reconnect to continue.</span>
           </>
-        )}
+        ) : null}
       </p>
-      <div style={{ marginTop: 10, font: "500 13px var(--font-geist-mono), monospace", color: "#EDEDED" }}>
+      <div
+        style={{
+          marginTop: space[3],
+          font: `500 13px ${font.mono}`,
+          color: color.text,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
         Arena Account mUSDC: {balances.wallet.toLocaleString()}
       </div>
-      {arena && (
-        <div style={{ marginTop: 6, fontSize: 11, color: "#6A6A6A", wordBreak: "break-all" }}>
-          Deposit address: {arena}
+      {arena ? (
+        <div
+          style={{
+            marginTop: 6,
+            font: `400 11px ${font.mono}`,
+            color: color.textFaint,
+            wordBreak: "break-all",
+          }}
+        >
+          {arena}
         </div>
-      )}
-      {asset?.usdc && (
-        <div style={{ marginTop: 6, fontSize: 11, color: "#6A6A6A", wordBreak: "break-all" }}>
-          Active token: {asset.usdc}
-        </div>
-      )}
-      <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
+      ) : null}
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          marginTop: space[3],
+          flexWrap: "wrap",
+          alignItems: "center",
+        }}
+      >
         <input
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
           style={{
             width: 110,
             padding: "10px 12px",
-            borderRadius: 8,
-            border: "1px solid rgba(255,255,255,.12)",
-            background: "#0A0A0A",
-            color: "#EDEDED",
+            borderRadius: radius.md,
+            border: `1px solid ${color.lineStrong}`,
+            background: color.ink,
+            color: color.text,
+            fontFamily: font.mono,
+            fontSize: 13,
           }}
         />
-        <button
-          type="button"
+        <Button
+          variant="primary"
+          size="sm"
           disabled={busy || !isConnected || !walletMatch}
           onClick={() => void runFaucet()}
-          className="mz-soft-btn"
-          style={{
-            padding: "10px 18px",
-            borderRadius: 8,
-            border: "none",
-            background: "#00E676",
-            color: "#050505",
-            fontWeight: 600,
-            cursor: busy ? "wait" : "pointer",
-            opacity: !isConnected ? 0.5 : 1,
-          }}
         >
           {busy ? "Minting…" : "Fund Arena Account"}
-        </button>
+        </Button>
       </div>
-      {msg && (
+      {msg ? (
         <SoftSwap id={msg}>
           <p
             className="mz-status-line"
             style={{
-              margin: "10px 0 0",
+              margin: `${space[3]}px 0 0`,
               fontSize: 12.5,
-              color: msg.toLowerCase().includes("minted") ? "#00E676" : "#FF8A8A",
+              color: msg.toLowerCase().includes("minted") ? color.accent : color.danger,
               lineHeight: 1.45,
             }}
           >
             {msg}
           </p>
         </SoftSwap>
-      )}
+      ) : null}
     </div>
   );
 }
