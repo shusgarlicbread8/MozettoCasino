@@ -14,6 +14,7 @@ export * from "./admin-incidents.js";
 export * from "./admin-player-ops.js";
 export * from "./admin-governance.js";
 export * from "./admin-principals.js";
+export * from "./admin-runtime-ops.js";
 export * from "./proof-batch-inclusion.js";
 export * from "./identity-clusters.js";
 export * from "./linked-accounts.js";

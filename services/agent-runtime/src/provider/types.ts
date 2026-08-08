@@ -123,7 +123,9 @@ export type ProviderErrorClass =
   | "json_truncated"
   | "illegal_action"
   | "circuit_open"
-  | "missing_api_key";
+  | "missing_api_key"
+  /** Control feature flag ai_provider_groq=false (MC-075). */
+  | "provider_disabled";
 
 /**
  * Background cognition kinds (WP-073).

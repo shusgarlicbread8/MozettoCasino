@@ -13,8 +13,8 @@
 
 | Field | Value |
 |---|---|
-| **Active wave** | **C11 Release hardening** |
-| **Active packets** | MC-110–115; residuals MC-046, MC-063/064, MC-075/076, MC-085 |
+| **Active wave** | **C11 Release hardening** (Phase 6 runtime controls DONE) |
+| **Active packets** | MC-110–115 (E2E/Sepolia/mainnet); MC-076 policy rollback still light |
 | **Baseline SHA** | `6b7ab332de11e24ead3549eaea2c0b04dcf61df4` |
 | **Superadmin allowlist** | Env `ADMIN_SUPERADMIN_ADDRESSES` only — never hardcode wallet in app code |
 | **App** | Evolve `apps/admin` @ `:3001` into Mozetto Control |
@@ -32,9 +32,9 @@
 | 3 | Command Center | `DONE` | MC-030–033 overview API + hero UI + thresholds |
 | 4 | Economics / treasury / P&L | `DONE` | MC-040–045; city econ + players; export MC-046 remaining |
 | 5 | Players / risk / support | `DONE` | MC-050–054; migration `039`; `/risk` + player integrity UI |
-| 6 | Table / session / MM ops | `IN_PROGRESS` | MC-060/061/065 DONE; drain/resume remaining |
-| 7 | AI model & agent ops | `DONE` | MC-070–074 DONE; mutate controls MC-075/076 remaining |
-| 8 | Chain / solvency / randomness / proofs | `DONE` | MC-080–084 DONE; MC-085 remaining |
+| 6 | Table / session / MM ops | `DONE` | Pause E2E in game-server; drain/resume + city/global MM controls |
+| 7 | AI model & agent ops | `DONE` | MC-070–075 DONE; MC-076 pin/rollback still light |
+| 8 | Chain / solvency / randomness / proofs | `DONE` | MC-080–085 DONE (reconcile request audited) |
 | 9 | Governance & mutation controls | `DONE` | MC-090–095; migration `040`; governance API + access UI |
 | 10 | Incidents / security / audit | `DONE` | Wave C10 MC-100–105; migrations `041` |
 | 11 | Testing / deploy / release | `IN_PROGRESS` | Wave C11 next — Sepolia drills / security suite |
@@ -135,10 +135,10 @@ MC-000 baseline → MC-001 manifest
 |---|---|---|
 | MC-060 Sessions v2 list | `DONE` | `GET /v1/admin/sessions` enriched fields + ControlTable list UI |
 | MC-061 Session detail v2 | `DONE` | `GET /v1/admin/session/:id` sections + reshelled detail page |
-| MC-062 Pause-after-hand E2E | `PARTIAL` | Ops POST audited; UI documents hand-boundary semantics; game-server consumption tracked separately |
-| MC-063 Drain table/city | `NOT_STARTED` | |
-| MC-064 Resume safety gate | `NOT_STARTED` | |
-| MC-065 Matchmaking cockpit | `DONE` | `GET /v1/admin/matchmaking` + matchmaking page wired |
+| MC-062 Pause-after-hand E2E | `DONE` | `getSessionOps` gated in `table-runtime.beginHand` — next hand not dealt |
+| MC-063 Drain table/city | `DONE` | Session `drain_table` + `admin_city_ops` + find-match/seat-ticket gates; UI controls |
+| MC-064 Resume safety gate | `DONE` | `assertSessionResumeSafe` blocks under_review / open critical incidents |
+| MC-065 Matchmaking cockpit | `DONE` | Overview + Tier-2 global/city pause/drain/resume controls |
 
 ### Wave C7 — AI operations
 
@@ -149,8 +149,8 @@ MC-000 baseline → MC-001 manifest
 | MC-072 Policy/version inventory | `DONE` | `GET /v1/admin/ai/deployments` — agent-runtime /health + profile/session hash inventory |
 | MC-073 AgentState persistence health | `DONE` | `GET /v1/admin/ai/agent-state` — store backend, lag, checkpoint counts (no raw state_json) |
 | MC-074 AI activity feed diagnostics | `DONE` | `GET /v1/admin/ai/activity-feed` — event counts, latest seq, sequence gap signals |
-| MC-075 Provider disable safe control | `NOT_STARTED` | Stub note on AI Ops page — read-only pass; needs audited `ai.disable_provider` feature-flag path |
-| MC-076 AI policy rollback workflow | `NOT_STARTED` | |
+| MC-075 Provider disable safe control | `DONE` | `POST /v1/admin/ai/ops` + `ai_provider_groq` / `ai_new_sessions` flags; Groq decide() fails closed to fallback |
+| MC-076 AI policy rollback workflow | `PARTIAL` | Flag enable/disable covers provider; full policy-version pin/rollback deferred |
 
 ### Wave C8 — Protocol operations
 
@@ -161,7 +161,7 @@ MC-000 baseline → MC-001 manifest
 | MC-082 Randomness lifecycle UI | `DONE` | `/randomness` — lifecycle stages COMMITTED→DECK_BATCH_REGISTERED |
 | MC-083 Proof continuity UI | `DONE` | `/settlement` proofs section — `GET /v1/admin/proofs` |
 | MC-084 Settlement queue UI | `DONE` | `/settlement` queue — `GET /v1/admin/settlements` |
-| MC-085 Reconciliation/watchtower triggers | `NOT_STARTED` | |
+| MC-085 Reconciliation/watchtower triggers | `DONE` | `POST /v1/admin/reconciliation/request` audited request-only + Solvency UI |
 
 ### Wave C9 — Governance
 
@@ -210,6 +210,7 @@ MC-000 baseline → MC-001 manifest
 | 2026-08-09 | C5 | MC-050–054 DONE — integrity API, player restrictions, replay, timeline, risk UI |
 | 2026-08-09 | C10 | MC-100–105 DONE — incidents API/board, auto-hooks, runbooks, audit export, config metadata |
 | 2026-08-09 | C9 | MC-090–095 DONE — capability tiers, governance preview/archive/export/verify, access principals |
+| 2026-08-09 | C6 | Runtime controls — pause E2E, drain/resume, city/global MM, AI flags, reconcile request, UI stubs cleared |
 
 ---
 

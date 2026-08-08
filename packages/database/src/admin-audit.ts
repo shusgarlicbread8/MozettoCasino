@@ -12,6 +12,8 @@ export type AdminSessionOps = {
   pauseAfterHand: boolean;
   underReview: boolean;
   replayRequested: boolean;
+  /** Refuse new joins; current hand still completes (table drain). */
+  disableNewSeats: boolean;
   notes: string | null;
   updatedAt: string;
   updatedBy: string | null;
@@ -40,7 +42,10 @@ export type SessionOpsAction =
   | "mark_under_review"
   | "clear_under_review"
   | "request_replay"
-  | "clear_replay";
+  | "clear_replay"
+  | "drain_table"
+  | "clear_drain_table"
+  | "resume";
 
 const SESSION_OPS_ACTIONS = new Set<SessionOpsAction>([
   "pause_after_hand",
@@ -49,6 +54,9 @@ const SESSION_OPS_ACTIONS = new Set<SessionOpsAction>([
   "clear_under_review",
   "request_replay",
   "clear_replay",
+  "drain_table",
+  "clear_drain_table",
+  "resume",
 ]);
 
 export function isSessionOpsAction(value: string): value is SessionOpsAction {
@@ -165,6 +173,7 @@ function mapOps(row: {
   pause_after_hand: boolean;
   under_review: boolean;
   replay_requested: boolean;
+  disable_new_seats?: boolean | null;
   notes: string | null;
   updated_at: string;
   updated_by: string | null;
@@ -174,6 +183,7 @@ function mapOps(row: {
     pauseAfterHand: row.pause_after_hand,
     underReview: row.under_review,
     replayRequested: row.replay_requested,
+    disableNewSeats: Boolean(row.disable_new_seats),
     notes: row.notes,
     updatedAt: row.updated_at,
     updatedBy: row.updated_by,
@@ -190,10 +200,17 @@ export async function getSessionOps(
     pause_after_hand: boolean;
     under_review: boolean;
     replay_requested: boolean;
+    disable_new_seats: boolean | null;
     notes: string | null;
     updated_at: string;
     updated_by: string | null;
-  }>(`select * from admin_session_ops where session_id = $1`, [sessionId]);
+  }>(
+    `select session_id, pause_after_hand, under_review, replay_requested,
+            coalesce(disable_new_seats, false) as disable_new_seats,
+            notes, updated_at, updated_by
+     from admin_session_ops where session_id = $1`,
+    [sessionId],
+  );
   const row = res.rows[0];
   return row ? mapOps(row) : null;
 }
@@ -201,11 +218,12 @@ export async function getSessionOps(
 export function applySessionOpsAction(
   current: AdminSessionOps | null,
   action: SessionOpsAction,
-): Pick<AdminSessionOps, "pauseAfterHand" | "underReview" | "replayRequested"> {
+): Pick<AdminSessionOps, "pauseAfterHand" | "underReview" | "replayRequested" | "disableNewSeats"> {
   const base = {
     pauseAfterHand: current?.pauseAfterHand ?? false,
     underReview: current?.underReview ?? false,
     replayRequested: current?.replayRequested ?? false,
+    disableNewSeats: current?.disableNewSeats ?? false,
   };
   switch (action) {
     case "pause_after_hand":
@@ -220,10 +238,40 @@ export function applySessionOpsAction(
       return { ...base, replayRequested: true };
     case "clear_replay":
       return { ...base, replayRequested: false };
+    case "drain_table":
+      return { ...base, pauseAfterHand: true, disableNewSeats: true };
+    case "clear_drain_table":
+      return { ...base, disableNewSeats: false };
+    case "resume":
+      return { ...base, pauseAfterHand: false, disableNewSeats: false };
     default: {
       const _exhaustive: never = action;
       throw new Error(`unknown session ops action: ${_exhaustive}`);
     }
+  }
+}
+
+/** MC-064 — refuse resume while under review or open critical auto-incident for the session. */
+export async function assertSessionResumeSafe(sessionId: string): Promise<void> {
+  const ops = await getSessionOps(sessionId);
+  if (ops?.underReview) {
+    throw new Error("resume_blocked_under_review");
+  }
+  const incidents = await query<{ id: string }>(
+    `select id::text from security_incidents
+     where status in ('open','acknowledged','investigating')
+       and lower(coalesce(severity, '')) in ('critical','high','sev1','sev2')
+       and (
+         coalesce(auto_source_key, '') like '%' || $1 || '%'
+         or coalesce(detail::text, '') like '%' || $1 || '%'
+         or coalesce(summary, '') like '%' || $1 || '%'
+         or coalesce(title, '') like '%' || $1 || '%'
+       )
+     limit 1`,
+    [sessionId],
+  ).catch(() => ({ rows: [] as { id: string }[] }));
+  if (incidents.rows[0]) {
+    throw new Error("resume_blocked_open_incident");
   }
 }
 
@@ -250,6 +298,14 @@ export async function mutateSessionOps(input: {
   );
   if (!exists.rows[0]) throw new Error("session_not_found");
 
+  if (
+    input.action === "resume" ||
+    input.action === "clear_pause_after_hand" ||
+    input.action === "clear_drain_table"
+  ) {
+    await assertSessionResumeSafe(input.sessionId);
+  }
+
   const previous = await getSessionOps(input.sessionId);
   const nextFlags = applySessionOpsAction(previous, input.action);
 
@@ -258,26 +314,32 @@ export async function mutateSessionOps(input: {
     pause_after_hand: boolean;
     under_review: boolean;
     replay_requested: boolean;
+    disable_new_seats: boolean | null;
     notes: string | null;
     updated_at: string;
     updated_by: string | null;
   }>(
     `insert into admin_session_ops (
-       session_id, pause_after_hand, under_review, replay_requested, notes, updated_at, updated_by
-     ) values ($1, $2, $3, $4, $5, now(), $6)
+       session_id, pause_after_hand, under_review, replay_requested, disable_new_seats,
+       notes, updated_at, updated_by
+     ) values ($1, $2, $3, $4, $5, $6, now(), $7)
      on conflict (session_id) do update set
        pause_after_hand = excluded.pause_after_hand,
        under_review = excluded.under_review,
        replay_requested = excluded.replay_requested,
+       disable_new_seats = excluded.disable_new_seats,
        notes = excluded.notes,
        updated_at = now(),
        updated_by = excluded.updated_by
-     returning *`,
+     returning session_id, pause_after_hand, under_review, replay_requested,
+               coalesce(disable_new_seats, false) as disable_new_seats,
+               notes, updated_at, updated_by`,
     [
       input.sessionId,
       nextFlags.pauseAfterHand,
       nextFlags.underReview,
       nextFlags.replayRequested,
+      nextFlags.disableNewSeats,
       reason,
       input.actorLabel ?? null,
     ],

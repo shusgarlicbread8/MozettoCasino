@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { adminFetch } from "@/lib/api";
+import { ReconciliationRequest } from "../../components/ReconciliationRequest";
 import {
   ControlHealthBadge,
   ControlMetricCard,
@@ -260,6 +261,8 @@ export default async function SolvencyPage() {
               )}
             </div>
           </div>
+
+          <ReconciliationRequest chainId={data.chain.chainId} />
 
           <p className="text-xs muted">
             Session investigation: <Link href="/sessions">Sessions</Link> · Chain manifest:{" "}

@@ -10,7 +10,7 @@ export type ControlNavSection = {
   items: ControlNavItem[];
 };
 
-/** Plan 03 IA — evolve existing pages; stubs marked until later waves. */
+/** Plan 03 IA — all primary Control surfaces are wired. */
 export const CONTROL_NAV: ControlNavSection[] = [
   {
     title: "CONTROL",
@@ -21,7 +21,7 @@ export const CONTROL_NAV: ControlNavSection[] = [
     items: [
       { href: "/economics", label: "Economics" },
       { href: "/players", label: "Players" },
-      { href: "/cities", label: "Cities & Stakes", stub: true },
+      { href: "/cities", label: "Cities & Stakes" },
     ],
   },
   {
@@ -39,25 +39,25 @@ export const CONTROL_NAV: ControlNavSection[] = [
       { href: "/solvency", label: "Solvency" },
       { href: "/treasury", label: "Treasury" },
       { href: "/randomness", label: "Randomness" },
-      { href: "/settlement", label: "Proofs & Settlement", stub: true },
-      { href: "/chain", label: "Chain", stub: true },
+      { href: "/settlement", label: "Proofs & Settlement" },
+      { href: "/chain", label: "Chain" },
     ],
   },
   {
     title: "SECURITY",
     items: [
-      { href: "/risk", label: "Risk & Integrity", stub: true },
+      { href: "/risk", label: "Risk & Integrity" },
       { href: "/governance", label: "Governance" },
       { href: "/audit", label: "Audit" },
-      { href: "/access", label: "Access", stub: true },
+      { href: "/access", label: "Access" },
       { href: "/verify", label: "Verify" },
     ],
   },
   {
     title: "SYSTEM",
     items: [
-      { href: "/system/services", label: "Services", stub: true },
-      { href: "/system/deployments", label: "Deployments", stub: true },
+      { href: "/system/services", label: "Services" },
+      { href: "/system/deployments", label: "Deployments" },
       { href: "/system/config", label: "Configuration" },
     ],
   },

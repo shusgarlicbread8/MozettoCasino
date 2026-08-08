@@ -1,4 +1,5 @@
 import { adminFetch } from "@/lib/api";
+import { MatchmakingControls } from "../../components/MatchmakingControls";
 import {
   ControlHealthBadge,
   ControlMetricCard,
@@ -138,6 +139,8 @@ export default async function MatchmakingPage() {
         </div>
       ) : null}
 
+      <MatchmakingControls cities={(data?.cities ?? []).map((c) => c.leagueId)} />
+
       {!anySource && !error ? (
         <div className="ctrl-table-state">
           <ControlHealthBadge status="UNAVAILABLE" label="Data sources unavailable" />
@@ -215,9 +218,6 @@ export default async function MatchmakingPage() {
         </>
       ) : null}
 
-      <div className="ctrl-stub-note" style={{ marginTop: 16 }}>
-        Pause/drain ranked intents and operational soft limits remain Tier 2 audited controls (MC-063+).
-      </div>
     </div>
   );
 }

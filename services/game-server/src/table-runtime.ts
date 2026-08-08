@@ -59,6 +59,7 @@ import {
   listPendingSeatChanges,
   cancelPendingLeave,
   postRake,
+  getSessionOps,
   type EpochParticipant,
   type DbClient,
 } from "@mozetto/database";
@@ -531,9 +532,22 @@ export class TableRuntime {
         await this.topUp(top.ownerId, amount, { forceImmediate: true });
       }
     }
+    let controlBlocksJoins = false;
+    if (this.onchainSessionId) {
+      try {
+        const ops = await getSessionOps(this.onchainSessionId);
+        controlBlocksJoins = Boolean(ops?.disableNewSeats || ops?.pauseAfterHand);
+      } catch {
+        /* ignore */
+      }
+    }
     for (const join of plan.joins) {
       if (this.matchClosed) {
         console.warn("[table-runtime] skip queued join — match closed", this.tableId, join.id);
+        continue;
+      }
+      if (controlBlocksJoins) {
+        console.warn("[table-runtime] skip queued join — Control drain/pause", this.tableId, join.id);
         continue;
       }
       const buyIn = Number(join.amount ?? 0);
@@ -1616,6 +1630,20 @@ export class TableRuntime {
         this.matchClosed = false;
       }
       this.onchainSessionId = onchain.session_id;
+      // MC-063: Control drain / pause — refuse new joins (epoch flush may still forceImmediate).
+      if (!opts.forceImmediate) {
+        try {
+          const ops = await getSessionOps(onchain.session_id);
+          if (ops?.disableNewSeats || ops?.pauseAfterHand) {
+            throw new Error(
+              "Table draining or paused by Control — new seats disabled until resume.",
+            );
+          }
+        } catch (e) {
+          if (e instanceof Error && e.message.includes("Table draining")) throw e;
+          console.warn("[table-runtime] session ops join gate failed", this.tableId, e);
+        }
+      }
       // Sealed HU: only the original session players may sit. No outsider refill.
       if (this.isHeadsUpTable()) {
         const sealed = await query<{ profile_id: string }>(
@@ -2512,6 +2540,16 @@ export class TableRuntime {
       if (!this.onchainSessionId) {
         console.warn("[table-runtime] beginHand blocked — no onchain session", this.tableId);
         return;
+      }
+      // MC-062: Control pause_after_hand — current hand already finished; do not deal next.
+      try {
+        const ops = await getSessionOps(this.onchainSessionId);
+        if (ops?.pauseAfterHand) {
+          console.info("[table-runtime] beginHand blocked — Control pause_after_hand", this.tableId);
+          return;
+        }
+      } catch (e) {
+        console.warn("[table-runtime] session ops read failed (continuing)", this.tableId, e);
       }
       const oc = await query<{ status: string; player_count: string; lock_count: string }>(
         `select os.status,

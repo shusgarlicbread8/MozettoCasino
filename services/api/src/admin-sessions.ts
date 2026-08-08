@@ -30,6 +30,7 @@ export type SessionListRow = Record<string, unknown> & {
   fallback_invocation_count: number;
   invocation_count: number;
   pause_after_hand: boolean | null;
+  disable_new_seats: boolean | null;
   under_review: boolean | null;
   replay_requested: boolean | null;
   last_checkpoint_at: string | null;
@@ -61,6 +62,7 @@ export type SessionListItem = {
   reviewState: {
     underReview: boolean;
     pauseAfterHand: boolean;
+    disableNewSeats: boolean;
     replayRequested: boolean;
   };
   checkpointAgeSec: number | null;
@@ -124,6 +126,7 @@ export function mapSessionListRow(row: SessionListRow): SessionListItem {
     reviewState: {
       underReview: Boolean(row.under_review),
       pauseAfterHand: Boolean(row.pause_after_hand),
+      disableNewSeats: Boolean(row.disable_new_seats),
       replayRequested: Boolean(row.replay_requested),
     },
     checkpointAgeSec: checkpointAgeSeconds(row.last_checkpoint_at),
@@ -153,7 +156,8 @@ const SESSION_LIST_SQL = `
        where sp.session_id = os.session_id order by sp.created_at desc limit 1) as latest_settlement_status,
     aso.pause_after_hand,
     aso.under_review,
-    aso.replay_requested
+    aso.replay_requested,
+    coalesce(aso.disable_new_seats, false) as disable_new_seats
   from onchain_sessions os
   left join tables t on t.id = os.table_id
   left join leagues l on l.id = t.league_id

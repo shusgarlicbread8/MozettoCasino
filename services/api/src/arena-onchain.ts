@@ -59,6 +59,8 @@ import {
   invalidateQueuedTicketsForProfile,
   reapOrphanOnchainTables,
   isFeatureEnabled,
+  isCityMatchmakingBlocked,
+  isProfileMatchmakingRestricted,
   leagueIsRated,
   leaguePairCapMode,
   resolveBuyIn,
@@ -1043,6 +1045,12 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
     if (!session.walletAddress || !session.chainId) {
       return reply.code(400).send({ error: "wallet_required" });
     }
+    if (!(await isFeatureEnabled("onchain_matchmaking"))) {
+      return reply.code(503).send({
+        error: "matchmaking_disabled",
+        message: "On-chain matchmaking is temporarily disabled.",
+      });
+    }
 
     const parsed = SubmitSeatTicketSchema.extend({
       leagueBit: z.union([z.string(), z.number()]).optional(),
@@ -1066,6 +1074,24 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
     const leagueId = resolveCityId(parsed.data) ?? "bronze";
     const bit = Number(parsed.data.leagueBit ?? leagueBit(leagueId));
     const rated = parsed.data.rated ?? leagueIsRated(leagueId);
+
+    try {
+      if (await isCityMatchmakingBlocked(leagueId)) {
+        return reply.code(503).send({
+          error: "city_matchmaking_paused",
+          message: `Matchmaking paused or draining for city ${leagueId}.`,
+          leagueId,
+        });
+      }
+      if (session.profileId && (await isProfileMatchmakingRestricted(session.profileId))) {
+        return reply.code(403).send({
+          error: "matchmaking_restricted",
+          message: "This account is restricted from new matchmaking by Control.",
+        });
+      }
+    } catch (e) {
+      console.warn("[arena-onchain] seat-ticket control gate failed", e);
+    }
 
     // Reject an out-of-band buy-in here rather than letting the ticket queue and
     // fail later as an opaque `BuyInOutOfBand` revert during sealAndFundSession.
@@ -1165,6 +1191,25 @@ export async function handleOnchainFindMatch(
     league = assertLeague(leagueId);
   } catch (e) {
     return reply.code(400).send({ error: "invalid_league", message: e instanceof Error ? e.message : "bad league" });
+  }
+
+  // Control city drain / pause (MC-063) + per-player matchmaking restriction (MC-051).
+  try {
+    if (await isCityMatchmakingBlocked(leagueId)) {
+      return reply.code(503).send({
+        error: "city_matchmaking_paused",
+        message: `Matchmaking paused or draining for city ${leagueId}.`,
+        leagueId,
+      });
+    }
+    if (session.profileId && (await isProfileMatchmakingRestricted(session.profileId))) {
+      return reply.code(403).send({
+        error: "matchmaking_restricted",
+        message: "This account is restricted from new matchmaking by Control.",
+      });
+    }
+  } catch (e) {
+    console.warn("[arena-onchain] control matchmaking gate failed", e);
   }
 
   // What this player brings to the felt. The city's band is the only ceiling —

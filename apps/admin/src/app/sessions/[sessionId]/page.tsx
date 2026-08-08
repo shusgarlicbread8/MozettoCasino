@@ -25,6 +25,7 @@ type SessionDetail = {
     pauseAfterHand: boolean;
     underReview: boolean;
     replayRequested: boolean;
+    disableNewSeats?: boolean;
   };
   session: { session_id: string; status: string };
   sections: {
@@ -207,6 +208,7 @@ export default async function SessionDetailPage({
             sessionId={data.session.session_id}
             initialOps={{
               pauseAfterHand: data.ops?.pauseAfterHand ?? false,
+              disableNewSeats: data.ops?.disableNewSeats ?? false,
               underReview: data.ops?.underReview ?? false,
               replayRequested: data.ops?.replayRequested ?? false,
             }}

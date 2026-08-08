@@ -37,6 +37,7 @@ import {
 import { isPlayerRestrictionAction, mutatePlayerRestrictions } from "@mozetto/database";
 import { requireAdmin, requireAdminControl, requestMeta } from "./admin-auth.js";
 import { registerAdminAuthRoutes } from "./admin-wallet-auth.js";
+import { registerAdminRuntimeRoutes } from "./admin-runtime-routes.js";
 import { buildMatchmakingOverview } from "./admin-matchmaking.js";
 import { fetchSessionDetailSections, fetchSessionList } from "./admin-sessions.js";
 import {
@@ -60,6 +61,7 @@ export { requireAdmin } from "./admin-auth.js";
 
 export function registerAdminRoutes(app: FastifyInstance) {
   registerAdminAuthRoutes(app);
+  registerAdminRuntimeRoutes(app);
 
   app.get("/v1/admin/whoami", async (req, reply) => {
     const principal = await requireAdmin(req, reply, "read");
@@ -488,6 +490,7 @@ export function registerAdminRoutes(app: FastifyInstance) {
           pauseAfterHand: false,
           underReview: false,
           replayRequested: false,
+          disableNewSeats: false,
           notes: null,
           updatedAt: null,
           updatedBy: null,
@@ -543,6 +546,9 @@ export function registerAdminRoutes(app: FastifyInstance) {
           "clear_under_review",
           "request_replay",
           "clear_replay",
+          "drain_table",
+          "clear_drain_table",
+          "resume",
         ],
       });
     }

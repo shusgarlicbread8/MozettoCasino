@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { adminFetch } from "@/lib/api";
+import { AiRuntimeControls } from "../../components/AiRuntimeControls";
 import { ControlMetricCard } from "../../components/control/ControlMetricCard";
 import { ControlPageHeader } from "../../components/control/ControlPageHeader";
 import { ControlTable } from "../../components/control/ControlTable";
@@ -429,10 +430,7 @@ export default async function AiOpsPage() {
         </div>
       </section>
 
-      <div className="ctrl-stub-note" style={{ marginTop: 24 }}>
-        MC-075 provider disable / force-fallback mutate controls are not wired in this pass — requires audited
-        feature-flag path with <code>ai.disable_provider</code> capability. Read-only only until MC-075 lands.
-      </div>
+      <AiRuntimeControls />
     </div>
   );
 }

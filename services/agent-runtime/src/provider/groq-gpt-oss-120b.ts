@@ -400,6 +400,16 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
       return this.finishFallback(input, started, 0, "illegal_action");
     }
 
+    // MC-075: Control can disable Groq for *new* decisions → deterministic fallback.
+    try {
+      const { isFeatureEnabled } = await import("@mozetto/database");
+      if (!(await isFeatureEnabled("ai_provider_groq"))) {
+        return this.finishFallback(input, started, 0, "provider_disabled");
+      }
+    } catch {
+      /* DB unavailable — do not fail closed on flag read errors */
+    }
+
     if (!this.apiKey) {
       return this.finishFallback(input, started, 0, "missing_api_key");
     }
