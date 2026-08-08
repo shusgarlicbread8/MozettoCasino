@@ -56,6 +56,7 @@ import {
   markEpochActive,
   listPendingLeaveOwnerIds,
   listPendingSeatChanges,
+  postRake,
   type EpochParticipant,
   type DbClient,
 } from "@mozetto/database";
@@ -198,6 +199,17 @@ export class TableRuntime {
   sessions = new Map<string, string>(); // userId -> sessionId
   stackBaseline = new Map<string, number>(); // userId -> stack at last ledger sync
   sessionStartHand = new Map<string, number>(); // sessionId -> handNumber when the session began (for rated match hand counts)
+  /** Buy-in USD at seat join (session P&L baseline). */
+  sessionBuyIn = new Map<string, number>();
+  /** Platform rake (USD) already taken from this seat's winning pots. */
+  sessionFeesPaid = new Map<string, number>();
+  /** Per-hand stack deltas for the live fee / P&L tracker. */
+  sessionHandResults = new Map<
+    string,
+    Array<{ handNumber: number; handPnl: number; fees: number; stackAfter: number }>
+  >();
+  /** Seat stack (USD) at the start of the current hand. */
+  handStackStartUsd = new Map<number, number>();
   /** Epoch ms when the current actor must act by. */
   actionDeadlineAt: number | null = null;
   pendingHuman: PendingHuman | null = null;
@@ -388,12 +400,15 @@ export class TableRuntime {
     }
 
     const sessions = await query(
-      `select id, owner_id, stack from table_sessions where table_id = $1 and status = 'active'`,
+      `select id, owner_id, stack, buy_in from table_sessions where table_id = $1 and status = 'active'`,
       [tableId],
     );
     for (const s of sessions.rows) {
       rt.sessions.set(s.owner_id, s.id);
       rt.stackBaseline.set(s.owner_id, Number(s.stack));
+      rt.sessionBuyIn.set(s.owner_id, Number(s.buy_in ?? s.stack));
+      rt.sessionFeesPaid.set(s.owner_id, rt.sessionFeesPaid.get(s.owner_id) ?? 0);
+      rt.sessionHandResults.set(s.owner_id, rt.sessionHandResults.get(s.owner_id) ?? []);
     }
     const hn = await query(
       `select coalesce(max(hand_number), 0)::int as m from hands where table_id = $1`,
@@ -1038,6 +1053,11 @@ export class TableRuntime {
       }
     }
 
+    const economics =
+      client.role === "player" && client.userId
+        ? this.sessionEconomicsFor(client.userId)
+        : null;
+
     return {
       ...base,
       actionClock: this.actionClock(),
@@ -1047,6 +1067,30 @@ export class TableRuntime {
       allInRunout: isAllInRunout(this.state) || this.state.street === "showdown" || this.state.street === "settlement",
       myHand,
       myEquity,
+      feesOnTab: economics?.feesPaid ?? 0,
+      sessionEconomics: economics,
+      leaveQueued: Boolean(client.userId && this.pendingLeaveOwners.has(client.userId)),
+    };
+  }
+
+  /** Owner-facing session P&L / fee tracker (USD). Stacks already net of per-hand rake. */
+  sessionEconomicsFor(userId: string) {
+    const seat = this.state.seats.find((s) => s.playerId === userId);
+    const buyIn = this.sessionBuyIn.get(userId) ?? this.stackBaseline.get(userId) ?? 0;
+    const stack = seat ? chipsToUsd(seat.stack + seat.bet) : 0;
+    const feesPaid = this.sessionFeesPaid.get(userId) ?? 0;
+    const hands = this.sessionHandResults.get(userId) ?? [];
+    const sessionPnl = stack - buyIn;
+    return {
+      buyIn,
+      stack,
+      feesPaid,
+      sessionPnl,
+      /** What session P&L would be if rake had not been taken from winning pots. */
+      grossSessionPnl: sessionPnl + feesPaid,
+      handsPlayed: hands.length,
+      lastHand: hands.length ? hands[hands.length - 1] : null,
+      leaveQueued: this.pendingLeaveOwners.has(userId),
     };
   }
 
@@ -1682,6 +1726,9 @@ export class TableRuntime {
     this.agentProfiles.set(empty.seatIndex, opts.profileKey);
     this.sessions.set(opts.userId, sessionId);
     this.stackBaseline.set(opts.userId, opts.buyIn);
+    this.sessionBuyIn.set(opts.userId, opts.buyIn);
+    this.sessionFeesPaid.set(opts.userId, 0);
+    this.sessionHandResults.set(opts.userId, []);
     this.sessionStartHand.set(sessionId, this.state.handNumber);
     try {
       await this.persistEvent("PLAYER_JOINED", {
@@ -1911,6 +1958,9 @@ export class TableRuntime {
       }
       this.sessions.delete(userId);
       this.stackBaseline.delete(userId);
+      this.sessionBuyIn.delete(userId);
+      this.sessionFeesPaid.delete(userId);
+      this.sessionHandResults.delete(userId);
       this.sessionStartHand.delete(sessionId);
     } else {
       await this.completeSessionsForUser(userId, stack);
@@ -2047,6 +2097,9 @@ export class TableRuntime {
         ]);
         this.sessions.delete(uid);
         this.stackBaseline.delete(uid);
+        this.sessionBuyIn.delete(uid);
+        this.sessionFeesPaid.delete(uid);
+        this.sessionHandResults.delete(uid);
         this.sessionStartHand.delete(sid);
       } else {
         await this.completeSessionsForUser(uid, stack);
@@ -2500,6 +2553,7 @@ export class TableRuntime {
     this.handOpeningStacks = new Map(
       this.state.seats.filter((s) => s.playerId).map((s) => [s.seatIndex, chipsToUsd(s.stack)]),
     );
+    this.handStackStartUsd = new Map(this.handOpeningStacks);
     // startHand deducts blinds in memory before events are durable — keep a restore point.
     const stacksBeforeDeal = new Map(this.state.seats.map((s) => [s.seatIndex, s.stack]));
     try {
@@ -3072,13 +3126,20 @@ export class TableRuntime {
     }
     if (ev.type === "HAND_SETTLED") {
       await this.persistEvent(ev.type, ev as unknown as Record<string, unknown>);
-      // Gross awards already equal contested pot (rake is deferred on winner tabs).
+      // Net-on-award: winners[] already exclude per-hand rake taken from the pot.
       const awardTotal = (ev.winners ?? []).reduce((sum, w) => sum + chipsToUsd(w.amount), 0);
-      const potAtSettle = awardTotal;
+      const potAtSettle = awardTotal + chipsToUsd(ev.rake);
       await query(
         `update hands set status='settled', board=$1::jsonb, pot=$2, street='settlement', seed_reveal=$3, settled_at=now() where id=$4`,
         [JSON.stringify(this.state.board), potAtSettle, ev.seedReveal, this.state.handId],
       );
+      await this.recordHandEconomics(ev);
+      const rakeUsd = chipsToUsd(ev.rake);
+      if (rakeUsd > 0 && this.state.handId) {
+        await postRake(rakeUsd, this.state.handId, this.arenaMode).catch((err) =>
+          console.warn("postRake failed", this.tableId, err),
+        );
+      }
       await this.persistCanonicalRootsAfterHand(ev.seedReveal, chipsToUsd(ev.rake)).catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn("[wp-108] persistCanonicalRootsAfterHand failed", this.tableId, msg);
@@ -3098,6 +3159,33 @@ export class TableRuntime {
         this.state.handId,
       ]);
     }
+  }
+
+  /**
+   * After each hand: update per-player fee / P&L tracker (rake already netted from stacks).
+   */
+  recordHandEconomics(ev: Extract<EngineEvent, { type: "HAND_SETTLED" }>) {
+    const handNumber = Number(this.state.handNumber) || 0;
+    const feesBySeat = new Map<number, number>();
+    for (const tab of ev.rakeTabs ?? []) {
+      feesBySeat.set(tab.seatIndex, chipsToUsd(tab.amount));
+    }
+    for (const seat of this.state.seats) {
+      if (!seat.playerId) continue;
+      const uid = seat.playerId;
+      const start = this.handStackStartUsd.get(seat.seatIndex) ?? chipsToUsd(seat.stack);
+      const after = chipsToUsd(seat.stack);
+      const fees = feesBySeat.get(seat.seatIndex) ?? 0;
+      const handPnl = after - start;
+      this.sessionFeesPaid.set(uid, (this.sessionFeesPaid.get(uid) ?? 0) + fees);
+      const prev = this.sessionHandResults.get(uid) ?? [];
+      prev.push({ handNumber, handPnl, fees, stackAfter: after });
+      this.sessionHandResults.set(uid, prev);
+      if (!this.sessionBuyIn.has(uid)) {
+        this.sessionBuyIn.set(uid, start);
+      }
+    }
+    this.handStackStartUsd.clear();
   }
 
   /**

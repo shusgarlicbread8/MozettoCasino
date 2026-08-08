@@ -231,7 +231,10 @@ export function LeaveGuardProvider({ children }: { children: React.ReactNode }) 
     setTableId(null);
     if (id) {
       try {
-        await api(`/v1/tables/${id}/leave`, { method: "POST", body: "{}" });
+        await api(`/v1/tables/${id}/leave`, {
+          method: "POST",
+          body: JSON.stringify({ forceImmediate: true }),
+        });
       } catch {
         /* user already confirmed */
       }
@@ -291,7 +294,7 @@ export function LeaveGuardProvider({ children }: { children: React.ReactNode }) 
       try {
         void fetch(`${API_BASE}/v1/tables/${id}/leave`, {
           method: "POST",
-          body: "{}",
+          body: JSON.stringify({ forceImmediate: true }),
           headers,
           credentials: "include",
           keepalive: true,

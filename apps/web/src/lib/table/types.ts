@@ -14,6 +14,25 @@ export type LiveSeat = {
   rakeOwed?: number;
 };
 
+export type SessionHandResult = {
+  handNumber: number;
+  handPnl: number;
+  fees: number;
+  stackAfter: number;
+};
+
+/** Owner session economics — stacks already net of per-hand rake. */
+export type SessionEconomics = {
+  buyIn: number;
+  stack: number;
+  feesPaid: number;
+  sessionPnl: number;
+  grossSessionPnl: number;
+  handsPlayed: number;
+  lastHand: SessionHandResult | null;
+  leaveQueued?: boolean;
+};
+
 export type LiveTableState = {
   handId: string | null;
   handNumber?: number;
@@ -33,8 +52,10 @@ export type LiveTableState = {
   allInRunout: boolean;
   myHand: string | null;
   myEquity: number | null;
-  /** Session platform fees assessed but not yet collected from stacks. */
+  /** Cumulative platform rake taken from this seat's winning pots. */
   feesOnTab: number;
+  sessionEconomics?: SessionEconomics | null;
+  leaveQueued?: boolean;
 };
 
 export type SeatActionFx = {

@@ -23,9 +23,11 @@ type TableSession = {
   started_at?: string;
   ended_at?: string | null;
   profile_key?: string | null;
-  /** Fees collected from this player's session profit (0 for net losers). */
+  /** Per-hand rake taken from pots this seat won (net-on-award). */
   platform_fees?: number | string;
   assessed_rake?: number | string;
+  session_pnl?: number | string | null;
+  gross_session_pnl?: number | string | null;
 };
 
 type ReplayHand = {
@@ -112,6 +114,23 @@ function outcomeFromScore(score: number | null): { label: string; tone: string }
   if (score === 0.5) return { label: "Draw", tone: color.textMuted };
   if (score === 0) return { label: "Loss", tone: color.danger };
   return { label: "Result", tone: color.textMuted };
+}
+
+function outcomeFromSession(
+  pnl: number | null,
+  grossPnl: number | null,
+  fees: number | null,
+  score: number | null,
+): { label: string; tone: string } {
+  if (pnl != null) {
+    if (pnl > 0) return { label: "Net profit", tone: color.accent };
+    if (pnl < 0 && grossPnl != null && grossPnl > 0 && fees != null && fees > 0) {
+      return { label: "Up before fees · net loss", tone: color.warn };
+    }
+    if (pnl < 0) return { label: "Net loss", tone: color.danger };
+    return { label: "Break even", tone: color.textMuted };
+  }
+  return outcomeFromScore(score);
 }
 
 export function MatchResultPanel({ sessionId, handId }: Props) {
@@ -268,6 +287,9 @@ export function MatchResultPanel({ sessionId, handId }: Props) {
   }, [profile, sessionId]);
 
   const pnl = useMemo(() => {
+    if (sessionRow?.session_pnl != null && Number.isFinite(Number(sessionRow.session_pnl))) {
+      return Number(sessionRow.session_pnl);
+    }
     if (sessionRow) {
       const buy = Number(sessionRow.buy_in ?? 0);
       const stack = Number(sessionRow.stack ?? 0);
@@ -283,13 +305,27 @@ export function MatchResultPanel({ sessionId, handId }: Props) {
   }, [sessionRow, match]);
 
   const platformFees = useMemo(() => {
-    // Per-player fees only (never table-wide rake). Net session losers pay $0.
+    // Per-hand rake already taken from pots you won (net-on-award).
     if (sessionRow?.platform_fees != null && Number.isFinite(Number(sessionRow.platform_fees))) {
       return Number(sessionRow.platform_fees);
     }
-    if (sessionRow && pnl != null && pnl <= 0) return 0;
+    if (sessionRow?.assessed_rake != null && Number.isFinite(Number(sessionRow.assessed_rake))) {
+      return Number(sessionRow.assessed_rake);
+    }
     return null;
-  }, [sessionRow, pnl]);
+  }, [sessionRow]);
+
+  const grossPnl = useMemo(() => {
+    if (
+      sessionRow?.gross_session_pnl != null &&
+      Number.isFinite(Number(sessionRow.gross_session_pnl))
+    ) {
+      return Number(sessionRow.gross_session_pnl);
+    }
+    if (pnl == null) return null;
+    if (platformFees == null) return pnl;
+    return pnl + platformFees;
+  }, [sessionRow, pnl, platformFees]);
 
   const ratingDelta = useMemo(() => {
     const hist = profile?.history ?? [];
@@ -302,9 +338,11 @@ export function MatchResultPanel({ sessionId, handId }: Props) {
 
   const score = match?.my_score != null ? Number(match.my_score) : null;
   const outcome =
-    hands.length === 0 && !match
+    hands.length === 0 && !match && pnl == null
       ? { label: "No hands played", tone: color.textMuted }
-      : outcomeFromScore(score);
+      : outcomeFromSession(pnl, grossPnl, platformFees, score);
+  const feesWipedProfit =
+    pnl != null && pnl <= 0 && grossPnl != null && grossPnl > 0 && (platformFees ?? 0) > 0;
   const aggression =
     profile?.aggression && profile.aggression.hands > 0 ? profile.aggression : null;
   const opponent = (() => {
@@ -392,6 +430,25 @@ export function MatchResultPanel({ sessionId, handId }: Props) {
         </div>
       ) : null}
 
+      {feesWipedProfit ? (
+        <div
+          role="status"
+          style={{
+            ...panel({ padding: space[4] }),
+            marginBottom: space[4],
+            borderColor: "rgba(232,184,74,.35)",
+            background: "rgba(232,184,74,.08)",
+            color: color.warn,
+            fontSize: 13.5,
+            lineHeight: 1.45,
+          }}
+        >
+          You were ahead by {fmtSignedMoney(grossPnl)} before platform fees of{" "}
+          {money(Number(platformFees))}. After per-hand rake from pots you won, net P&L is{" "}
+          {fmtSignedMoney(pnl)}.
+        </div>
+      ) : null}
+
       <section
         style={{
           display: "grid",
@@ -401,14 +458,18 @@ export function MatchResultPanel({ sessionId, handId }: Props) {
         }}
       >
         <StatCard
-          label="P&L"
+          label="Net P&L"
           value={loading ? "…" : fmtSignedMoney(pnl)}
           valueColor={pnl == null ? color.textMuted : pnl >= 0 ? color.accent : color.danger}
           hint={
             pnl == null
               ? "Unavailable until your seat session posts buy-in / stack"
               : sessionRow
-                ? `Cash-out ${money(Number(sessionRow.stack))} − buy-in ${money(Number(sessionRow.buy_in))}`
+                ? `Cash-out ${money(Number(sessionRow.stack))} − buy-in ${money(Number(sessionRow.buy_in))}${
+                    platformFees != null && platformFees > 0 && grossPnl != null
+                      ? ` · gross before fees ${fmtSignedMoney(grossPnl)}`
+                      : ""
+                  }`
                 : "From rated match stake"
           }
         />
@@ -418,10 +479,10 @@ export function MatchResultPanel({ sessionId, handId }: Props) {
           valueColor={platformFees != null && platformFees > 0 ? color.warn : color.textMuted}
           hint={
             platformFees != null && platformFees > 0
-              ? "Poker rake from pots you won, collected from session profit at leave — losers are not charged"
-              : pnl != null && pnl <= 0
-                ? "No platform fees on a losing session — rake tabs waived"
-                : "No rake collected for this session (e.g. all preflop folds)"
+              ? pnl != null && pnl <= 0 && grossPnl != null && grossPnl > 0
+                ? "Fees from pots you won — you were up before rake, net negative after"
+                : "Rake taken from each pot you won before the next hand dealt"
+              : "No rake this session (e.g. never won a contested pot)"
           }
         />
         <StatCard

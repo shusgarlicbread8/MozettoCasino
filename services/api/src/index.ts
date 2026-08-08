@@ -423,6 +423,7 @@ app.post("/v1/tables/:id/leave", async (req, reply) => {
   const id = (req.params as { id: string }).id;
   const auth = req.headers.authorization;
   const cookie = req.headers.cookie;
+  const body = req.body ?? {};
   try {
     const res = await fetch(`${GAME_HTTP}/v1/tables/${id}/leave`, {
       method: "POST",
@@ -431,8 +432,7 @@ app.post("/v1/tables/:id/leave", async (req, reply) => {
         ...(auth ? { authorization: auth } : {}),
         ...(cookie ? { cookie } : {}),
       },
-      // Fastify rejects application/json with an empty body.
-      body: "{}",
+      body: JSON.stringify(body && typeof body === "object" ? body : {}),
       signal: AbortSignal.timeout(8_000),
     });
     const data = await res.json().catch(() => ({}));
@@ -1252,9 +1252,8 @@ app.get("/v1/sessions", async (req, reply) => {
      order by s.started_at desc limit 40`,
     [session.profileId],
   );
-  // Platform fees are winner/profit-only: session losers see $0 even if they
-  // briefly owed hand-winner tabs that were waived at leave.
-  // assessed_rake sums rakeTabs[].amount from HAND_SETTLED — those are chips.
+  // Per-hand rake is taken from winning pots at settle (net-on-award).
+  // assessed_rake sums that seat's rakeTabs — always report it (not profit-gated).
   const sessions = rows.rows.map((row) => {
     const buyIn = Number(row.buy_in ?? 0);
     const cashOut = Number(row.stack ?? 0);
@@ -1263,14 +1262,17 @@ app.get("/v1/sessions", async (req, reply) => {
       Number.isFinite(assessedChips) && assessedChips > 0
         ? chipsToUsd(BigInt(Math.round(assessedChips)))
         : 0;
-    const platformFees =
-      Number.isFinite(buyIn) &&
-      Number.isFinite(cashOut) &&
-      cashOut > buyIn &&
-      assessedUsd > 0
-        ? assessedUsd
-        : 0;
-    return { ...row, assessed_rake: assessedUsd, platform_fees: platformFees };
+    const sessionPnl =
+      Number.isFinite(buyIn) && Number.isFinite(cashOut) ? cashOut - buyIn : null;
+    const grossPnl =
+      sessionPnl != null && Number.isFinite(assessedUsd) ? sessionPnl + assessedUsd : sessionPnl;
+    return {
+      ...row,
+      assessed_rake: assessedUsd,
+      platform_fees: assessedUsd,
+      session_pnl: sessionPnl,
+      gross_session_pnl: grossPnl,
+    };
   });
   return { sessions };
 });

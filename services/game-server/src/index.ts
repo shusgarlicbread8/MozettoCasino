@@ -245,11 +245,15 @@ app.post("/v1/tables/:id/leave", async (req, reply) => {
   const player = await resolvePlayer(req);
   if (!player) return reply.code(401).send({ error: "unauthenticated" });
   const tableId = (req.params as { id: string }).id;
+  const body = (req.body ?? {}) as { afterHand?: boolean; forceImmediate?: boolean };
+  // afterHand (default): finish the current hand, then cash out — AI still acts.
+  // forceImmediate: leave now (unload beacon / explicit "Leave now").
+  const forceImmediate = body.forceImmediate === true;
   try {
     const rt = await getRuntime(tableId, { allowBrokenChain: true });
     requireLease(tableId);
-    const result = await rt.leave(player.profileId, { forceImmediate: true });
-    return { ok: true, ...result };
+    const result = await rt.leave(player.profileId, { forceImmediate });
+    return { ok: true, afterHand: !forceImmediate, ...result };
   } catch (e) {
     const message = e instanceof Error ? e.message : "leave_failed";
     const code = message.includes("lease") ? 409 : 400;

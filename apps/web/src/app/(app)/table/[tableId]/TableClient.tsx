@@ -15,6 +15,7 @@ import { useMozettoBalances } from "@/lib/use-mozetto-balances";
 import type { JoinTableData } from "@/components/JoinTableSheet";
 import { LiveTableFelt } from "@/components/table/LiveTableFelt";
 import { PublicActionCard } from "@/components/table/PublicActionCard";
+import { SessionPnlCard } from "@/components/table/SessionPnlCard";
 import { TableSideRail } from "@/components/table/TableSideRail";
 import { SessionTrustBadge } from "@/components/verify/SessionTrustBadge";
 import { Button } from "@/components/ui";
@@ -42,6 +43,11 @@ export default function TableClient() {
   const [raiseAmt, setRaiseAmt] = useState("");
   const [actingBusy, setActingBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [leaveQueued, setLeaveQueued] = useState(false);
+  const [sessionHandsPlayed, setSessionHandsPlayed] = useState(0);
+  /** True once we occupied a seat this visit — used to always open results after play. */
+  const hadSeatedRef = useRef(false);
+  const navigatedAfterLeaveRef = useRef(false);
 
   // balances.refetch is a new function every render — keep it behind a ref so
   // the table feed never tears down meta/WS on balance polls (stuck CONNECTING).
@@ -179,33 +185,70 @@ export default function TableClient() {
     };
   }, [tableId, me?.profile?.id, amSeated, meta, refreshMeta, refresh, balances]);
 
-  async function leaveTable() {
+  const economics = live?.sessionEconomics;
+  const handsFromEconomics = Math.max(0, Number(economics?.handsPlayed ?? 0));
+  useEffect(() => {
+    if (handsFromEconomics > sessionHandsPlayed) setSessionHandsPlayed(handsFromEconomics);
+  }, [handsFromEconomics, sessionHandsPlayed]);
+  useEffect(() => {
+    if (live?.leaveQueued) setLeaveQueued(true);
+  }, [live?.leaveQueued]);
+  useEffect(() => {
+    if (amSeated) hadSeatedRef.current = true;
+  }, [amSeated]);
+
+  // Any real unseat after we played → results (queued leave, match close, force cash-out).
+  useEffect(() => {
+    if (navigatedAfterLeaveRef.current) return;
+    if (!hadSeatedRef.current || amSeated) return;
+    const played = Math.max(sessionHandsPlayed, handsFromEconomics);
+    navigatedAfterLeaveRef.current = true;
+    void refresh();
+    balances.refetch();
+    if (played >= 1) {
+      window.location.href = `/result/${encodeURIComponent(String(tableId))}`;
+    } else if (leaveQueued) {
+      window.location.href = "/poker";
+    } else {
+      // Brief WS flicker before first sit — allow retry if we get seated again.
+      navigatedAfterLeaveRef.current = false;
+    }
+  }, [leaveQueued, amSeated, sessionHandsPlayed, handsFromEconomics, tableId, refresh, balances]);
+
+  async function leaveTable(mode: "afterHand" | "now") {
     const wasSeated = amSeated;
     const ok = await confirmLeave(
       wasSeated
-        ? "Your AI finishes the current hand under its locked strategy. Your remaining stack settles back to your Arena Account afterward — you do not forfeit chips just by leaving."
+        ? mode === "afterHand"
+          ? "Leave after this hand. Your AI finishes under its locked strategy, then your stack settles — results open next."
+          : "Leave now. Mid-hand you may fold this pot; remaining stack settles back to your Arena Account."
         : "Any on-chain buy-in will settle back to your Arena Account; you can find a new match after.",
     );
     if (!ok) return;
-    setSeatedTable(null);
+    if (mode === "now") setSeatedTable(null);
     try {
       const leaveRes = await api<{ queued?: boolean; ok?: boolean; handsPlayed?: number }>(
         `/v1/tables/${tableId}/leave`,
         {
           method: "POST",
-          body: "{}",
+          body: JSON.stringify(
+            mode === "now" ? { forceImmediate: true } : { afterHand: true },
+          ),
         },
       );
+      // Mid-hand: server queues leave; AI finishes this hand, then epoch cash-out.
+      // Between hands: leave applies immediately (fall through to results).
       if (leaveRes?.queued) {
-        setActionError("Leaving after this hand — your AI finishes normally, then your stack settles back.");
+        setLeaveQueued(true);
+        setActionError("Leaving after this hand — your AI finishes, then results open.");
         if (tableId) setSeatedTable(tableId);
         return;
       }
       const handsPlayed = Math.max(
         0,
-        Number(leaveRes?.handsPlayed ?? live?.handNumber ?? 0) || 0,
+        Number(leaveRes?.handsPlayed ?? sessionHandsPlayed ?? economics?.handsPlayed ?? 0) || 0,
       );
-      // No hands dealt → lobby. Result page only after real play.
+      // No hands dealt → lobby. Results whenever you actually played.
       if (!wasSeated || handsPlayed < 1) {
         await refresh();
         balances.refetch();
@@ -241,14 +284,19 @@ export default function TableClient() {
             : s,
         ),
       );
+      // Effect also navigates; set flag so we don't double-hit if effect races.
+      if (!navigatedAfterLeaveRef.current) {
+        navigatedAfterLeaveRef.current = true;
+        await refresh();
+        balances.refetch();
+        window.location.href = `/result/${encodeURIComponent(String(tableId))}`;
+      }
+      return;
     } catch (e) {
       if (wasSeated && tableId) setSeatedTable(tableId);
       setActionError(e instanceof Error ? e.message : "Leave failed — try again");
       return;
     }
-    await refresh();
-    balances.refetch();
-    window.location.href = `/result/${encodeURIComponent(String(tableId))}`;
   }
 
   async function sendAction(action: string, amount?: number) {
@@ -509,6 +557,9 @@ export default function TableClient() {
           }}
         >
           <PublicActionCard log={log} />
+          {mySeated ? (
+            <SessionPnlCard economics={economics} leaveQueued={leaveQueued || Boolean(live?.leaveQueued)} />
+          ) : null}
           <LiveTableFelt
             meta={meta}
             seatMeta={seatMeta}
@@ -670,8 +721,18 @@ export default function TableClient() {
                   {sittingOut ? "Sit back in" : "Sit out"}
                 </Button>
               ) : null}
-              <Button size="sm" variant="danger" onClick={() => void leaveTable()}>
-                Leave table
+              {mySeated && !leaveQueued ? (
+                <Button size="sm" variant="secondary" onClick={() => void leaveTable("afterHand")}>
+                  Leave after hand
+                </Button>
+              ) : null}
+              <Button
+                size="sm"
+                variant="danger"
+                disabled={leaveQueued}
+                onClick={() => void leaveTable("now")}
+              >
+                {leaveQueued ? "Leaving…" : "Leave now"}
               </Button>
             </div>
           </div>

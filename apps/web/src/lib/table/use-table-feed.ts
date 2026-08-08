@@ -108,6 +108,8 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
           myHand: null,
           myEquity: null,
           feesOnTab: 0,
+          sessionEconomics: null,
+          leaveQueued: false,
         };
       });
       onMetaRefreshRef.current?.();
@@ -325,6 +327,11 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
                     ? null
                     : prev?.myEquity ?? null,
               feesOnTab: Number(state.feesOnTab ?? prev?.feesOnTab ?? 0),
+              sessionEconomics:
+                state.sessionEconomics && typeof state.sessionEconomics === "object"
+                  ? (state.sessionEconomics as LiveTableState["sessionEconomics"])
+                  : prev?.sessionEconomics ?? null,
+              leaveQueued: Boolean(state.leaveQueued ?? prev?.leaveQueued ?? false),
             };
           });
         }
@@ -333,6 +340,10 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
           const event = msg.event as { eventType?: string; payload?: Record<string, unknown>; sequence?: number };
           const et = String(event.eventType || "");
           const p = event.payload ?? {};
+
+          if (et === "LEAVE_QUEUED" && ownerUserId && String(p.userId || "") === ownerUserId) {
+            setLive((prev) => (prev ? { ...prev, leaveQueued: true } : prev));
+          }
 
           // WP-126 honest fallback when ai_cognition frames are missing.
           {
