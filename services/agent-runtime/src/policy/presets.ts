@@ -55,7 +55,7 @@ export const SEASON1_PRESETS: Record<PresetKey, PresetDefinition> = {
     presetId: PRESET_IDS.shark,
     displayName: "Shark",
     intent:
-      "High pressure and aggression; higher variance tolerance; faster public cadence; willing to spend Energy on pressure spots.",
+      "High pressure and aggression; higher variance tolerance; continues more on marginal pot-odds; bluffs when estimated folds clear break-even; faster public cadence.",
     // Frozen example axes from specs/canonical-vectors/09_profile_hash.json
     axes: {
       aggression: 82,
@@ -74,7 +74,7 @@ export const SEASON1_PRESETS: Record<PresetKey, PresetDefinition> = {
     presetId: PRESET_IDS.fox,
     displayName: "Fox",
     intent:
-      "High adaptation to public betting patterns; deceptive timing and line variation; moderate risk. Never shares private state with opponents.",
+      "High adaptation to public betting patterns; on marginal continues, trust opponentAdaptation/range confidence before pot odds alone; deceptive line variation. Never shares private state.",
     // Season 1 hypothesis — not a golden vector fixture
     axes: {
       aggression: 55,
@@ -93,7 +93,7 @@ export const SEASON1_PRESETS: Record<PresetKey, PresetDefinition> = {
     presetId: PRESET_IDS.professor,
     displayName: "Professor",
     intent:
-      "Patient and selective; conserves Energy; spends deeply on large turn/river decisions; lower variance.",
+      "Patient and selective; folds more marginal equalities especially OOP/low confidence; conserves Energy; deepens on large turn/river value.",
     // Season 1 hypothesis
     axes: {
       aggression: 40,
@@ -112,7 +112,7 @@ export const SEASON1_PRESETS: Record<PresetKey, PresetDefinition> = {
     presetId: PRESET_IDS.machine,
     displayName: "Machine",
     intent:
-      "Balanced baseline; consistent cadence; disciplined Energy use; low stylistic deviation.",
+      "Balanced baseline; on exact break-even slightly folds; consistent cadence; disciplined Energy; low stylistic deviation.",
     // Season 1 hypothesis — balanced midpoint (matches compute-vectors bob machine axes)
     axes: {
       aggression: 50,

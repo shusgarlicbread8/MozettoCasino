@@ -27,6 +27,19 @@ import {
   type RangeDistribution,
   type RangeEvidence,
 } from "./range.js";
+import {
+  analyzeBoardTexture,
+  classifyHandRelative,
+  classifyImpliedOdds,
+  continueQuality,
+  estimateEquityRealization,
+  estimateFoldToBet,
+  intentForAction,
+  type BoardTexture,
+  type HandRelative,
+  type OddsClass,
+  type StrategicIntent,
+} from "./spot-intelligence.js";
 
 /** Persistent, cross-hand stats for one opponent seat. Public evidence only. */
 export type OpponentStats = {
@@ -75,8 +88,14 @@ export type CandidateAction = {
    * immediately). Null for fold/check/call, which risk nothing on a fold.
    */
   breakEvenFoldPct: number | null;
+  /** Heuristic fold probability if hero takes this aggressive size. */
+  estimatedFoldPct: number | null;
+  /** Confidence in estimatedFoldPct, 0..1. */
+  foldEstimateConfidence: number | null;
   /** Price the opponent would be laid if they call. Null when not a bet/raise. */
   priceOfferedPct: number | null;
+  /** Primary strategic intent if this candidate is chosen. */
+  intent: StrategicIntent | null;
 };
 
 /** What the equity / summary range represents. */
@@ -89,10 +108,40 @@ export type DecisionFacts = {
     cards: string[];
     handClass: string;
     handLabel: string;
+    /** Board-relative classification (BOTTOM_PAIR, OVERPAIR, …). */
+    handRelativeStrength: string;
+    showdownStrength: string;
+    handRelativeLabel: string;
     position: PositionLabel;
     stackBb: number;
     committedBb: number;
   };
+  boardTexture: BoardTexture;
+  /**
+   * Raw equity vs modelled range (same as heroEquityVsRange.value when present).
+   * Prefer realizedEquity / continueQuality for call decisions.
+   */
+  rawEquity: number | null;
+  equityRealization: {
+    factor: number;
+    class: OddsClass;
+    summary: string;
+  } | null;
+  realizedEquity: number | null;
+  impliedOddsClass: OddsClass | null;
+  reverseImpliedOddsClass: OddsClass | null;
+  /**
+   * Call-spot quality using realized equity + implied/reverse odds — not raw
+   * equity ≥ potOdds alone.
+   */
+  continueQuality: {
+    realizedEquity: number;
+    edge: number;
+    band: "FOLD" | "MARGINAL" | "CONTINUE" | "CLEAR_CONTINUE";
+    summary: string;
+  } | null;
+  /** Likely strategic intents among legal candidates. */
+  strategicIntentCandidates: StrategicIntent[];
   potBb: number;
   callBb: number;
   /** Break-even equity needed to call, 0..1. Exact arithmetic, not a model. */
@@ -496,7 +545,70 @@ export function buildDecisionFacts(input: {
     caveats.push("hero_hole_cards_unavailable");
   }
 
-  const candidates = buildCandidates({ legal, pot, toCall, stack, bb });
+  const boardTexture = analyzeBoardTexture(state.board);
+  const handRelative: HandRelative =
+    hole.length === 2
+      ? classifyHandRelative(hole, state.board)
+      : { strength: "UNKNOWN", showdownBand: "NONE", label: "unknown holding" };
+  const heroPosition = positionOf(state, seatIndex);
+  const spr = pot > 0 ? Math.round((effectiveStack / pot) * 100) / 100 : null;
+  const sprAfterCall =
+    toCall > 0 && pot + toCall > 0
+      ? Math.round(((effectiveStack - toCall) / (pot + toCall)) * 100) / 100
+      : null;
+  const potOdds = toCall > 0 ? Math.round((toCall / (pot + toCall)) * 1000) / 1000 : null;
+  const rawEquity = equityVsRange?.value ?? null;
+
+  const realization =
+    rawEquity != null
+      ? estimateEquityRealization({
+          position: heroPosition,
+          street: String(state.street),
+          spr,
+          board: boardTexture,
+          hand: handRelative,
+          rangeConfidence: equityVsRange?.confidence ?? 0.5,
+        })
+      : null;
+  const oddsClasses = classifyImpliedOdds({
+    sprAfterCall,
+    hand: handRelative,
+    board: boardTexture,
+    street: String(state.street),
+  });
+  const continueQ =
+    rawEquity != null && potOdds != null && realization
+      ? continueQuality({
+          rawEquity,
+          realizationFactor: realization.factor,
+          potOdds,
+          implied: oddsClasses.implied,
+          reverse: oddsClasses.reverse,
+        })
+      : null;
+
+  const candidates = buildCandidates({
+    legal,
+    pot,
+    toCall,
+    stack,
+    bb,
+    rangeWidthPct: villainBlock?.rangeWidthPct ?? 50,
+    rangeConfidence: villainBlock?.rangeConfidence ?? 0.5,
+    board: boardTexture,
+    street: String(state.street),
+    hand: handRelative,
+    rawEquity,
+    continueBand: continueQ?.band ?? null,
+  });
+
+  const strategicIntentCandidates = [
+    ...new Set(
+      candidates
+        .map((c) => c.intent)
+        .filter((x): x is StrategicIntent => Boolean(x)),
+    ),
+  ];
 
   return {
     street: String(state.street),
@@ -505,23 +617,33 @@ export function buildDecisionFacts(input: {
       cards: hole.map((c) => `${c.rank}${c.suit}`),
       handClass: hole.length === 2 ? handClassOf(hole) : "",
       handLabel: hole.length === 2 ? personalHandLabel(hole, state.board) : "",
-      position: positionOf(state, seatIndex),
+      handRelativeStrength: handRelative.strength,
+      showdownStrength: handRelative.showdownBand,
+      handRelativeLabel: handRelative.label,
+      position: heroPosition,
       stackBb: toBb(stack, bb),
       committedBb: toBb(chipsToNumber(seat?.totalBet ?? 0n), bb),
     },
+    boardTexture,
+    rawEquity,
+    equityRealization: realization,
+    realizedEquity: continueQ?.realizedEquity ?? (rawEquity != null && realization
+      ? Math.round(rawEquity * realization.factor * 1000) / 1000
+      : null),
+    impliedOddsClass: rawEquity != null ? oddsClasses.implied : null,
+    reverseImpliedOddsClass: rawEquity != null ? oddsClasses.reverse : null,
+    continueQuality: continueQ,
+    strategicIntentCandidates,
     potBb: toBb(pot, bb),
     callBb: toBb(toCall, bb),
-    potOdds: toCall > 0 ? Math.round((toCall / (pot + toCall)) * 1000) / 1000 : null,
+    potOdds,
     effectiveStackBb: toBb(effectiveStack, bb),
     effectiveStacksBbBySeat,
     stackDepthRegime: stackDepthRegime(toBb(effectiveStack, bb)),
-    sprAfterCall:
-      toCall > 0 && pot + toCall > 0
-        ? Math.round(((effectiveStack - toCall) / (pot + toCall)) * 100) / 100
-        : null,
+    sprAfterCall,
     geometry: {
       callPctPot: toCall > 0 && pot > 0 ? Math.round((toCall / pot) * 1000) / 1000 : null,
-      spr: pot > 0 ? Math.round((effectiveStack / pot) * 100) / 100 : null,
+      spr,
       potBb: toBb(pot, bb),
       callBb: toBb(toCall, bb),
     },
@@ -553,8 +675,18 @@ export function buildCandidates(input: {
   toCall: number;
   stack: number;
   bb: number;
+  rangeWidthPct?: number;
+  rangeConfidence?: number;
+  board?: BoardTexture;
+  street?: string;
+  hand?: HandRelative;
+  rawEquity?: number | null;
+  continueBand?: string | null;
 }): CandidateAction[] {
   const { legal, pot, toCall, stack, bb } = input;
+  const board = input.board ?? analyzeBoardTexture([]);
+  const hand =
+    input.hand ?? ({ strength: "UNKNOWN", showdownBand: "WEAK", label: "unknown" } as HandRelative);
   const out: CandidateAction[] = [];
 
   const push = (action: string, chips: number) => {
@@ -562,6 +694,24 @@ export function buildCandidates(input: {
     if (out.some((c) => c.action === action && c.amountChips === amount)) return;
     const aggressive = action === "bet" || action === "raise" || action === "all_in";
     const potAfter = pot + amount;
+    const foldEst =
+      aggressive && amount > 0
+        ? estimateFoldToBet({
+            pot,
+            risk: amount,
+            rangeWidthPct: input.rangeWidthPct ?? 50,
+            rangeConfidence: input.rangeConfidence ?? 0.5,
+            board,
+            street: input.street ?? "flop",
+          })
+        : null;
+    const intent = intentForAction({
+      action,
+      hand,
+      rawEquity: input.rawEquity ?? null,
+      continueBand: input.continueBand ?? null,
+      foldEst,
+    });
     out.push({
       action,
       amountChips: amount,
@@ -570,11 +720,14 @@ export function buildCandidates(input: {
       potAfterBb: toBb(potAfter, bb),
       breakEvenFoldPct:
         aggressive && amount > 0 ? Math.round((amount / (amount + pot)) * 1000) / 10 : null,
+      estimatedFoldPct: foldEst?.estimatedFoldPct ?? null,
+      foldEstimateConfidence: foldEst?.confidence ?? null,
       // Price the villain is laid when they face this size.
       priceOfferedPct:
         aggressive && amount > toCall
           ? Math.round(((amount - toCall) / (potAfter + (amount - toCall))) * 1000) / 10
           : null,
+      intent,
     });
   };
 

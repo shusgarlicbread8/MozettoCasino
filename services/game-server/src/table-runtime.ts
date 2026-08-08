@@ -32,6 +32,7 @@ import {
   type DecisionFacts,
   type OpponentStats,
   type SeatActionLog,
+  rangeUpdateHint,
 } from "@mozetto/game-rules";
 import { fetchHandSeed, fallbackHandSeed } from "@mozetto/dealer/client";
 import type { Card } from "@mozetto/shared-types";
@@ -1499,12 +1500,13 @@ export class TableRuntime {
         }
       } else if (eventType === "PLAYER_ACTED" && action) {
         const sized = amountUsd != null && amountUsd > 0 ? ` $${money(amountUsd)}` : "";
+        const streetNow = String(this.state.street ?? "preflop");
         observation =
           actorSeat === st.seat
             ? amountUsd != null && amountUsd > 0
               ? `My ${action}${sized} is in · pot $${money(potUsd)}`
               : `My ${action} is in · pot $${money(potUsd)}`
-            : `${actorLabel} ${action}${sized} · updating range`;
+            : `${actorLabel} ${action}${sized} · ${rangeUpdateHint(action, streetNow)}`;
       } else if (patternRead) {
         observation = "Opponent range updated from bets, checks, calls, and folds.";
       }
@@ -2879,18 +2881,42 @@ export class TableRuntime {
         rangeEquity != null ? "range" : estimatedEquity != null ? "random" : null;
       const handLabel =
         seat.hole?.length === 2 ? personalHandLabel(seat.hole, this.state.board) : null;
+      const chosenCandidate = (actionHint?: string, amountHint?: number | null) => {
+        if (!actionHint) return null;
+        const acts = facts.candidates.filter((c) => c.action === actionHint);
+        if (!acts.length) return null;
+        if (amountHint == null || !(amountHint > 0)) return acts[0] ?? null;
+        const amountChips = chipsToNumber(usdToChips(amountHint));
+        return (
+          acts.find((c) => c.amountChips === amountChips) ??
+          acts.find(
+            (c) => Math.abs(c.amountChips - amountChips) <= Math.max(1, amountChips * 0.05),
+          ) ??
+          acts[0] ??
+          null
+        );
+      };
       const narrationOpts = {
         profileKey: profile,
         pot: chipsToUsd(this.state.pot),
         toCall,
         stack: chipsToUsd(seat.stack),
         equityPct: estimatedEquity,
+        realizedEquityPct:
+          facts.realizedEquity != null ? facts.realizedEquity * 100 : null,
         equityBasis,
         equityConfidence: rangeEquity?.confidence ?? null,
-        rangeSummary: facts.villain?.rangeSummary ?? null,
+        rangeWidthPct: facts.villain?.rangeWidthPct ?? null,
         rangeKind: facts.villain?.rangeKind ?? null,
         predictedContinueSummary: facts.villain?.predictedContinueSummary ?? null,
         handLabel,
+        handRelativeLabel: facts.hero.handRelativeLabel || handLabel,
+        showdownStrength: facts.hero.showdownStrength || null,
+        continueBand: facts.continueQuality?.band ?? null,
+        continueSummary: facts.continueQuality?.summary ?? null,
+        position: facts.hero.position,
+        effectiveStackBb: facts.effectiveStackBb,
+        spr: facts.geometry.spr,
         opponents,
       };
       const analysingLines = buildPublicThinkingLines({
@@ -2944,6 +2970,7 @@ export class TableRuntime {
           turnMs: TURN_MS,
         }),
       );
+      const pick = chosenCandidate(botDecision.action, botDecision.amount ?? null);
       const thinkingLines = buildPublicThinkingLines({
         ...narrationOpts,
         street,
@@ -2951,6 +2978,10 @@ export class TableRuntime {
         amount: botDecision.amount,
         fallbackUsed: botDecision.fallbackUsed,
         fallbackErrorClass: botDecision.fallbackErrorClass ?? null,
+        requiredFoldPct: pick?.breakEvenFoldPct ?? null,
+        estimatedFoldPct: pick?.estimatedFoldPct ?? null,
+        foldEstimateConfidence: pick?.foldEstimateConfidence ?? null,
+        strategicIntent: pick?.intent ?? null,
       });
       this.sendOwnerAiCognition(seatIndex, {
         phase: "DECISION_READY",

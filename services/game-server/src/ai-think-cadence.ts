@@ -3,7 +3,7 @@
  * Easy spots (check / obvious fold) resolve faster; tough spots hold longer.
  * Never exposes private CoT — only cadence + owner-safe narrative lines.
  *
- * Copy distinguishes: objective facts → model estimates → strategic conclusion.
+ * Copy: objective facts → model estimates → profile strategy → decision + intent.
  */
 
 export const THINK_CADENCE_MIN_MS = 5_000;
@@ -69,16 +69,27 @@ function confidenceLabel(confidence: number | null | undefined): "low" | "medium
   return "high";
 }
 
-function showdownBand(equity: number | null): "none" | "low" | "medium" | "high" | null {
-  if (equity == null) return null;
-  if (equity < 12) return "none";
-  if (equity < 35) return "low";
-  if (equity < 55) return "medium";
-  return "high";
-}
-
-function profileStrategyLine(profileKey: string, conf: "low" | "medium" | "high" | null): string {
+function profileStrategyLine(
+  profileKey: string,
+  conf: "low" | "medium" | "high" | null,
+  continueBand: string | null,
+): string {
   const profile = profileKey in PROFILE_TEMPO ? profileKey : "machine";
+  const marginal = continueBand === "MARGINAL";
+
+  if (marginal) {
+    switch (profile) {
+      case "fox":
+        return "Marginal price — Fox leans on the table read; continues when the exploit still supports it.";
+      case "shark":
+        return "Marginal price — Shark accepts higher variance and often continues.";
+      case "professor":
+        return "Marginal price — Professor prefers the fold unless realization and confidence improve.";
+      default:
+        return "Marginal price — Machine follows calibrated baseline (slightly folds equal spots).";
+    }
+  }
+
   if (conf === "low") {
     switch (profile) {
       case "fox":
@@ -103,6 +114,11 @@ function profileStrategyLine(profileKey: string, conf: "low" | "medium" | "high"
   }
 }
 
+function intentLabel(intent: string | null | undefined): string | null {
+  if (!intent) return null;
+  return intent.replace(/_/g, " ");
+}
+
 /** Owner-safe progressive lines — never private CoT or hole cards. */
 export function buildPublicThinkingLines(opts: {
   profileKey: string;
@@ -116,22 +132,33 @@ export function buildPublicThinkingLines(opts: {
   toCall?: number | null;
   stack?: number | null;
   equityPct?: number | null;
+  realizedEquityPct?: number | null;
   /**
    * What `equityPct` was measured against. "range" = vs the opponent's modelled
-   * range (decision-grade). "random" = vs uniformly random hands, which
-   * overstates hero's edge once the opponent has shown aggression — the copy
-   * must say so rather than implying a range read.
+   * range (decision-grade). "random" = vs uniformly random hands.
    */
   equityBasis?: "range" | "random" | null;
   /** Range-model confidence 0..1, when the estimate came from a range. */
   equityConfidence?: number | null;
-  /** Compact description of the modelled range (prefer width-only). */
-  rangeSummary?: string | null;
+  /** Opponent range width percent (e.g. 35). */
+  rangeWidthPct?: number | null;
   /** holding ≈ dealt cards; action_conditioned = narrowed by line. */
   rangeKind?: "holding" | "action_conditioned" | null;
   /** Predicted continue / open model when equity still uses holding. */
   predictedContinueSummary?: string | null;
+  /** Board-relative hand label (bottom pair, overpair, …). */
+  handRelativeLabel?: string | null;
   handLabel?: string | null;
+  showdownStrength?: string | null;
+  continueBand?: string | null;
+  continueSummary?: string | null;
+  requiredFoldPct?: number | null;
+  estimatedFoldPct?: number | null;
+  foldEstimateConfidence?: number | null;
+  strategicIntent?: string | null;
+  position?: string | null;
+  effectiveStackBb?: number | null;
+  spr?: number | null;
   opponents?: number;
 }): string[] {
   const profile = opts.profileKey in PROFILE_TEMPO ? opts.profileKey : "machine";
@@ -148,13 +175,16 @@ export function buildPublicThinkingLines(opts: {
     opts.equityPct != null && Number.isFinite(opts.equityPct)
       ? Math.max(0, Math.min(100, opts.equityPct))
       : null;
+  const realized =
+    opts.realizedEquityPct != null && Number.isFinite(opts.realizedEquityPct)
+      ? Math.max(0, Math.min(100, opts.realizedEquityPct))
+      : null;
   const breakEven = toCall > 0 ? (toCall / (pot + toCall)) * 100 : 0;
-  const hand = opts.handLabel ? opts.handLabel.toLowerCase() : "current holding";
+  const hand = (opts.handRelativeLabel || opts.handLabel || "current holding").toLowerCase();
   const conf = confidenceLabel(opts.equityConfidence);
-  const sd = showdownBand(equity);
   const pressure =
     opts.amount != null && opts.amount > 0 && pot > 0
-      ? `${Math.round((opts.amount / pot) * 100)}% of pot`
+      ? `${Math.round((opts.amount / pot) * 100)}% pot`
       : null;
 
   const streetLabel = `${street[0]!.toUpperCase()}${street.slice(1)}`;
@@ -166,11 +196,15 @@ export function buildPublicThinkingLines(opts: {
   const estimateLine = buildEstimateLine({
     hand,
     equity,
+    realized,
     basis: opts.equityBasis ?? (equity != null ? "random" : null),
     confidence: opts.equityConfidence ?? null,
-    rangeSummary: opts.rangeSummary ?? null,
+    rangeWidthPct: opts.rangeWidthPct ?? null,
     rangeKind: opts.rangeKind ?? null,
     predictedContinueSummary: opts.predictedContinueSummary ?? null,
+    position: opts.position ?? null,
+    effectiveStackBb: opts.effectiveStackBb ?? null,
+    spr: opts.spr ?? null,
     opponents: opts.opponents ?? 1,
   });
 
@@ -179,18 +213,24 @@ export function buildPublicThinkingLines(opts: {
     return [spotLine, estimateLine];
   }
 
-  const strategyLine = profileStrategyLine(profile, conf);
+  const strategyLine = profileStrategyLine(profile, conf, opts.continueBand ?? null);
   const decisionLine = buildDecisionLine({
     action,
     intent,
     equity,
-    sd,
+    realized,
     toCall,
     breakEven,
     pot,
     stack,
     amount: opts.amount ?? null,
     pressure,
+    continueBand: opts.continueBand ?? null,
+    requiredFoldPct: opts.requiredFoldPct ?? null,
+    estimatedFoldPct: opts.estimatedFoldPct ?? null,
+    foldConf: confidenceLabel(opts.foldEstimateConfidence),
+    strategicIntent: opts.strategicIntent ?? null,
+    showdownStrength: opts.showdownStrength ?? null,
   });
 
   const lines = [spotLine, estimateLine, strategyLine];
@@ -208,56 +248,100 @@ function buildDecisionLine(input: {
   action: string;
   intent: string;
   equity: number | null;
-  sd: "none" | "low" | "medium" | "high" | null;
+  realized: number | null;
   toCall: number;
   breakEven: number;
   pot: number;
   stack: number | null;
   amount: number | null;
   pressure: string | null;
+  continueBand: string | null;
+  requiredFoldPct: number | null;
+  estimatedFoldPct: number | null;
+  foldConf: "low" | "medium" | "high" | null;
+  strategicIntent: string | null;
+  showdownStrength: string | null;
 }): string {
-  const { action, intent, equity, sd, toCall, breakEven, pot, stack, amount, pressure } = input;
+  const {
+    action,
+    intent,
+    equity,
+    realized,
+    toCall,
+    breakEven,
+    pot,
+    stack,
+    amount,
+    pressure,
+    continueBand,
+    requiredFoldPct,
+    estimatedFoldPct,
+    foldConf,
+    strategicIntent,
+    showdownStrength,
+  } = input;
+  const why = intentLabel(strategicIntent);
+  const whyBit = why ? ` · Intent: ${why}` : "";
 
   if (action === "check") {
-    if (sd === "none") {
-      return `Decision: CHECK — near-zero showdown value; take free showdown rather than bluff ${money(pot)}.`;
+    if (showdownStrength === "NONE" || (equity != null && equity < 12)) {
+      return `Decision: CHECK — near-zero showdown value; take free showdown rather than bluff ${money(pot)}${whyBit}`;
     }
-    if (sd === "low") {
-      return `Decision: CHECK — weak showdown value; pot-control instead of thin value or a bluff.`;
+    if (showdownStrength === "WEAK" || (equity != null && equity < 35)) {
+      return `Decision: CHECK — weak showdown value; pot-control instead of thin value or a bluff${whyBit}`;
     }
-    return `Decision: CHECK — realize equity for free; no need to inflate ${money(pot)}.`;
+    return `Decision: CHECK — realize equity for free; no need to inflate ${money(pot)}${whyBit}`;
   }
 
   if (action === "fold") {
     return equity != null && toCall > 0
-      ? `Decision: FOLD — ~${Math.round(equity)}% equity does not clear the ${breakEven.toFixed(0)}% price.`
-      : `Decision: FOLD — preserve ${stack == null ? "stack" : money(stack)} vs an unfavorable price.`;
+      ? `Decision: FOLD — ~${Math.round(realized ?? equity)}% realized equity does not clear the ${breakEven.toFixed(0)}% price${whyBit}`
+      : `Decision: FOLD — preserve ${stack == null ? "stack" : money(stack)} vs an unfavorable price${whyBit}`;
   }
 
   if (action === "call") {
-    return equity != null
-      ? `Decision: CALL ${money(amount ?? toCall)} — ~${Math.round(equity)}% equity vs ${breakEven.toFixed(0)}% pot odds.`
-      : `Decision: CALL ${money(amount ?? toCall)} — price keeps enough showdown / improvement value.`;
+    const eqBit =
+      equity != null
+        ? `~${Math.round(equity)}% raw` +
+          (realized != null && Math.abs(realized - equity) >= 1
+            ? ` · ~${Math.round(realized)}% realized`
+            : "")
+        : null;
+    if (continueBand === "MARGINAL") {
+      return `Decision: CALL ${money(amount ?? toCall)} — marginal price${eqBit ? ` (${eqBit} vs ${breakEven.toFixed(0)}% pot odds)` : ""}; profile decides${whyBit}`;
+    }
+    if (continueBand === "FOLD" && eqBit) {
+      return `Decision: CALL ${money(amount ?? toCall)} — ${eqBit} vs ${breakEven.toFixed(0)}% pot odds (thin on realization)${whyBit}`;
+    }
+    return eqBit
+      ? `Decision: CALL ${money(amount ?? toCall)} — ${eqBit} vs ${breakEven.toFixed(0)}% pot odds${whyBit}`
+      : `Decision: CALL ${money(amount ?? toCall)} — price keeps enough showdown / improvement value${whyBit}`;
   }
 
   if (action === "bet" || action === "raise" || action === "all_in") {
     const allIn = stack != null && amount != null && amount >= stack;
-    if (sd === "none" || sd === "low") {
-      const sizing = allIn
-        ? `all-in ${money(stack!)}`
-        : pressure
-          ? `${money(amount ?? 0)} (${pressure})`
-          : money(amount ?? 0);
-      return `Decision: ${intent} — bluff / denial line (${sizing}); needs folds often enough.`;
+    const sizing = allIn
+      ? `all-in ${money(stack!)}`
+      : pressure
+        ? `${money(amount ?? 0)} (${pressure})`
+        : money(amount ?? 0);
+    const foldBit =
+      requiredFoldPct != null && estimatedFoldPct != null
+        ? ` · needs ${requiredFoldPct.toFixed(0)}% folds, est. ~${estimatedFoldPct.toFixed(0)}%${foldConf ? ` (${foldConf} conf)` : ""}`
+        : requiredFoldPct != null
+          ? ` · needs ${requiredFoldPct.toFixed(0)}% folds`
+          : "";
+
+    if (showdownStrength === "NONE" || showdownStrength === "WEAK" || (equity != null && equity < 35)) {
+      return `Decision: ${intent} — bluff / denial (${sizing})${foldBit}${whyBit}`;
     }
     if (allIn) {
-      return `Decision: ${intent} — commits remaining ${money(stack!)} (all-in).`;
+      return `Decision: ${intent} — commits remaining ${money(stack!)} (all-in)${whyBit}`;
     }
-    const sizing = pressure ? `adds ${money(amount ?? 0)}, ${pressure}` : `adds ${money(amount ?? 0)}`;
-    return `Decision: ${intent} — ${sizing}; value / pressure line.`;
+    return `Decision: ${intent} — ${sizing}; value / pressure line${foldBit}${whyBit}`;
   }
 
-  return `Decision: ${intent}.`;
+  return `Decision: ${intent}${whyBit}`;
 }
 
 /**
@@ -266,34 +350,68 @@ function buildDecisionLine(input: {
 function buildEstimateLine(input: {
   hand: string;
   equity: number | null;
+  realized: number | null;
   basis: "range" | "random" | null;
   confidence: number | null;
-  rangeSummary: string | null;
+  rangeWidthPct: number | null;
   rangeKind: "holding" | "action_conditioned" | null;
   predictedContinueSummary: string | null;
+  position: string | null;
+  effectiveStackBb: number | null;
+  spr: number | null;
   opponents: number;
 }): string {
-  const { hand, equity, basis, confidence, rangeSummary, rangeKind, predictedContinueSummary, opponents } =
-    input;
+  const {
+    hand,
+    equity,
+    realized,
+    basis,
+    confidence,
+    rangeWidthPct,
+    rangeKind,
+    predictedContinueSummary,
+    position,
+    effectiveStackBb,
+    spr,
+    opponents,
+  } = input;
   if (equity == null || basis == null) {
     return `Comparing ${hand}, board, legal sizes, and effective stack.`;
   }
 
   const approx = `~${Math.round(equity)}%`;
   const conf = confidenceLabel(confidence);
-  const confBit = conf ? ` · ${conf} confidence` : "";
+  const confBit = conf ? conf.toUpperCase() : null;
+  const rangeBit =
+    rangeWidthPct != null && Number.isFinite(rangeWidthPct)
+      ? `opponent range ${Math.round(rangeWidthPct)}%`
+      : null;
+  const geo: string[] = [];
+  if (position) geo.push(position);
+  if (effectiveStackBb != null) geo.push(`${Math.round(effectiveStackBb)}BB`);
+  if (spr != null) geo.push(`SPR ${spr}`);
+  const geoBit = geo.length ? geo.join(" · ") : null;
 
   if (basis === "range") {
     if (rangeKind === "holding") {
       const predict = predictedContinueSummary ? ` · ${predictedContinueSummary}` : "";
-      return `${hand} ≈ ${approx} vs dealt holding (~100%)${predict}${confBit}`;
+      const parts = [`${hand} · ${approx} equity vs dealt holding (~100%)${predict}`];
+      if (confBit) parts.push(`${confBit} confidence`);
+      if (geoBit) parts.push(geoBit);
+      return parts.join(" · ");
     }
-    const against = rangeSummary ? `vs ${rangeSummary}` : "vs action-conditioned range";
-    return `${hand} ≈ ${approx} ${against}${confBit}`;
+    const parts = [`${hand} · ${approx} equity`];
+    if (rangeBit) parts.push(rangeBit);
+    if (realized != null && Math.abs(realized - equity) >= 1) {
+      parts.push(`~${Math.round(realized)}% realized`);
+    }
+    if (confBit) parts.push(`${confBit} confidence`);
+    if (geoBit) parts.push(geoBit);
+    return parts.join(" · ");
   }
 
   const plural = opponents === 1 ? "" : "s";
-  return `No range read yet — ${hand} ≈ ${approx} vs ${opponents} random hand${plural} (upper bound)`;
+  return `No range read yet — ${hand} · ${approx} equity vs ${opponents} random hand${plural} (upper bound)`;
 }
 
 function money(amount: number): string {

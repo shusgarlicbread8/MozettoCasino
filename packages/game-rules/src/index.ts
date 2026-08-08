@@ -6,6 +6,7 @@ export * from "./cash-mechanics.js";
 export * from "./equity.js";
 export * from "./range.js";
 export * from "./decision-facts.js";
+export * from "./spot-intelligence.js";
 export * from "./holdem.js";
 export * from "./rake.js";
 export * from "./canonical-event.js";

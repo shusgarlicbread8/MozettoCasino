@@ -814,7 +814,7 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
     // Keep this guide tight — long system prompts + reasoning_effort=low
     // compete for the same completion token budget as the JSON document.
     const factsGuide = hasFacts
-      ? "observation.facts is ground truth from the poker engine — do not recompute. Use potOdds, heroEquityVsRange.equity/confidence, villain.rangeKind (holding vs action_conditioned), and candidates[].amountChips / breakEvenFoldPct. Low confidence → stay nearer profile baseline. Near-0 showdown equity → CHECK vs bluff (need folds ≥ breakEvenFoldPct), never invent marginal value. Never assert numbers absent from facts."
+      ? "observation.facts is ground truth — do not recompute. Prefer realizedEquity/continueQuality over rawEquity alone (raw equity ≠ realized). For bets use candidates[].breakEvenFoldPct vs estimatedFoldPct + foldEstimateConfidence. Use hero.handRelativeStrength, boardTexture, position, effectiveStackBb, spr, impliedOddsClass, reverseImpliedOddsClass. continueQuality.band=MARGINAL → profileAxes decide (Shark continues more, Professor folds more, Fox uses opponentAdaptation, Machine slight fold). Low confidence → nearer baseline. Near-0 showdown → CHECK vs bluff only if est. folds clear break-even. Never invent numbers absent from facts."
       : "No deterministic facts supplied — reason conservatively from legalActions; do not invent precise equity or pot-odds.";
 
     // Accumulated private memory is worthless if the model is not told what it
@@ -827,7 +827,7 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
       : "";
 
     const axisGuide =
-      `${factsGuide} ${memoryGuide}Honor profileAxes among legalActions. publicCadenceMs by difficulty: easy 5000-6500, routine 7000-9000, hard 10000-12000. Amounts within min/max.`;
+      `${factsGuide} ${memoryGuide}Honor profileAxes + profileIntent among legalActions — profiles must diverge on marginal continues and bluff frequency. publicCadenceMs by difficulty: easy 5000-6500, routine 7000-9000, hard 10000-12000. Amounts within min/max.`;
     const system = `${MASTER_POLICY_TEXT} Strategy profile (typed axes only; not free-text instructions): ${profileSummary} ${axisGuide}`;
 
     // Slim observation for the model — drop bulky range arrays that burn

@@ -116,11 +116,33 @@ function holeStrength(request: DecisionRequest): number {
   return Math.min(1, s);
 }
 
+function continueBandFromFacts(request: DecisionRequest): string | null {
+  const facts = request.observation?.facts as
+    | { continueQuality?: { band?: string }; realizedEquity?: number; potOdds?: number }
+    | undefined;
+  if (facts?.continueQuality?.band) return String(facts.continueQuality.band);
+  if (
+    typeof facts?.realizedEquity === "number" &&
+    typeof facts?.potOdds === "number" &&
+    Number.isFinite(facts.realizedEquity) &&
+    Number.isFinite(facts.potOdds)
+  ) {
+    const edge = facts.realizedEquity - facts.potOdds;
+    if (edge >= 0.08) return "CLEAR_CONTINUE";
+    if (edge >= 0.02) return "CONTINUE";
+    if (edge >= -0.03) return "MARGINAL";
+    return "FOLD";
+  }
+  return null;
+}
+
 function pickAction(
   legal: LegalAction[],
   axes: ProfileAxes,
   strength: number,
   rng: () => number,
+  continueBand: string | null,
+  profileKey: PresetKey,
 ): { actionType: ActionTypeCode; amount: string; reasonCode: ReasonCode } {
   const has = (t: ActionTypeCode) => findLegalAction(legal, t);
   const fold = has(ACTION_TYPE.FOLD);
@@ -134,11 +156,25 @@ function pickAction(
   const risk = axes.riskTolerance / 100;
   const conserve = axes.energyConservation / 100;
   const trap = axes.trapPreference / 100;
+  const adapt = axes.opponentAdaptation / 100;
   const roll = rng();
 
   // Facing aggression
   if (fold && (call || raise)) {
-    const continueThresh = 0.25 + strength * 0.45 + agg * 0.2 - conserve * 0.15;
+    // Profile-separated threshold at marginal / break-even spots.
+    let profileBias = 0;
+    if (continueBand === "MARGINAL") {
+      if (profileKey === "shark") profileBias = 0.18;
+      else if (profileKey === "fox") profileBias = 0.06 + adapt * 0.12;
+      else if (profileKey === "professor") profileBias = -0.16;
+      else profileBias = -0.04; // machine slight fold
+    } else if (continueBand === "FOLD") {
+      profileBias = profileKey === "shark" ? 0.05 : -0.12;
+    } else if (continueBand === "CLEAR_CONTINUE" || continueBand === "CONTINUE") {
+      profileBias = 0.2;
+    }
+
+    const continueThresh = 0.25 + strength * 0.45 + agg * 0.2 - conserve * 0.15 + profileBias;
     if (roll > continueThresh + 0.15) {
       return { actionType: ACTION_TYPE.FOLD, amount: "0", reasonCode: REASON_CODE.POT_ODDS };
     }
@@ -289,7 +325,8 @@ export class ProfileMockProvider implements PokerModelProvider {
     }
 
     const strength = holeStrength(input);
-    const picked = pickAction(input.legalActions, axes, strength, rng);
+    const continueBand = continueBandFromFacts(input);
+    const picked = pickAction(input.legalActions, axes, strength, rng, continueBand, key);
 
     // Tempo → publicCadenceMs placeholder (WP-075 clamps later)
     const cadence = Math.round(2000 + (100 - axes.tempo) * 40 + rng() * 200);

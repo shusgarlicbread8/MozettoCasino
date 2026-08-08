@@ -47,19 +47,22 @@ describe("buildPublicThinkingLines", () => {
       toCall: 40,
       stack: 300,
       equityPct: 38,
+      realizedEquityPct: 32,
       equityBasis: "range",
       equityConfidence: 0.5,
-      rangeSummary: "18.4% of hands",
+      rangeWidthPct: 18.4,
       rangeKind: "action_conditioned",
-      handLabel: "Pair",
+      handRelativeLabel: "middle pair",
       opponents: 1,
+      continueBand: "CONTINUE",
     });
     assert.ok(lines.length >= 4);
-    assert.match(lines.join(" "), /pot odds 25%/i);
-    assert.match(lines.join(" "), /38%/);
-    assert.match(lines.join(" "), /18\.4% of hands/i);
-    assert.match(lines.join(" "), /decision: call/i);
-    assert.doesNotMatch(lines.join("\n"), /openai|groq|chain-of-thought|opponent AIs/i);
+    const text = lines.join(" ");
+    assert.match(text, /pot odds 25%/i);
+    assert.match(text, /38%/);
+    assert.match(text, /opponent range 18%/i);
+    assert.match(text, /decision: call/i);
+    assert.doesNotMatch(text, /openai|groq|chain-of-thought|opponent AIs/i);
   });
 
   it("labels holding vs predicted continue before villain acts", () => {
@@ -74,10 +77,10 @@ describe("buildPublicThinkingLines", () => {
       equityPct: 54,
       equityBasis: "range",
       equityConfidence: 0.35,
-      rangeSummary: "holding ≈100.0% of hands",
+      rangeWidthPct: 100,
       rangeKind: "holding",
       predictedContinueSummary: "predicted continue 32.9% of hands (BB prior)",
-      handLabel: "Ace-Ten offsuit",
+      handRelativeLabel: "medium preflop holding",
       opponents: 1,
     });
     const text = lines.join(" ");
@@ -98,14 +101,43 @@ describe("buildPublicThinkingLines", () => {
       equityPct: 0.8,
       equityBasis: "range",
       equityConfidence: 0.3,
-      rangeSummary: "28.0% of hands",
+      rangeWidthPct: 28,
       rangeKind: "action_conditioned",
-      handLabel: "High Card",
+      handRelativeLabel: "air",
+      showdownStrength: "NONE",
       opponents: 1,
+      strategicIntent: "POT_CONTROL",
     });
     const text = lines.join(" ");
     assert.match(text, /near-zero showdown|free showdown/i);
+    assert.match(text, /intent: pot control/i);
     assert.doesNotMatch(text, /marginal value/i);
+  });
+
+  it("states required fold frequency on bluff bets", () => {
+    const lines = buildPublicThinkingLines({
+      profileKey: "fox",
+      street: "flop",
+      action: "bet",
+      amount: 0.5,
+      pot: 1,
+      toCall: 0,
+      stack: 50,
+      equityPct: 10,
+      equityBasis: "range",
+      equityConfidence: 0.35,
+      rangeWidthPct: 35,
+      handRelativeLabel: "high card",
+      showdownStrength: "NONE",
+      requiredFoldPct: 33.3,
+      estimatedFoldPct: 39,
+      foldEstimateConfidence: 0.4,
+      strategicIntent: "BLUFF",
+    });
+    const text = lines.join(" ");
+    assert.match(text, /needs 33% folds/i);
+    assert.match(text, /est\. ~39%/i);
+    assert.match(text, /intent: bluff/i);
   });
 
   it("marks provider fallback as degraded execution with the failure class", () => {
@@ -164,7 +196,7 @@ describe("buildPublicThinkingLines", () => {
     assert.doesNotMatch(text, /200% of the current pot/i);
   });
 
-  it("states that a raise amount is chips added, not raise-to", () => {
+  it("states raise sizing with pot fraction", () => {
     const lines = buildPublicThinkingLines({
       profileKey: "fox",
       street: "flop",
@@ -176,9 +208,31 @@ describe("buildPublicThinkingLines", () => {
       equityPct: 70,
       equityBasis: "range",
       rangeKind: "action_conditioned",
-      handLabel: "Two Pair",
+      handRelativeLabel: "two pair",
+      showdownStrength: "MEDIUM",
       opponents: 1,
     });
-    assert.match(lines.join(" "), /adds \$60/i);
+    assert.match(lines.join(" "), /\$60/i);
+    assert.match(lines.join(" "), /50% pot/i);
+  });
+
+  it("profiles diverge in copy on marginal continues", () => {
+    const base = {
+      street: "flop",
+      action: "call" as const,
+      amount: 0.5,
+      pot: 1.5,
+      toCall: 0.5,
+      equityPct: 25,
+      realizedEquityPct: 18,
+      equityBasis: "range" as const,
+      continueBand: "MARGINAL",
+      handRelativeLabel: "bottom pair",
+    };
+    const fox = buildPublicThinkingLines({ ...base, profileKey: "fox" }).join(" ");
+    const professor = buildPublicThinkingLines({ ...base, profileKey: "professor" }).join(" ");
+    assert.match(fox, /marginal price/i);
+    assert.match(professor, /prefers the fold/i);
+    assert.notEqual(fox, professor);
   });
 });
