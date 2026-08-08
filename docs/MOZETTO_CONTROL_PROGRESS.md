@@ -13,8 +13,8 @@
 
 | Field | Value |
 |---|---|
-| **Active wave** | **C8 Protocol** (C5 DONE; C6 drain/resume; MC-046 export) |
-| **Active packets** | MC-080+; MC-046 export; C6 drain/resume |
+| **Active wave** | **C10 Incidents** (C9 governance in repo; C11 next) |
+| **Active packets** | MC-110+ release; C6 drain/resume remaining |
 | **Baseline SHA** | `6b7ab332de11e24ead3549eaea2c0b04dcf61df4` |
 | **Superadmin allowlist** | Env `ADMIN_SUPERADMIN_ADDRESSES` only — never hardcode wallet in app code |
 | **App** | Evolve `apps/admin` @ `:3001` into Mozetto Control |
@@ -34,10 +34,10 @@
 | 5 | Players / risk / support | `DONE` | MC-050–054; migration `039`; `/risk` + player integrity UI |
 | 6 | Table / session / MM ops | `IN_PROGRESS` | MC-060/061/065 DONE; drain/resume remaining |
 | 7 | AI model & agent ops | `DONE` | MC-070–074 DONE; mutate controls MC-075/076 remaining |
-| 8 | Chain / solvency / randomness / proofs | `NOT_STARTED` | Plan `09`; wave C8 |
-| 9 | Governance & mutation controls | `NOT_STARTED` | Plan `10`; wave C9 |
-| 10 | Incidents / security / audit | `NOT_STARTED` | Plan `11`; wave C10 |
-| 11 | Testing / deploy / release | `NOT_STARTED` | Plan `13`; wave C11 |
+| 8 | Chain / solvency / randomness / proofs | `DONE` | MC-080–084 DONE; MC-085 remaining |
+| 9 | Governance & mutation controls | `DONE` | MC-090–095; migration `040`; governance API + access UI |
+| 10 | Incidents / security / audit | `DONE` | Wave C10 MC-100–105; migrations `041` |
+| 11 | Testing / deploy / release | `IN_PROGRESS` | Wave C11 next — Sepolia drills / security suite |
 
 ---
 
@@ -117,7 +117,7 @@ MC-000 baseline → MC-001 manifest
 | MC-043 Player stats read model | `DONE` | Migration `038_admin_player_stats_v1.sql` — view over profiles/ledger/sessions |
 | MC-044 Player list API/UI | `DONE` | `GET /v1/admin/players`; `apps/admin/src/app/players/page.tsx` |
 | MC-045 Player detail P&L | `DONE` | `GET /v1/admin/players/:id`; `apps/admin/src/app/players/[id]/page.tsx` |
-| MC-046 Export audit | `NOT_STARTED` | |
+| MC-046 Export audit | `DONE` | MC-104 `GET /v1/admin/audit/export` (JSON/CSV + audit row) |
 
 ### Wave C5 — Player risk/support
 
@@ -167,23 +167,23 @@ MC-000 baseline → MC-001 manifest
 
 | Packet | Status | Evidence / notes |
 |---|---|---|
-| MC-090 Capability tier UI | `NOT_STARTED` | |
-| MC-091 Governance preview | `NOT_STARTED` | |
-| MC-092 Proposal archive | `NOT_STARTED` | |
-| MC-093 Safe/timelock export v2 | `NOT_STARTED` | |
-| MC-094 Post-execution verification | `NOT_STARTED` | |
-| MC-095 Principal management | `NOT_STARTED` | |
+| MC-090 Capability tier UI | `DONE` | `ControlCapabilityTierBadge` + `ControlDangerAction` tier prop; governance/access/player ops |
+| MC-091 Governance preview | `DONE` | `POST /v1/admin/governance/preview`; `@mozetto/governance` preview + eth_call simulation scaffold |
+| MC-092 Proposal archive | `DONE` | Migration `040_governance_proposals.sql`; `POST/GET /v1/admin/governance/proposals` |
+| MC-093 Safe/timelock export v2 | `DONE` | `buildSafeExportV2`; archive response + `GET …/proposals/:id/export`; no private keys |
+| MC-094 Post-execution verification | `DONE` | `POST /v1/admin/governance/proposals/:id/verify`; receipt + post-state field compare |
+| MC-095 Principal management | `DONE` | `GET /v1/admin/access/principals`; `POST …/ops` disable/revoke; `/access` UI + step-up note |
 
 ### Wave C10 — Incidents / security
 
 | Packet | Status | Evidence / notes |
 |---|---|---|
-| MC-100 Incident schema/API | `NOT_STARTED` | |
-| MC-101 Incidents board | `NOT_STARTED` | |
-| MC-102 Auto incident from solvency/watchtower | `NOT_STARTED` | |
-| MC-103 Runbook links and timeline | `NOT_STARTED` | |
-| MC-104 SIEM/audit export | `NOT_STARTED` | |
-| MC-105 Secret/config metadata page | `NOT_STARTED` | |
+| MC-100 Incident schema/API | `DONE` | Migration `041`; `GET/POST/PATCH /v1/admin/incidents`; reuses `security_incidents` + `incident_events` |
+| MC-101 Incidents board | `DONE` | `/incidents` ControlTable + SEV badges |
+| MC-102 Auto incident from solvency/watchtower | `DONE` | `syncAutoIncidentsFromOverview` on overview read; idempotent `auto_source_key` |
+| MC-103 Runbook links and timeline | `DONE` | `/incidents/[id]` runbook steps + `incident_events` timeline |
+| MC-104 SIEM/audit export | `DONE` | `GET /v1/admin/audit/export?format=json\|csv&reason=…` + `audit.export` row |
+| MC-105 Secret/config metadata page | `DONE` | `/system/config` + `GET /v1/admin/system/config` (names only) |
 
 ### Wave C11 — Release
 
@@ -208,6 +208,8 @@ MC-000 baseline → MC-001 manifest
 | 2026-08-08 | C1 | MC-010–015 DONE — migration `037`, SIWE auth API, admin wallet login, tests |
 | 2026-08-08 | C4 | MC-040–045 DONE — economics schema, city API, player view `038`, players UI |
 | 2026-08-09 | C5 | MC-050–054 DONE — integrity API, player restrictions, replay, timeline, risk UI |
+| 2026-08-09 | C10 | MC-100–105 DONE — incidents API/board, auto-hooks, runbooks, audit export, config metadata |
+| 2026-08-09 | C9 | MC-090–095 DONE — capability tiers, governance preview/archive/export/verify, access principals |
 
 ---
 

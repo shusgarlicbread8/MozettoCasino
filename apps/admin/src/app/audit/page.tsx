@@ -36,7 +36,8 @@ export default async function AuditPage() {
         <h1 className="text-xl font-semibold">Audit log</h1>
         <p className="muted text-sm mt-1">
           Append-only <code>admin_actions</code> (WP-094). Privileged mutations only — reads are not
-          logged here.
+          logged here. Export via{" "}
+          <code>GET /v1/admin/audit/export?format=json|csv&amp;reason=…</code> (MC-104, audited).
         </p>
         {whoami && (
           <p className="muted text-xs mt-2">

@@ -62,3 +62,15 @@ export {
 } from "./targets.js";
 
 export { buildGovernanceProposal, encodeCriticalCalldata } from "./proposal.js";
+
+export { hashCalldata, hashSafeJson, sha256Hex } from "./hashes.js";
+
+export {
+  buildGovernancePreview,
+  mergePreviewCurrentValue,
+  type GovernanceChangePreview,
+  type GovernancePreviewArtifact,
+  type GovernanceSimulationResult,
+} from "./preview.js";
+
+export { buildSafeExportV2, type SafeExportV2 } from "./export.js";

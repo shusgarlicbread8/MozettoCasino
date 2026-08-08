@@ -465,3 +465,45 @@ a:hover {
   font-size: 12px;
   line-height: 1.5;
 }
+
+.ctrl-tier-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+
+.ctrl-tier-badge.tier-read {
+  color: #94a3b8;
+  border-color: #334155;
+  background: #0f172a;
+}
+
+.ctrl-tier-badge.tier-soft {
+  color: #93c5fd;
+  border-color: #1d4ed855;
+  background: #0c1929;
+}
+
+.ctrl-tier-badge.tier-runtime {
+  color: #fcd34d;
+  border-color: #ca8a0455;
+  background: #1a1508;
+}
+
+.ctrl-tier-badge.tier-governed {
+  color: #c4b5fd;
+  border-color: #7c3aed55;
+  background: #140f24;
+}
+
+.ctrl-tier-badge.tier-emergency {
+  color: #fca5a5;
+  border-color: #dc262655;
+  background: #1a0a0a;
+}

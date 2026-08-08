@@ -39,6 +39,22 @@ import { requireAdmin, requireAdminControl, requestMeta } from "./admin-auth.js"
 import { registerAdminAuthRoutes } from "./admin-wallet-auth.js";
 import { buildMatchmakingOverview } from "./admin-matchmaking.js";
 import { fetchSessionDetailSections, fetchSessionList } from "./admin-sessions.js";
+import {
+  getIncidentDetail,
+  listIncidentsHandler,
+  mutateIncidentHandler,
+  registerIncidentHandler,
+} from "./admin-incidents-routes.js";
+import { exportAdminAudit } from "./admin-audit-export.js";
+import { buildConfigMetadataSnapshot } from "./admin-config.js";
+import {
+  archiveGovernanceProposal,
+  buildAdminGovernancePreview,
+  exportArchivedProposal,
+  listAdminGovernanceProposals,
+  verifyGovernanceExecution,
+} from "./admin-governance.js";
+import { buildAdminAccessSnapshot, mutateAdminPrincipal } from "./admin-access.js";
 
 export { requireAdmin } from "./admin-auth.js";
 
@@ -780,6 +796,220 @@ export function registerAdminRoutes(app: FastifyInstance) {
         message: err instanceof Error ? err.message : String(err),
       });
     }
+  });
+
+  /** MC-091 — governance preview (before/after + simulation scaffold). */
+  app.post("/v1/admin/governance/preview", async (req, reply) => {
+    if (!(await requireAdminControl(req, reply, "governance.prepare"))) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      return await buildAdminGovernancePreview({
+        actionId: String(body.actionId ?? "") as import("@mozetto/governance").ActionId,
+        to: String(body.to ?? ""),
+        args: (body.args as Record<string, unknown>) ?? {},
+        chainId: Number(body.chainId),
+        mode: body.mode as "direct" | "timelockController" | undefined,
+        timelockAddress: body.timelockAddress ? String(body.timelockAddress) : undefined,
+        timelockDelaySec: body.timelockDelaySec != null ? Number(body.timelockDelaySec) : undefined,
+        safeAddress: body.safeAddress ? String(body.safeAddress) : undefined,
+        runSimulation: body.runSimulation !== false,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return reply.code(400).send({ error: "governance_preview_failed", message: msg });
+    }
+  });
+
+  /** MC-092/093 — archive proposal + Safe export v2. */
+  app.post("/v1/admin/governance/proposals", async (req, reply) => {
+    const principal = await requireAdminControl(req, reply, "governance.prepare");
+    if (!principal) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      return await archiveGovernanceProposal(
+        {
+          actionId: String(body.actionId ?? "") as import("@mozetto/governance").ActionId,
+          to: String(body.to ?? ""),
+          args: (body.args as Record<string, unknown>) ?? {},
+          chainId: Number(body.chainId),
+          mode: body.mode as "direct" | "timelockController" | undefined,
+          timelockAddress: body.timelockAddress ? String(body.timelockAddress) : undefined,
+          timelockDelaySec: body.timelockDelaySec != null ? Number(body.timelockDelaySec) : undefined,
+          safeAddress: body.safeAddress ? String(body.safeAddress) : undefined,
+          incidentId: body.incidentId ? String(body.incidentId) : undefined,
+          changeTicket: body.changeTicket ? String(body.changeTicket) : undefined,
+        },
+        {
+          wallet: principal.walletAddress ?? null,
+          principalId: principal.principalId ?? null,
+        },
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return reply.code(400).send({ error: "governance_archive_failed", message: msg });
+    }
+  });
+
+  app.get("/v1/admin/governance/proposals", async (req, reply) => {
+    if (!(await requireAdmin(req, reply, "read"))) return;
+    const q = req.query as { limit?: string; status?: string };
+    const limit = q.limit != null ? Number(q.limit) : undefined;
+    try {
+      return await listAdminGovernanceProposals({
+        limit,
+        status: q.status?.trim() as import("@mozetto/database").GovernanceProposalStatus | undefined,
+      });
+    } catch (err) {
+      return reply.code(500).send({
+        error: "governance_list_failed",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  app.get("/v1/admin/governance/proposals/:id/export", async (req, reply) => {
+    if (!(await requireAdminControl(req, reply, "governance.prepare"))) return;
+    const { id } = req.params as { id: string };
+    try {
+      return await exportArchivedProposal(id);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return reply.code(404).send({ error: "governance_export_failed", message: msg });
+    }
+  });
+
+  /** MC-094 — post-execution verification scaffold. */
+  app.post("/v1/admin/governance/proposals/:id/verify", async (req, reply) => {
+    if (!(await requireAdminControl(req, reply, "governance.prepare"))) return;
+    const { id } = req.params as { id: string };
+    const body = (req.body ?? {}) as { txHash?: string };
+    const txHash = String(body.txHash ?? "").trim();
+    if (!txHash) return reply.code(400).send({ error: "missing_tx_hash" });
+    try {
+      return await verifyGovernanceExecution({ proposalId: id, txHash });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return reply.code(400).send({ error: "governance_verify_failed", message: msg });
+    }
+  });
+
+  /** MC-095 — admin principals (read). */
+  app.get("/v1/admin/access/principals", async (req, reply) => {
+    if (!(await requireAdmin(req, reply, "read"))) return;
+    try {
+      return await buildAdminAccessSnapshot();
+    } catch (err) {
+      return reply.code(500).send({
+        error: "access_list_failed",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  /** MC-095 — disable principal / revoke sessions (audited). */
+  app.post("/v1/admin/access/principals/:id/ops", async (req, reply) => {
+    const principal = await requireAdminControl(req, reply, "admin.manage_principals");
+    if (!principal) return;
+    const { id } = req.params as { id: string };
+    const body = (req.body ?? {}) as { action?: string; reason?: string };
+    const action = String(body.action ?? "").trim();
+    const reason = String(body.reason ?? "").trim();
+    if (!reason || reason.length < 3) {
+      return reply.code(400).send({ error: "reason_required", message: "Reason min 3 chars (audited)" });
+    }
+    if (action !== "disable" && action !== "revoke_sessions") {
+      return reply.code(400).send({ error: "invalid_action", allowed: ["disable", "revoke_sessions"] });
+    }
+    const meta = requestMeta(req);
+    try {
+      return await mutateAdminPrincipal(id, action, principal, {
+        reason,
+        requestId: meta.requestId,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const code = msg === "principal_not_found" ? 404 : 400;
+      return reply.code(code).send({ error: msg });
+    }
+  });
+
+  /** MC-100 — incident list (read-only). */
+  app.get("/v1/admin/incidents", listIncidentsHandler);
+
+  /** MC-100 — create incident (incidents.manage). */
+  app.post("/v1/admin/incidents", registerIncidentHandler);
+
+  /** MC-100/103 — incident detail + runbook + timeline. */
+  app.get("/v1/admin/incidents/:id", getIncidentDetail);
+
+  /** MC-100 — update incident status/owner (incidents.manage). */
+  app.patch("/v1/admin/incidents/:id", mutateIncidentHandler);
+
+  /** MC-104 — audit export (JSON/CSV) with export audit record. */
+  app.get("/v1/admin/audit/export", async (req, reply) => {
+    const principal = await requireAdminControl(req, reply, "economics.export");
+    if (!principal) return;
+
+    const q = req.query as {
+      format?: string;
+      limit?: string;
+      entityType?: string;
+      entityId?: string;
+      reason?: string;
+    };
+    const format = q.format?.trim().toLowerCase() === "csv" ? "csv" : "json";
+    const limit = Math.min(Number(q.limit ?? 500), 5000);
+    const reason = typeof q.reason === "string" ? q.reason.trim() : "";
+    if (!reason) {
+      return reply.code(400).send({ error: "reason_required" });
+    }
+
+    const meta = requestMeta(req);
+    try {
+      const result = await exportAdminAudit({
+        format,
+        limit,
+        entityType: q.entityType?.trim() || undefined,
+        entityId: q.entityId?.trim() || undefined,
+        role: principal.role,
+        actorLabel: principal.actorLabel,
+        reason,
+        requestId: meta.requestId,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+      });
+
+      if (format === "csv") {
+        reply.header("content-type", "text/csv; charset=utf-8");
+        reply.header(
+          "content-disposition",
+          `attachment; filename="mozetto-admin-audit-${result.exportedAt.slice(0, 10)}.csv"`,
+        );
+        reply.header("x-mozetto-audit-export-id", result.auditId);
+        return reply.send(result.body);
+      }
+
+      return {
+        exportedAt: result.exportedAt,
+        rowCount: result.rowCount,
+        auditId: result.auditId,
+        rows: result.rows,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message === "reason_required") {
+        return reply.code(400).send({ error: "reason_required" });
+      }
+      return reply.code(500).send({ error: "audit_export_failed", message });
+    }
+  });
+
+  /** MC-105 — config metadata (key names present/missing only). */
+  app.get("/v1/admin/system/config", async (req, reply) => {
+    if (!(await requireAdmin(req, reply, "read"))) return;
+    return buildConfigMetadataSnapshot();
   });
 }
 

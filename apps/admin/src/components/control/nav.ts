@@ -30,7 +30,7 @@ export const CONTROL_NAV: ControlNavSection[] = [
       { href: "/sessions", label: "Tables & Sessions" },
       { href: "/matchmaking", label: "Matchmaking" },
       { href: "/ai", label: "AI Operations" },
-      { href: "/incidents", label: "Incidents", stub: true },
+      { href: "/incidents", label: "Incidents" },
     ],
   },
   {
@@ -58,7 +58,7 @@ export const CONTROL_NAV: ControlNavSection[] = [
     items: [
       { href: "/system/services", label: "Services", stub: true },
       { href: "/system/deployments", label: "Deployments", stub: true },
-      { href: "/system/config", label: "Configuration", stub: true },
+      { href: "/system/config", label: "Configuration" },
     ],
   },
 ];

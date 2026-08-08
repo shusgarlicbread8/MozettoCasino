@@ -571,6 +571,9 @@ importers:
       '@mozetto/game-rules':
         specifier: workspace:*
         version: link:../../packages/game-rules
+      '@mozetto/governance':
+        specifier: workspace:*
+        version: link:../../packages/governance
       '@mozetto/reconciliation':
         specifier: workspace:*
         version: link:../../packages/reconciliation

@@ -28,6 +28,7 @@ import {
   rollupOverviewStatus,
   type OverviewComponentStatus,
 } from "./admin-thresholds.js";
+import { syncAutoIncidentsFromOverview } from "./admin-incident-auto.js";
 
 export type OverviewRange = "1d" | "7d" | "30d";
 
@@ -366,7 +367,7 @@ export async function buildAdminOverviewSnapshot(opts?: { range?: string }) {
   const handsPerHour =
     db && rangeHours > 0 ? Math.round((db.activity.handsInRange / rangeHours) * 10) / 10 : null;
 
-  return {
+  const snapshot = {
     readOnly: true as const,
     status,
     generatedAt,
@@ -502,6 +503,21 @@ export async function buildAdminOverviewSnapshot(opts?: { range?: string }) {
       randomness: randomnessError,
     },
   };
+
+  // MC-102 — best-effort auto-incidents; idempotent via auto_source_key.
+  void syncAutoIncidentsFromOverview({
+    solvencyStatus: solvencyComponent.status,
+    solvencyReasons: solvencyComponent.reasons,
+    watchtowerSignal: solvencySnap?.watchtower?.signal ?? null,
+    indexerStatus: indexerComponent.status,
+    indexerReasons: indexerComponent.reasons,
+    aiStatus: aiComponent.status,
+    aiReasons: aiComponent.reasons,
+  }).catch(() => {
+    /* migration 041 may be pending — never block overview */
+  });
+
+  return snapshot;
 }
 
 async function queryDbCore(rangeHours: number) {

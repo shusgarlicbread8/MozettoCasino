@@ -1,12 +1,15 @@
 "use client";
 
 import { useState } from "react";
+import { ControlCapabilityTierBadge } from "./ControlCapabilityTierBadge";
+import type { ControlCapabilityTier } from "./capability-tiers";
 
 export function ControlDangerAction({
   label,
   summary,
   expectedEffect,
   requireStepUp,
+  tier = "runtime",
   onConfirm,
   disabled,
 }: {
@@ -14,6 +17,7 @@ export function ControlDangerAction({
   summary: string;
   expectedEffect: string;
   requireStepUp?: boolean;
+  tier?: ControlCapabilityTier;
   onConfirm: (reason: string) => Promise<void> | void;
   disabled?: boolean;
 }) {
@@ -42,14 +46,17 @@ export function ControlDangerAction({
 
   return (
     <div className="ctrl-danger">
-      <button
-        type="button"
-        className="ctrl-btn danger"
-        disabled={disabled}
-        onClick={() => setOpen(true)}
-      >
-        {label}
-      </button>
+      <div className="flex items-center gap-2 flex-wrap">
+        <ControlCapabilityTierBadge tier={tier} />
+        <button
+          type="button"
+          className="ctrl-btn danger"
+          disabled={disabled}
+          onClick={() => setOpen(true)}
+        >
+          {label}
+        </button>
+      </div>
       {open ? (
         <div className="ctrl-danger-panel">
           <strong>Confirm privileged action</strong>

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { ControlDangerAction } from "./control/ControlDangerAction";
+import { PLAYER_OPS_TIER } from "./control/capability-tiers";
 import { adminFetch } from "@/lib/api";
 
 type PlayerOps = {
@@ -108,6 +109,7 @@ export function PlayerRestrictionsActions({
             label={a.label}
             summary={a.summary}
             expectedEffect={a.expectedEffect}
+            tier={PLAYER_OPS_TIER}
             disabled={!canMutate}
             onConfirm={(reason) => run(a.action, reason)}
           />
@@ -116,6 +118,7 @@ export function PlayerRestrictionsActions({
           label="Request replay (latest session)"
           summary="Flag the player's most recent session for replay verification."
           expectedEffect="Session replay_requested flag set; verifier may attach result."
+          tier={PLAYER_OPS_TIER}
           disabled={!canMutate}
           onConfirm={requestReplay}
         />
