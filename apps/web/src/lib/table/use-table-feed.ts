@@ -7,7 +7,10 @@ import {
   ENERGY_PER_HAND,
   emptyAiCognitionStatus,
   inferPhaseFromPublicEvent,
+  mergeActivity,
+  parseActivityEntry,
   parseAiCognitionMessage,
+  type AiActivityEntry,
   type AiCognitionStatus,
 } from "@/lib/ai-cognition";
 import {
@@ -120,6 +123,41 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
   }, [tableId]);
 
   // Reset + poll only when the table id changes — never when parent re-renders.
+  const reconstructActivity = useCallback(
+    async (handId: string | null) => {
+      if (!handId) return;
+      try {
+        const r = await api<{ handId: string | null; seat: number | null; activity: unknown[] }>(
+          `/v1/tables/${tableId}/activity?handId=${encodeURIComponent(handId)}`,
+        );
+        const entries = (r.activity ?? [])
+          .map((raw, i) => parseActivityEntry(raw, i + 1))
+          .filter((e): e is AiActivityEntry => e != null);
+        if (!entries.length) return;
+        // Merge rather than replace: a live frame may already have arrived.
+        setOwnerCognition((prev) => ({
+          ...prev,
+          handId: r.handId ?? prev.handId,
+          seat: r.seat ?? prev.seat,
+          activity: mergeActivity(prev.activity, entries, { handId: r.handId }),
+        }));
+      } catch {
+        // Reconstruction is best-effort; the live socket still drives the feed.
+      }
+    },
+    [tableId],
+  );
+
+  // Rebuild the feed on every new hand id we see, which covers first mount,
+  // a browser refresh mid-hand, and a socket reconnect.
+  const reconstructedFor = useRef<string | null>(null);
+  useEffect(() => {
+    const handId = live?.handId ?? null;
+    if (!handId || reconstructedFor.current === handId) return;
+    reconstructedFor.current = handId;
+    void reconstructActivity(handId);
+  }, [live?.handId, reconstructActivity]);
+
   useEffect(() => {
     setLive(null);
     setMeta(null);
@@ -129,6 +167,8 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
     setConnecting(true);
     setOwnerEnergyPct(null);
     setOwnerCognition(emptyAiCognitionStatus());
+    // Force a fresh reconstruction when the table changes.
+    reconstructedFor.current = null;
     void refreshMeta();
     const poll = setInterval(() => {
       void refreshMeta();
@@ -239,33 +279,38 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
             );
           }
           setOwnerCognition((prev) => {
-            const incoming = cog.publicThinkingLog ?? [];
             const handChanged =
               Boolean(cog.handId) && Boolean(prev.handId) && cog.handId !== prev.handId;
-            // New hand: keep a boundary from the settled hand, then start fresh.
-            if (handChanged) {
-              const boundary = (prev.publicThinkingLog ?? []).filter((l) => l.startsWith("──")).slice(-1);
-              const seed = [...boundary, ...incoming].slice(-24);
-              return {
-                ...cog,
-                energyRemaining: cog.energyRemaining ?? prev.energyRemaining,
-                seat: cog.seat ?? prev.seat,
-                publicThinkingLog: seed.length > 0 ? seed : null,
-                publicNarrative: cog.publicNarrative ?? prev.publicNarrative,
-              };
-            }
-            const mergedLog =
-              incoming.length > 0
+
+            // Structured feed is append-only and keyed by the server's
+            // sequence, so a decision frame can never delete the analysis
+            // entries that led to it. A new hand starts a fresh feed.
+            const incomingActivity = cog.activity ?? [];
+            const mergedActivity = incomingActivity.length
+              ? mergeActivity(handChanged ? [] : prev.activity, incomingActivity, {
+                  handId: cog.handId,
+                })
+              : handChanged
+                ? []
+                : (prev.activity ?? null);
+
+            // Legacy string log: still append-only, but only ever grows.
+            const incoming = cog.publicThinkingLog ?? [];
+            const legacy = handChanged
+              ? incoming
+              : incoming.length > 0
                 ? [
-                    ...(prev.publicThinkingLog ?? []).filter((l) => !incoming.includes(l)),
-                    ...incoming,
-                  ].slice(-24)
-                : prev.publicThinkingLog ?? null;
+                    ...(prev.publicThinkingLog ?? []),
+                    ...incoming.filter((l) => !(prev.publicThinkingLog ?? []).includes(l)),
+                  ]
+                : (prev.publicThinkingLog ?? []);
+
             return {
               ...cog,
               energyRemaining: cog.energyRemaining ?? prev.energyRemaining,
               seat: cog.seat ?? prev.seat,
-              publicThinkingLog: mergedLog,
+              activity: mergedActivity && mergedActivity.length ? mergedActivity : null,
+              publicThinkingLog: legacy.length > 0 ? legacy.slice(-200) : null,
               publicNarrative: cog.publicNarrative ?? prev.publicNarrative,
             };
           });

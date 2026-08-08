@@ -525,6 +525,30 @@ app.post("/v1/tables/:id/top-up", async (req, reply) => {
   }
 });
 
+/** Reconstruct a seat's AI activity feed after a refresh or reconnect. */
+app.get("/v1/tables/:id/activity", async (req, reply) => {
+  const session = await requireUser(req, reply);
+  if (!session) return;
+  const id = (req.params as { id: string }).id;
+  const qs = new URLSearchParams(
+    Object.entries((req.query as Record<string, string>) ?? {}).filter(([, v]) => v != null),
+  ).toString();
+  const auth = req.headers.authorization;
+  const cookie = req.headers.cookie;
+  try {
+    const res = await fetch(`${GAME_HTTP}/v1/tables/${id}/activity${qs ? `?${qs}` : ""}`, {
+      headers: {
+        ...(auth ? { authorization: auth } : {}),
+        ...(cookie ? { cookie } : {}),
+      },
+    });
+    const data = await res.json().catch(() => ({}));
+    return reply.code(res.status).send(data);
+  } catch (e) {
+    return reply.code(502).send({ error: "game_server_unreachable", message: e instanceof Error ? e.message : "error" });
+  }
+});
+
 /**
  * Sit out / sit back in. Distinct from Leave: the seat and its stack are kept,
  * the player is simply dealt out until they return. Proxied to the game server

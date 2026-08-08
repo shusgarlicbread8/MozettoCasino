@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { buyInBand, requireCity, usdcToAtoms, validateBuyIn } from "@mozetto/game-rules";
-import { getPool, query } from "./client.js";
+import { getPool, query, type DbClient } from "./client.js";
 import {
   ARENA_LEAGUES,
   arenaFormatConfig,
@@ -196,7 +196,7 @@ export async function claimTicketPair(opts: {
   pairCapMode?: "hard" | "soft";
 }): Promise<{ self: SeatTicketRow; opponent: SeatTicketRow } | null> {
   const pairCapMode = opts.pairCapMode ?? "hard";
-  const client = await getPool().connect();
+  const client: DbClient & { release: () => void } = await getPool().connect();
   try {
     await client.query("begin");
 
@@ -336,7 +336,7 @@ export async function claimOpenOnchainSession(opts: {
   const format = opts.format ?? "hu";
   const cfg = arenaFormatConfig(format);
   const pairCapMode = opts.pairCapMode ?? leaguePairCapMode(opts.leagueId);
-  const client = await getPool().connect();
+  const client: DbClient & { release: () => void } = await getPool().connect();
   try {
     await client.query("begin");
     const ticketRes = await client.query(
@@ -547,7 +547,7 @@ export async function claimSingleTicket(
 
 /** Undo a failed add-player claim so the player can match again. */
 export async function releaseOpenSessionClaim(ticketId: string, sessionId: string, profileId: string) {
-  const client = await getPool().connect();
+  const client: DbClient & { release: () => void } = await getPool().connect();
   try {
     await client.query("begin");
     await client.query(
@@ -896,7 +896,7 @@ export async function abandonUnseatedOnchainPlayer(opts: {
   profileId: string;
   tableId: string;
 }) {
-  const client = await getPool().connect();
+  const client: DbClient & { release: () => void } = await getPool().connect();
   try {
     await client.query("begin");
     const sess = await client.query(
@@ -1066,7 +1066,7 @@ export async function forceLeaveTableSession(opts: {
   profileId: string;
   tableId: string;
 }): Promise<{ ok: boolean; sessionId?: string; settling: boolean; tableClosed: boolean }> {
-  const client = await getPool().connect();
+  const client: DbClient & { release: () => void } = await getPool().connect();
   try {
     await client.query("begin");
 

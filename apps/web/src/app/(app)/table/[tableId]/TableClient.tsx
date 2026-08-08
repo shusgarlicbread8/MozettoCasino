@@ -108,6 +108,12 @@ export default function TableClient() {
   // Sitting out keeps the seat and the stack — it only stops you being dealt in.
   // Distinct from Leave, which settles the stack and gives the seat up.
   const sittingOut = Boolean(myLiveSeat?.sitOut);
+
+  // Busted: keep you at the table and open the top-up sheet (spectate until rebuy).
+  useEffect(() => {
+    if (!needTopUp || leaveQueued) return;
+    setJoinOpen(true);
+  }, [needTopUp, leaveQueued]);
   const myTurn = mySeatIndex != null && live?.actingIndex === mySeatIndex;
   const [sitOutBusy, setSitOutBusy] = useState(false);
   async function toggleSitOut() {
@@ -596,6 +602,7 @@ export default function TableClient() {
             ownerEnergyPct={ownerEnergyPct}
             canJoinOpenSeat={!mySeated}
             onOpenSeat={() => setJoinOpen(true)}
+            onTopUpSeat={() => setJoinOpen(true)}
           />
         </div>
 
@@ -707,10 +714,22 @@ export default function TableClient() {
                   </Button>
                 ) : null}
               </div>
+            ) : needTopUp ? (
+              <div
+                className="mz-mono"
+                style={{
+                  fontSize: 11,
+                  color: color.warn,
+                  maxWidth: 340,
+                  lineHeight: 1.45,
+                }}
+              >
+                You&apos;re busted — still at the table. Top up to buy back in for the next hands.
+              </div>
             ) : mySeated ? (
               <div className="mz-mono" style={{ fontSize: 11, color: color.textFaint }}>
                 {live?.actingIndex != null
-                  ? `Waiting on seat ${displaySeat(live.actingIndex)}…`
+                  ? `Waiting — seat ${displaySeat(live.actingIndex)} to act…`
                   : "Waiting for next hand…"}
               </div>
             ) : null}
@@ -726,11 +745,11 @@ export default function TableClient() {
                 </Button>
               ) : null}
               {needTopUp ? (
-                <Button size="sm" variant="secondary" onClick={() => setJoinOpen(true)}>
-                  Top up
+                <Button size="sm" variant="primary" onClick={() => setJoinOpen(true)}>
+                  Top up &amp; rebuy
                 </Button>
               ) : null}
-              {mySeated ? (
+              {mySeated && !needTopUp ? (
                 <Button
                   size="sm"
                   variant="secondary"
@@ -785,8 +804,16 @@ export default function TableClient() {
       </div>
 
       <TableSideRail
-        seatedLabel={mySeated ? "● SEATED" : connecting && !meta ? "○ CONNECTING" : "○ SPECTATING"}
-        seatedColor={mySeated ? color.accent : color.warn}
+        seatedLabel={
+          needTopUp
+            ? "● BUSTED · TOP UP"
+            : mySeated
+              ? "● YOU · SEATED"
+              : connecting && !meta
+                ? "○ CONNECTING"
+                : "○ SPECTATING"
+        }
+        seatedColor={needTopUp ? color.warn : mySeated ? color.accent : color.warn}
         session={session}
         agentName={agentName}
         mode={connecting && !meta ? "CONNECTING" : "LIVE ENGINE"}

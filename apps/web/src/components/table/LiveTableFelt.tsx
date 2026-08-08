@@ -42,6 +42,8 @@ type Props = {
   spectator?: boolean;
   ownerEnergyPct?: number | null;
   onOpenSeat?: () => void;
+  /** Owner busted — open top-up sheet. */
+  onTopUpSeat?: () => void;
   canJoinOpenSeat?: boolean;
 };
 
@@ -57,6 +59,7 @@ export function LiveTableFelt({
   spectator = false,
   ownerEnergyPct = null,
   onOpenSeat,
+  onTopUpSeat,
   canJoinOpenSeat = false,
 }: Props) {
   const [hoverOpen, setHoverOpen] = useState(false);
@@ -93,10 +96,12 @@ export function LiveTableFelt({
             ? String(sm.owner_id)
             : "";
       const isMe = Boolean(rawId && myProfileId && rawId === myProfileId);
-      const ghost = Boolean(rawId) && Boolean(ls?.sitOut) && Number(ls?.stack ?? 0) <= 0 && !isMe;
-      const occupied = Boolean(rawId) && !ghost;
+      // Keep busted seats visible (sit-out / top-up) — never hide as empty ghosts.
+      const occupied = Boolean(rawId);
       const you = occupied && isMe && !spectator;
-      const active = occupied && live?.actingIndex === idx;
+      const busted = occupied && Number(ls?.stack ?? sm?.stack ?? 0) <= 0;
+      const active = occupied && !busted && live?.actingIndex === idx;
+      const agentColor = String(sm?.agent_color || "").trim() || (you ? color.accent : "#6EA8FF");
       const name = (
         (you
           ? sm?.owner_display_name || sm?.agent_display_name
@@ -106,9 +111,9 @@ export function LiveTableFelt({
         .toUpperCase();
       const stackNum = Number(ls?.stack ?? sm?.stack ?? 0);
       const betNum = Number(ls?.bet ?? 0);
-      const seatedLive = (live?.seats || []).filter((x) => x.playerId && !x.sitOut);
+      const seatedLive = (live?.seats || []).filter((x) => x.playerId && !x.sitOut && Number(x.stack) > 0);
       const headsUp = seatedLive.length === 2;
-      let posLabel = occupied ? `S${idx}` : "";
+      let posLabel = occupied ? `SEAT ${idx + 1}` : "";
       if (occupied && live?.button != null && live.street !== "waiting") {
         if (live.button === idx) posLabel = headsUp ? "BTN/SB" : "BTN";
         else if (headsUp) posLabel = "BB";
@@ -123,15 +128,15 @@ export function LiveTableFelt({
         ? revealed!.map((c) => engineCard(c))
         : you && live?.holeCards?.length
           ? live.holeCards.map((c) => engineCard(c))
-          : ls?.hasCards || (live && live.street !== "waiting" && occupied && !ls?.folded)
+          : ls?.hasCards || (live && live.street !== "waiting" && occupied && !ls?.folded && !busted)
             ? [CARD_BACK, CARD_BACK]
             : [];
-      const isDealer = live?.button === idx;
+      const isButton = live?.button === idx && live.street !== "waiting";
       const seatAct = actionFx.find((a) => a.seatIndex === idx);
       const winnerLabel = winFx?.winners.find((w) => w.seatIndex === idx);
       const eq = live?.equity?.find((e) => e.seatIndex === idx);
       const handLabel = live?.handLabels?.find((h) => h.seatIndex === idx)?.label || winnerLabel?.label || null;
-      const showOdds = Boolean(eq && live?.allInRunout && !winFx && !ls?.folded);
+      const showOdds = Boolean(eq && live?.allInRunout && !winFx && !ls?.folded && !busted);
       const cognition = deriveSeatCognition({
         seatIndex: idx,
         occupied,
@@ -143,38 +148,63 @@ export function LiveTableFelt({
         ownerEnergyPct: you ? ownerEnergyPct : null,
       });
 
+      const turnBadge = active
+        ? you
+          ? remaining != null
+            ? `YOUR TURN · ${remaining}s`
+            : "YOUR TURN"
+          : remaining != null
+            ? `TO ACT · ${remaining}s`
+            : "TO ACT"
+        : null;
+
       return {
         ...layout,
         empty: !occupied,
         you,
+        busted,
         name,
         version: sm?.current_version || "v1",
-        owner: you ? "you" : sm?.owner_handle ? `@${sm.owner_handle}` : "—",
-        pos: isDealer ? (headsUp ? "BTN/SB" : posLabel === "BB" ? "BB" : "BTN") : posLabel,
-        color: sm?.agent_color || color.accent,
+        owner: you ? "YOU" : sm?.owner_handle ? `@${sm.owner_handle}` : "OPPONENT",
+        pos: isButton ? (headsUp ? "BTN/SB" : posLabel === "BB" ? "BB" : "BTN") : posLabel,
+        color: agentColor,
         stack: occupied ? money(stackNum) : "",
         bb: occupied ? `${(stackNum / bb).toFixed(0)} BB` : "",
         stackPct: occupied ? `${Math.min(100, (stackNum / maxBuy) * 100)}%` : "0%",
-        opacity: ls?.folded && !isWinner ? ".45" : "1",
-        border: isWinner
-          ? color.accentBorder
-          : active
-            ? "rgba(61,220,138,.5)"
-            : isDealer
-              ? color.lineStrong
-              : color.line,
-        glow: isWinner
-          ? "0 0 34px rgba(61,220,138,.28)"
-          : active
-            ? "0 0 28px rgba(61,220,138,.16)"
-            : "0 8px 24px rgba(0,0,0,.5)",
-        avBorder: isWinner || active ? color.accentBorder : color.lineStrong,
-        ring: isWinner || active ? "rgba(61,220,138,.55)" : "transparent",
-        ringAnim: isWinner || active ? "ar-ring 1.8s infinite" : "none",
+        opacity: busted ? ".72" : ls?.folded && !isWinner ? ".5" : "1",
+        border: you
+          ? active
+            ? "rgba(61,220,138,.85)"
+            : "rgba(61,220,138,.55)"
+          : isWinner
+            ? color.accentBorder
+            : active
+              ? `${agentColor}99`
+              : `${agentColor}44`,
+        glow: you
+          ? active
+            ? "0 0 36px rgba(61,220,138,.35), 0 0 0 1px rgba(61,220,138,.25)"
+            : "0 0 22px rgba(61,220,138,.18), 0 8px 24px rgba(0,0,0,.5)"
+          : isWinner
+            ? "0 0 34px rgba(61,220,138,.28)"
+            : active
+              ? `0 0 28px ${agentColor}55`
+              : "0 8px 24px rgba(0,0,0,.5)",
+        avBorder: you || isWinner || active ? color.accentBorder : `${agentColor}88`,
+        ring: you
+          ? active
+            ? "rgba(61,220,138,.75)"
+            : "rgba(61,220,138,.4)"
+          : isWinner || active
+            ? `${agentColor}aa`
+            : "transparent",
+        ringAnim: you || active || isWinner ? "ar-ring 1.8s infinite" : "none",
         winAnim: isWinner ? "ar-win-glow 1.2s ease-in-out infinite" : "none",
         cardsFlip: showdownFace,
         actionBubble: seatAct || null,
         showWinnerBadge: isWinner,
+        turnBadge,
+        youBadge: you,
         oddsPct: showOdds ? eq!.equityPct : null,
         oddsColor: showOdds && eq! ? (eq.equityPct >= 40 ? color.accent : eq.equityPct >= 25 ? "#C6F06A" : color.textMuted) : null,
         handLabel: handLabel && (showdownFace || isWinner) ? handLabel : showOdds && handLabel ? handLabel : null,
@@ -187,15 +217,19 @@ export function LiveTableFelt({
               ? `${eq!.equityPct.toFixed(2)}% ODDS`
               : seatAct
                 ? seatAct.text
-                : ls?.sitOut || stackNum <= 0
-                  ? "TOP UP"
-                  : ls?.folded
-                    ? "FOLDED"
-                    : active
-                      ? remaining != null
-                        ? `${remaining}s`
-                        : "TO ACT"
-                      : cognition.label || "IN HAND",
+                : busted
+                  ? you
+                    ? "BUSTED · TOP UP"
+                    : "BUSTED"
+                  : ls?.sitOut
+                    ? "SITTING OUT"
+                    : ls?.folded
+                      ? "FOLDED"
+                      : active
+                        ? remaining != null
+                          ? `${remaining}s LEFT`
+                          : "TO ACT"
+                        : cognition.label || "IN HAND",
         statusColor: winnerLabel
           ? color.accent
           : showOdds && eq
@@ -206,15 +240,22 @@ export function LiveTableFelt({
                 : color.textMuted
             : seatAct
               ? seatAct.color
-              : ls?.sitOut || stackNum <= 0
+              : busted || ls?.sitOut
                 ? color.warn
                 : ls?.folded
                   ? color.textFaint
                   : active
                     ? color.accent
                     : cognition.labelColor,
-        statusBg: isWinner || active || showOdds ? color.accentDim : "rgba(255,255,255,.015)",
-        energyColor: you && cognition.energyPct != null ? color.accent : showOdds && eq ? (eq.equityPct >= 40 ? color.accent : "#C6F06A") : color.accent,
+        statusBg:
+          you && active
+            ? "rgba(61,220,138,.14)"
+            : isWinner || active || showOdds
+              ? color.accentDim
+              : busted
+                ? "rgba(232,184,74,.08)"
+                : "rgba(255,255,255,.015)",
+        energyColor: you && cognition.energyPct != null ? color.accent : showOdds && eq ? (eq.equityPct >= 40 ? color.accent : "#C6F06A") : agentColor,
         energy:
           you && cognition.energyPct != null
             ? `${Math.min(100, cognition.energyPct)}%`
@@ -226,7 +267,7 @@ export function LiveTableFelt({
         cards: hole,
         bet: betNum > 0 ? money(betNum) : "",
         betDisplay: betNum > 0 ? "flex" : "none",
-        dealerDisplay: isDealer ? "flex" : "none",
+        onTopUp: you && busted,
       };
     });
   }, [
@@ -449,6 +490,48 @@ export function LiveTableFelt({
                   >
                     WINNER
                   </div>
+                ) : s.turnBadge ? (
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: "50%",
+                      top: -22,
+                      transform: "translateX(-50%)",
+                      zIndex: 7,
+                      padding: "4px 11px",
+                      borderRadius: radius.sm,
+                      background: s.you ? "rgba(61,220,138,.16)" : "rgba(8,12,10,.94)",
+                      border: `1px solid ${s.you ? color.accentBorder : s.color}`,
+                      color: s.you ? color.accent : s.color,
+                      font: `700 10px ${font.mono}`,
+                      letterSpacing: ".1em",
+                      whiteSpace: "nowrap",
+                      animation: "ar-up .25s ease-out both",
+                      pointerEvents: "none",
+                    }}
+                  >
+                    {s.turnBadge}
+                  </div>
+                ) : s.youBadge ? (
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: "50%",
+                      top: -18,
+                      transform: "translateX(-50%)",
+                      zIndex: 6,
+                      padding: "3px 10px",
+                      borderRadius: radius.sm,
+                      background: "rgba(61,220,138,.12)",
+                      border: `1px solid rgba(61,220,138,.45)`,
+                      color: color.accent,
+                      font: `700 9px ${font.mono}`,
+                      letterSpacing: ".16em",
+                      pointerEvents: "none",
+                    }}
+                  >
+                    YOU
+                  </div>
                 ) : s.actionBubble ? (
                   <div
                     key={s.actionBubble.key}
@@ -474,7 +557,30 @@ export function LiveTableFelt({
                     {s.actionBubble.text}
                   </div>
                 ) : null}
-                <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 10px", overflow: "hidden", borderRadius: radius.md }}>
+                <div
+                  role={s.onTopUp ? "button" : undefined}
+                  tabIndex={s.onTopUp ? 0 : undefined}
+                  onClick={s.onTopUp ? () => onTopUpSeat?.() : undefined}
+                  onKeyDown={
+                    s.onTopUp
+                      ? (e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            onTopUpSeat?.();
+                          }
+                        }
+                      : undefined
+                  }
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 9,
+                    padding: "9px 10px",
+                    overflow: "hidden",
+                    borderRadius: radius.md,
+                    cursor: s.onTopUp ? "pointer" : "default",
+                  }}
+                >
                   <div style={{ position: "relative", width: 30, height: 30, flex: "none" }}>
                     <div
                       style={{
@@ -482,7 +588,7 @@ export function LiveTableFelt({
                         height: 30,
                         borderRadius: 9,
                         background: color.inkElevated,
-                        border: `1px solid ${s.avBorder}`,
+                        border: `2px solid ${s.color}`,
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
@@ -497,12 +603,28 @@ export function LiveTableFelt({
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div
                       className="mz-mono"
-                      style={{ fontSize: 11.5, fontWeight: 500, color: color.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                      style={{
+                        fontSize: 11.5,
+                        fontWeight: 500,
+                        color: s.you ? color.accent : color.text,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
                     >
                       {s.name} <span style={{ fontSize: 8.5, color: color.textFaint }}>{s.version}</span>
                     </div>
-                    <div className="mz-mono" style={{ fontSize: 9, color: color.textFaint, marginTop: 2 }}>
-                      {s.owner} · {s.pos}
+                    <div
+                      className="mz-mono"
+                      style={{
+                        fontSize: 9,
+                        color: s.you ? "rgba(61,220,138,.75)" : color.textFaint,
+                        marginTop: 2,
+                        letterSpacing: s.you ? ".08em" : undefined,
+                      }}
+                    >
+                      {s.owner}
+                      {s.pos ? ` · ${s.pos}` : ""}
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 3, flex: "none", perspective: 200 }}>
@@ -610,27 +732,6 @@ export function LiveTableFelt({
                     {s.bet}
                   </span>
                 </div>
-              </div>
-              <div
-                style={{
-                  position: "absolute",
-                  top: -10,
-                  left: -10,
-                  zIndex: 4,
-                  display: s.dealerDisplay as "flex" | "none",
-                  width: 24,
-                  height: 24,
-                  borderRadius: "50%",
-                  background: color.text,
-                  color: color.ink,
-                  alignItems: "center",
-                  justifyContent: "center",
-                  font: `700 11px ${font.mono}`,
-                  boxShadow: `0 0 0 2px ${color.ink}, 0 4px 14px rgba(0,0,0,.55)`,
-                }}
-                title="Dealer button"
-              >
-                D
               </div>
             </>
           )}

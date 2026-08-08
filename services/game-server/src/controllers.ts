@@ -160,8 +160,11 @@ export class AgentRuntimeController implements SeatController {
         };
       }
       // Agent returns chip integers; table-runtime applyAction expects USD.
+      // The wire may carry the amount as a number or a decimal string, so
+      // normalise through `unknown` rather than comparing a typed number to "".
+      const rawAmount = body.amount as unknown;
       const amountChips =
-        body.amount != null && body.amount !== "" ? Number(body.amount) : NaN;
+        rawAmount != null && rawAmount !== "" ? Number(rawAmount) : NaN;
       const amountUsd =
         Number.isFinite(amountChips) && amountChips > 0
           ? chipsToUsd(BigInt(Math.trunc(amountChips)))

@@ -22,6 +22,104 @@ export type CognitionSignalSource =
   | "inferred"
   | "unavailable";
 
+/**
+ * One entry in the AI activity feed.
+ *
+ * The feed is an APPEND-ONLY event log, not a re-render of current state.
+ * Once an entry is FINAL it must never be removed, reordered, or renumbered —
+ * the previous implementation numbered lines by array index over a rolling
+ * window, so numbers grew while the AI thought and then jumped back down when
+ * the window slid, which is the "flashing / compressing" behaviour.
+ */
+export type AiActivityKind =
+  | "OBSERVATION"
+  | "ANALYSIS"
+  | "DECISION"
+  | "ACTION"
+  | "SYSTEM";
+
+export type AiActivityEntry = {
+  /** Monotonic per-hand sequence assigned by the server. Never re-derived. */
+  seq: number;
+  kind: AiActivityKind;
+  /**
+   * TRANSIENT entries are work-in-progress ("Analysing turn range…"). They are
+   * replaced when the work completes and carry NO visible number. FINAL
+   * entries are permanent.
+   */
+  status: "TRANSIENT" | "FINAL";
+  text: string;
+  /** Street the entry belongs to, for visual grouping. */
+  street?: string | null;
+  handId?: string | null;
+  atMs?: number;
+};
+
+/** Parse a wire entry, tolerating the legacy plain-string form. */
+export function parseActivityEntry(raw: unknown, fallbackSeq: number): AiActivityEntry | null {
+  if (typeof raw === "string") {
+    const text = raw.trim();
+    if (!text) return null;
+    return { seq: fallbackSeq, kind: "ANALYSIS", status: "FINAL", text };
+  }
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const text = typeof o.text === "string" ? o.text.trim() : "";
+  if (!text) return null;
+  const seq = Number.isFinite(Number(o.seq)) ? Number(o.seq) : fallbackSeq;
+  const kind = ["OBSERVATION", "ANALYSIS", "DECISION", "ACTION", "SYSTEM"].includes(
+    String(o.kind),
+  )
+    ? (o.kind as AiActivityKind)
+    : "ANALYSIS";
+  return {
+    seq,
+    kind,
+    status: o.status === "TRANSIENT" ? "TRANSIENT" : "FINAL",
+    text,
+    street: typeof o.street === "string" ? o.street : null,
+    handId: typeof o.handId === "string" ? o.handId : null,
+    atMs: Number.isFinite(Number(o.atMs)) ? Number(o.atMs) : undefined,
+  };
+}
+
+/**
+ * Append-only merge. Finalized entries are keyed by server sequence, so a
+ * duplicate frame (reconnect, replay) cannot create a second copy and a later
+ * frame cannot delete an earlier entry. Transient entries are held separately
+ * and cleared as soon as any FINAL entry at or beyond their sequence arrives.
+ */
+export function mergeActivity(
+  prev: AiActivityEntry[] | null | undefined,
+  incoming: AiActivityEntry[],
+  opts?: { handId?: string | null; cap?: number },
+): AiActivityEntry[] {
+  const cap = opts?.cap ?? 200;
+  const bySeq = new Map<number, AiActivityEntry>();
+  for (const e of prev ?? []) {
+    if (e.status === "FINAL") bySeq.set(e.seq, e);
+  }
+  let transient: AiActivityEntry | null =
+    (prev ?? []).find((e) => e.status === "TRANSIENT") ?? null;
+
+  for (const e of incoming) {
+    if (e.status === "TRANSIENT") {
+      transient = e;
+      continue;
+    }
+    // First writer wins: never let a later frame rewrite settled history.
+    if (!bySeq.has(e.seq)) bySeq.set(e.seq, e);
+  }
+
+  const finals = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+  const maxFinal = finals.length ? finals[finals.length - 1]!.seq : -1;
+  // A transient line is stale once the work it described has been finalized.
+  if (transient && transient.seq <= maxFinal) transient = null;
+
+  const out = transient ? [...finals, transient] : finals;
+  return out.length > cap ? out.slice(out.length - cap) : out;
+}
+
 export type AiCognitionStatus = {
   phase: PublicAiCognitionPhase;
   energyRemaining: number | null;
@@ -40,6 +138,8 @@ export type AiCognitionStatus = {
   publicNarrative?: string | null;
   /** Progressive owner-safe thinking lines (never private CoT). */
   publicThinkingLog?: string[] | null;
+  /** Structured append-only activity feed (preferred over publicThinkingLog). */
+  activity?: AiActivityEntry[] | null;
   fallbackUsed?: boolean;
 };
 
@@ -123,6 +223,11 @@ export function parseAiCognitionMessage(msg: unknown): AiCognitionStatus | null 
         ? null
         : Number(m.intentAmount),
     publicNarrative: typeof m.publicNarrative === "string" ? m.publicNarrative : null,
+    activity: Array.isArray(m.activity)
+      ? (m.activity as unknown[])
+          .map((raw, i) => parseActivityEntry(raw, i))
+          .filter((e): e is AiActivityEntry => e != null)
+      : null,
     publicThinkingLog: Array.isArray(m.publicThinkingLog)
       ? m.publicThinkingLog.filter((l): l is string => typeof l === "string" && l.trim().length > 0).slice(-24)
       : null,

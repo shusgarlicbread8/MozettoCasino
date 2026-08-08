@@ -331,12 +331,31 @@ export function narrowRange(
         m = f.premiumPair ? 0.45 : f.weakOffsuit ? 1.15 : 1;
         break;
     }
-    const next = Math.max(0, Math.min(1, w * m));
-    if (next > 0.005) weights[hc] = Math.round(next * 1000) / 1000;
+    const next = Math.max(0, w * m);
+    if (next > 0) weights[hc] = next;
+  }
+
+  // RENORMALISE. Weights are conditional probabilities — "given this line, how
+  // much of this class is still here" — so the most consistent class must sit
+  // at 1.0 after conditioning. Without this the multipliers compound: every
+  // action scales the whole range down, so width decayed geometrically with
+  // the NUMBER OF ACTIONS rather than with information, and a routine
+  // open→call→call→raise line collapsed to ~2-3% of hands. That fake-narrow
+  // width then fed the fold-equity model and pinned every estimate near its
+  // floor. Rescaling preserves the relative shape (which is what equity
+  // sampling actually uses) while making the reported width mean what it says.
+  const peak = Math.max(0, ...Object.values(weights));
+  const normalized: Record<HandClass, number> = {};
+  if (peak > 0) {
+    for (const [hc, w] of Object.entries(weights)) {
+      const scaled = Math.min(1, w / peak);
+      // Drop only genuine noise, not the legitimate tail.
+      if (scaled > 0.005) normalized[hc] = Math.round(scaled * 1000) / 1000;
+    }
   }
 
   return {
-    weights,
+    weights: normalized,
     label: `${range.label} → ${evidence.kind}`,
     // Each inference layer costs confidence; never let it read as certainty.
     confidence: Math.max(0.15, range.confidence * 0.85),

@@ -312,6 +312,42 @@ app.post("/v1/tables/:id/top-up", async (req, reply) => {
   }
 });
 
+/**
+ * Reconstruct the AI activity feed for the caller's seat.
+ *
+ * The feed is server-owned and append-only, so a refresh, a reconnect, or a
+ * second tab all rebuild the identical timeline with the identical numbering.
+ */
+app.get("/v1/tables/:id/activity", async (req, reply) => {
+  const player = await resolvePlayer(req);
+  if (!player) return reply.code(401).send({ error: "unauthenticated" });
+  const tableId = (req.params as { id: string }).id;
+  const q = req.query as { handId?: string; seat?: string };
+  try {
+    const rt = await getRuntime(tableId);
+    const handId = q.handId?.trim() || rt.state.handId;
+    if (!handId) return { handId: null, seat: null, activity: [] };
+    const seat =
+      q.seat != null && q.seat !== ""
+        ? Number(q.seat)
+        : rt.state.seats.find((s) => s.playerId === player.profileId)?.seatIndex;
+    if (seat == null || Number.isNaN(seat)) {
+      return { handId, seat: null, activity: [] };
+    }
+    // Owner-only: a player may reconstruct their own agent's feed, nobody else's.
+    const owner = rt.state.seats.find((s) => s.seatIndex === seat)?.playerId;
+    if (owner && owner !== player.profileId) {
+      return reply.code(403).send({ error: "forbidden", message: "Not your seat." });
+    }
+    const activity = await rt.loadActivity(handId, seat);
+    return { handId, seat, activity };
+  } catch (e) {
+    return reply
+      .code(500)
+      .send({ error: "activity_failed", message: e instanceof Error ? e.message : "error" });
+  }
+});
+
 app.post("/v1/tables/:id/sit-out", async (req, reply) => {
   const player = await resolvePlayer(req);
   if (!player) return reply.code(401).send({ error: "unauthenticated", message: "Sign in to sit out." });

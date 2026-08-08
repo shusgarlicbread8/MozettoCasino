@@ -257,6 +257,11 @@ export function estimateEquityRealization(input: {
   board: BoardTexture;
   hand: HandRelative;
   rangeConfidence: number;
+  /**
+   * True when hero acting (checking) ends the betting round. Defaults to
+   * in-position, which is when a check closes the action heads-up.
+   */
+  closesAction?: boolean;
 }): { factor: number; class: OddsClass; summary: string } {
   const ip = input.position === "BTN" || input.position === "CO";
   let factor = ip ? 0.92 : 0.78;
@@ -289,6 +294,15 @@ export function estimateEquityRealization(input: {
   }
 
   if (input.rangeConfidence < 0.4) factor -= 0.03;
+
+  // RIVER: there are no more cards and no more streets to be blown off. If
+  // checking closes the action, equity IS showdown equity — a "realization"
+  // discount there is meaningless and was making the AI describe a made hand
+  // as weaker than it is. Only a modest discount remains for the case where
+  // villain can still act behind.
+  if (input.street === "river") {
+    factor = (input.closesAction ?? ip) ? 1 : Math.max(0.9, Math.min(1, factor));
+  }
 
   factor = Math.max(0.45, Math.min(1.05, Math.round(factor * 100) / 100));
   const cls: OddsClass =
@@ -337,31 +351,61 @@ export function classifyImpliedOdds(input: {
  */
 export function estimateFoldToBet(input: {
   pot: number;
+  /** Chips hero puts in. For a raise this is the TOTAL added, call included. */
   risk: number;
+  /** Chips hero must call before raising. 0 for a clean bet. */
+  toCall?: number;
   rangeWidthPct: number;
   rangeConfidence: number;
   board: BoardTexture;
   street: string;
 }): FoldEstimate {
+  const toCall = Math.max(0, input.toCall ?? 0);
+  const isRaise = toCall > 0;
+
+  // Break-even fold frequency. Hero risks `risk` to win the pot as it stands.
+  // For a RAISE the pot already contains villain's bet, so the reward is the
+  // live pot — but the risk is hero's whole contribution, not just the
+  // increment above the call. Using a plain bet formula here understates what
+  // a raise must achieve.
   const required =
     input.risk > 0 && input.pot >= 0
       ? Math.round((input.risk / (input.risk + input.pot)) * 1000) / 10
       : 0;
 
-  // Wider ranges fold more; wet boards call more; late streets fold less to small bets.
-  const width = Math.max(5, Math.min(100, input.rangeWidthPct));
-  let est = 18 + width * 0.55;
-  const potFrac = input.pot > 0 ? input.risk / input.pot : 1;
-  if (potFrac >= 1) est += 8;
-  else if (potFrac >= 0.66) est += 4;
-  else if (potFrac <= 0.33) est -= 4;
+  // Fold probability is driven FIRST by the price villain is being laid.
+  // Villain calls `increment` to win the pot plus that call, so the equity
+  // they need is increment / (pot + increment + increment). A tiny bet lays
+  // an enormous price and folds essentially nobody; a pot-sized bet demands
+  // real equity. The previous model moved only ~12 points across the entire
+  // sizing spectrum, which let 2%-pot "bluffs" look like they had fold equity.
+  const increment = isRaise ? Math.max(0, input.risk - toCall) : input.risk;
+  const villainCall = increment;
+  const villainReward = input.pot + increment;
+  const villainRequiredEquity =
+    villainCall > 0 ? villainCall / (villainReward + villainCall) : 0;
 
-  if (input.board.class === "DRY" || input.board.class === "PAIRED") est += 6;
-  if (input.board.class === "WET" || input.board.class === "MONOTONE") est -= 8;
-  if (input.street === "river") est -= 4;
-  if (input.street === "preflop") est += 2;
+  // How much of villain's range is weak enough to give up. Wider ranges carry
+  // more air; a narrow range is mostly hands that beat a bluff.
+  const width = Math.max(2, Math.min(100, input.rangeWidthPct)) / 100;
+  let airShare = 0.14 + width * 0.55;
 
-  est = Math.max(8, Math.min(72, Math.round(est * 10) / 10));
+  if (input.board.class === "DRY" || input.board.class === "PAIRED") airShare += 0.08;
+  if (input.board.class === "WET" || input.board.class === "MONOTONE") airShare -= 0.07;
+  if (input.street === "river") airShare -= 0.04;
+  if (input.street === "preflop") airShare += 0.03;
+  airShare = Math.max(0.05, Math.min(0.8, airShare));
+
+  // Responsiveness to price: 0 at no price, saturating around a pot-sized bet
+  // (villain needs ~33% equity). Slightly super-linear so big bets bite.
+  const pressure = Math.max(0, Math.min(1.15, (villainRequiredEquity / 0.33) ** 1.15));
+
+  // A raise carries more perceived strength than a bet of the same geometry.
+  const raisePremium = isRaise ? 1.12 : 1;
+
+  let est = airShare * pressure * raisePremium * 100;
+  est = Math.max(0, Math.min(78, Math.round(est * 10) / 10));
+
   const confidence = Math.max(0.25, Math.min(0.75, input.rangeConfidence * 0.85));
   return { requiredFoldPct: required, estimatedFoldPct: est, confidence };
 }

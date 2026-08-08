@@ -166,6 +166,17 @@ type Client = {
   seatIndex?: number;
 };
 
+/** Classify an activity line for grouping and styling. */
+function activityKindFor(line: string, phase: string, intentAction: string | null): string {
+  const l = line.toLowerCase();
+  if (l.startsWith("committing") || l.includes(" is in ·")) return "ACTION";
+  if (l.startsWith("decision:")) return "DECISION";
+  if (l.startsWith("──")) return "SYSTEM";
+  if (l.includes("dealt") || l.includes("seat ") || l.includes("blinds")) return "OBSERVATION";
+  if (phase === "ACTING" && intentAction) return "ACTION";
+  return "ANALYSIS";
+}
+
 export class TableRuntime {
   tableId: string;
   arenaMode: "demo" | "onchain" = "demo";
@@ -236,6 +247,16 @@ export class TableRuntime {
    * big blind reaches it, at which point it is dealt in as the BB.
    */
   awaitingBigBlind = new Set<number>();
+  /**
+   * Stable activity sequencing per `${handId}:${seat}`.
+   *
+   * Cognition frames re-send earlier lines as the hand progresses. If the UI
+   * numbered them by array position they would renumber every frame (the
+   * "flashing / compressing" log). Assigning each distinct line a monotonic
+   * sequence ONCE, server-side, makes the feed append-only and idempotent:
+   * a resent line keeps its original number and the client can dedupe on it.
+   */
+  activityLedger = new Map<string, { next: number; assigned: Map<string, number> }>();
   /**
    * Cross-hand opponent statistics keyed by seat. Public evidence only; reset
    * when a seat changes occupant.
@@ -1149,6 +1170,8 @@ export class TableRuntime {
       intentAmount?: number | null;
       publicNarrative?: string | null;
       publicThinkingLog?: string[] | null;
+      /** Work-in-progress note; shown unnumbered and replaced when work lands. */
+      transientNote?: string | null;
       fallbackUsed?: boolean;
     },
   ) {
@@ -1163,6 +1186,14 @@ export class TableRuntime {
     const thinkingLog = Array.isArray(status.publicThinkingLog)
       ? status.publicThinkingLog.filter((l) => typeof l === "string" && l.trim()).slice(-24)
       : null;
+    const activity = this.buildActivityEntries({
+      seatIndex,
+      handId: status.handId ?? this.state.handId,
+      lines: thinkingLog,
+      transientNote: status.transientNote ?? null,
+      phase: status.phase,
+      intentAction: status.intentAction ?? null,
+    });
     const frame = {
       type: "ai_cognition",
       workPacket: "WP-126",
@@ -1178,6 +1209,7 @@ export class TableRuntime {
       modelId: status.modelId ?? null,
       intentAction: status.intentAction ?? null,
       intentAmount: status.intentAmount ?? null,
+      activity,
       publicNarrative: status.publicNarrative ?? null,
       publicThinkingLog: thinkingLog,
       fallbackUsed: status.fallbackUsed ?? false,
@@ -2388,30 +2420,19 @@ export class TableRuntime {
             }
           }
           this.resetToWaiting();
+          const needTopUp = this.state.seats
+            .filter((x) => x.playerId && x.stack <= 0n)
+            .map((x) => x.playerId!);
           await this.persistEvent("HAND_COMPLETE", {
             seated: this.state.seats.filter((x) => x.playerId && !x.sitOut && x.stack > 0).length,
-            needTopUp: this.state.seats.filter((x) => x.playerId && x.stack <= 0).map((x) => x.playerId),
+            needTopUp,
           }).catch(() => null);
-          // Hold so clients can play win / reveal animations — and busted players can top up.
-          await sleep(3200);
-          // Anyone still at $0 vacates: open seat, not a dimmed ghost card.
-          // They do NOT get free chips — a new buy-in (top-up before vacate, or
-          // Find Match after) is required.
-          const broke = this.state.seats.filter((s) => s.playerId && s.stack <= 0n).map((s) => s.playerId!);
-          // Hold the seat lock across the whole boundary so an inbound join
-          // cannot land between vacating busted seats and the epoch flush.
+          // Hold for win / reveal animations. Busted seats stay occupied (sit-out)
+          // so players can spectate and top up — do not force-leave or close the match.
+          await sleep(2800);
+          this.broadcastSnapshots();
           await this.withSeatLock(async () => {
-            for (const uid of broke) {
-              await this.leaveUnlocked(uid, { forceImmediate: true });
-            }
-            // Heads-up: elimination ends the sealed match. Do not flush queued
-            // joins that would refill the seat with "mystery" chips.
-            if (this.isHeadsUpTable() && broke.length > 0) {
-              await this.closeMatchForElimination(broke);
-            } else {
-              // WP-042: apply queued join/leave/top-up before the next hand.
-              await this.applyEpochBoundary();
-            }
+            await this.applyEpochBoundary();
           });
         }
       } catch (err) {
@@ -2653,6 +2674,136 @@ export class TableRuntime {
    * Deal back in any seat whose natural big blind has now arrived.
    * Called immediately before a hand is dealt.
    */
+  /**
+   * Persist newly-finalized activity so a refresh reconstructs the same feed.
+   *
+   * Best-effort and non-blocking: a database hiccup must never stall the
+   * table clock. The socket broadcast already carries the entry, so a failed
+   * write costs reconstruction on refresh, not the live experience.
+   */
+  async persistActivityEntries(
+    seatIndex: number,
+    handId: string | null,
+    entries: Array<Record<string, unknown>>,
+  ) {
+    if (!handId || !entries.length) return;
+    const ownerId = this.state.seats.find((s) => s.seatIndex === seatIndex)?.playerId ?? null;
+    try {
+      for (const e of entries) {
+        await query(
+          `insert into ai_activity_events
+             (table_id, hand_id, seat_index, seq, kind, street, text, owner_id)
+           values ($1,$2,$3,$4,$5,$6,$7,$8)
+           on conflict (hand_id, seat_index, seq) do nothing`,
+          [
+            this.tableId,
+            handId,
+            seatIndex,
+            Number(e.seq),
+            String(e.kind ?? "ANALYSIS"),
+            e.street == null ? null : String(e.street),
+            String(e.text ?? ""),
+            ownerId,
+          ],
+        );
+      }
+    } catch (err) {
+      console.warn("[activity] persist failed", this.tableId, err);
+    }
+  }
+
+  /** Replay a seat's finalized activity for this hand, in server order. */
+  async loadActivity(handId: string, seatIndex: number) {
+    const res = await query<{
+      seq: number;
+      kind: string;
+      street: string | null;
+      text: string;
+    }>(
+      `select seq, kind, street, text
+         from ai_activity_events
+        where hand_id = $1 and seat_index = $2
+        order by seq asc`,
+      [handId, seatIndex],
+    );
+    return res.rows.map((r) => ({
+      seq: Number(r.seq),
+      kind: r.kind,
+      status: "FINAL" as const,
+      text: r.text,
+      street: r.street,
+      handId,
+    }));
+  }
+
+  /**
+   * Turn cognition lines into append-only activity entries.
+   *
+   * Each distinct line gets one monotonic sequence per hand and keeps it
+   * forever, so resending it is a no-op for the client. Transient notes carry
+   * the next-unassigned sequence and are dropped as soon as a FINAL entry at
+   * or beyond that sequence arrives.
+   */
+  buildActivityEntries(input: {
+    seatIndex: number;
+    handId: string | null;
+    lines: string[] | null;
+    transientNote: string | null;
+    phase: string;
+    intentAction: string | null;
+  }) {
+    const key = `${input.handId ?? "nohand"}:${input.seatIndex}`;
+    let ledger = this.activityLedger.get(key);
+    if (!ledger) {
+      ledger = { next: 1, assigned: new Map() };
+      this.activityLedger.set(key, ledger);
+      // Bound growth on long sessions; a hand never needs many ledgers.
+      if (this.activityLedger.size > 64) {
+        const oldest = this.activityLedger.keys().next().value;
+        if (oldest && oldest !== key) this.activityLedger.delete(oldest);
+      }
+    }
+
+    const street = String(this.state.street ?? "");
+    const out: Array<Record<string, unknown>> = [];
+    // Only newly-assigned lines are written; a resent line is already durable.
+    const freshEntries: Array<Record<string, unknown>> = [];
+    for (const line of input.lines ?? []) {
+      let seq = ledger.assigned.get(line);
+      const fresh = seq == null;
+      if (seq == null) {
+        seq = ledger.next++;
+        ledger.assigned.set(line, seq);
+      }
+      const entry = {
+        seq,
+        kind: activityKindFor(line, input.phase, input.intentAction),
+        status: "FINAL" as const,
+        text: line,
+        street,
+        handId: input.handId,
+        atMs: Date.now(),
+      };
+      out.push(entry);
+      if (fresh) freshEntries.push(entry);
+    }
+    if (freshEntries.length) {
+      void this.persistActivityEntries(input.seatIndex, input.handId, freshEntries);
+    }
+    if (input.transientNote) {
+      out.push({
+        seq: ledger.next,
+        kind: "ANALYSIS",
+        status: "TRANSIENT",
+        text: input.transientNote,
+        street,
+        handId: input.handId,
+        atMs: Date.now(),
+      });
+    }
+    return out;
+  }
+
   releaseSeatsAwaitingBigBlind() {
     if (!this.awaitingBigBlind.size) return;
     for (const seatIndex of [...this.awaitingBigBlind]) {
@@ -2740,14 +2891,35 @@ export class TableRuntime {
       ),
     };
     this.stackBaseline.set(userId, (this.stackBaseline.get(userId) ?? 0) + amount);
+    this.sessionBuyIn.set(userId, (this.sessionBuyIn.get(userId) ?? 0) + amount);
     const nextUsd = chipsToUsd(nextStack);
+    const wasBusted = seat.stack <= 0n;
     await query(`update table_seats set stack=$1, updated_at=now() where table_id=$2 and seat_index=$3`, [
       nextUsd,
       this.tableId,
       seat.seatIndex,
     ]);
     await query(`update table_sessions set stack=$1, buy_in = buy_in + $2 where id=$3`, [nextUsd, amount, sessionId]);
-    await this.persistEvent("PLAYER_TOP_UP", { seatIndex: seat.seatIndex, userId, amount, stack: nextUsd });
+    // Busted rebuy between hands: wait for natural BB before dealing back in.
+    if (wasBusted && this.state.street === "waiting") {
+      this.awaitingBigBlind.add(seat.seatIndex);
+      this.state = {
+        ...this.state,
+        seats: this.state.seats.map((s) =>
+          s.seatIndex === seat.seatIndex
+            ? { ...s, stack: nextStack, sitOut: true, folded: true, hole: undefined }
+            : s,
+        ),
+      };
+    }
+    await this.persistEvent("PLAYER_TOP_UP", {
+      seatIndex: seat.seatIndex,
+      userId,
+      amount,
+      stack: nextUsd,
+      awaitingBigBlind: wasBusted && this.state.street === "waiting",
+    });
+    this.broadcastSnapshots();
     this.ensureLoop();
     return { stack: nextUsd, queued: false };
   }
@@ -2931,6 +3103,7 @@ export class TableRuntime {
         modelId: "openai/gpt-oss-120b",
         publicNarrative: analysingLines[1] ?? analysingLines[0]!,
         publicThinkingLog: analysingLines,
+        transientNote: "Comparing candidate lines…",
       });
       const controller = this.seatControllerFor(seatIndex);
       const botDecision = await controller.decide({

@@ -15,6 +15,13 @@ import { computeEquityVsRange, personalHandLabel } from "./equity.js";
 import { getLegalActions, type HoldemState, type LegalAction } from "./holdem.js";
 import { chipsToNumber } from "./money.js";
 import {
+  estimateResponse,
+  evaluateAggressiveEv,
+  evaluateCallEv,
+  rankByEv,
+  type ActionEv,
+} from "./action-ev.js";
+import {
   describeRange,
   describeRangeShort,
   fullHoldingRange,
@@ -87,6 +94,36 @@ export type CandidateAction = {
    * Break-even fold frequency for an aggressive line: risk / (risk + pot won
    * immediately). Null for fold/check/call, which risk nothing on a fold.
    */
+  /**
+   * Explicit raise geometry, so a raise is never described as if it were a
+   * bet. `amountChips` is chips ADDED (call included); the increment above the
+   * call is the part that actually applies pressure.
+   */
+  callPortionChips: number;
+  raiseIncrementChips: number;
+  potBeforeChips: number;
+  potAfterCallChips: number;
+  potAfterActionChips: number;
+  /** Increment as a fraction of the pot it contests (pot after hero calls). */
+  sizingPctPot: number | null;
+  /**
+   * Whether this line is supported by its own numbers.
+   *
+   * "UNSUPPORTED" means the deterministic layer can already see that the
+   * aggressive line loses on its own terms: it needs more folds than the model
+   * expects, and hero's realized equity is poor. It is not illegal and not
+   * forbidden — but the strategist must supply an explicit compensating reason
+   * (blocker, barrel plan, observed over-folding) to choose it anyway.
+   */
+  /**
+   * Estimated value of this line and the opponent response it assumes.
+   * Compare candidates by `ev.tier` first — "can I continue?" is a weaker
+   * question than "which action makes the most money?".
+   */
+  ev: ActionEv | null;
+  viability: "SUPPORTED" | "THIN" | "UNSUPPORTED";
+  /** Why, in one short allowlisted phrase. */
+  viabilityReason: string | null;
   breakEvenFoldPct: number | null;
   /** Heuristic fold probability if hero takes this aggressive size. */
   estimatedFoldPct: number | null;
@@ -186,7 +223,18 @@ export type DecisionFacts = {
     /** Developer detail with top classes — not for default player copy. */
     rangeDetail: string;
     rangeWidthPct: number;
+    /**
+     * How informative THIS hand's betting line has been. Rises with each
+     * observed action, independent of how well we know the player.
+     */
     rangeConfidence: number;
+    /**
+     * How well we know this opponent across hands. Stays low until we have
+     * real sample size. Previously these were one number, so a river spot
+     * after three villain bets still read LOW because the opponent was new —
+     * which understated a read the hand itself had genuinely earned.
+     */
+    opponentModelConfidence: number;
     /** Predicted continue/open width when equity still uses holding range. */
     predictedContinueSummary: string | null;
     predictedContinueWidthPct: number | null;
@@ -356,6 +404,27 @@ export function modelVillainRange(input: {
  * against ~100% dealt holdings. Historical VPIP/open% is a *predicted continue*
  * model, not their current hole cards.
  */
+/**
+ * Confidence in the CURRENT hand's range read.
+ *
+ * Each voluntary villain action in this hand is real evidence about this hand,
+ * so the read strengthens as the line develops even against a total stranger.
+ * Capped below certainty — it is still a model.
+ */
+export function handReadConfidence(
+  range: RangeDistribution,
+  actions: SeatActionLog,
+  villainSeat: number,
+): number {
+  const voluntary = actions.filter(
+    (a) => a.seat === villainSeat && a.action !== "fold" && a.action !== "check",
+  ).length;
+  // Start from the range's own confidence, then add for observed aggression.
+  const base = range.confidence;
+  const evidence = Math.min(0.45, voluntary * 0.11);
+  return Math.max(0.15, Math.min(0.85, base + evidence));
+}
+
 export function resolveOpponentRanges(input: {
   state: HoldemState;
   villainSeat: number;
@@ -507,7 +576,9 @@ export function buildDecisionFacts(input: {
           : describeRangeShort(resolved.equityRange),
       rangeDetail: describeRange(resolved.equityRange),
       rangeWidthPct: Math.round(rangeWidth(resolved.equityRange) * 1000) / 10,
-      rangeConfidence: Math.round(resolved.equityRange.confidence * 100) / 100,
+      rangeConfidence: Math.round(handReadConfidence(resolved.equityRange, actions, villain.seatIndex) * 100) / 100,
+      opponentModelConfidence:
+        Math.round(Math.min(0.9, (stats?.handsObserved ?? 0) / ((stats?.handsObserved ?? 0) + 40)) * 100) / 100,
       predictedContinueSummary,
       predictedContinueWidthPct:
         resolved.rangeKind === "holding"
@@ -599,6 +670,7 @@ export function buildDecisionFacts(input: {
     street: String(state.street),
     hand: handRelative,
     rawEquity,
+    realizedEquityPct: continueQ?.realizedEquity ?? null,
     continueBand: continueQ?.band ?? null,
   });
 
@@ -669,6 +741,75 @@ export function buildDecisionFacts(input: {
  * risks, what pot it builds, how often it must fold the opponent out to break
  * even as a pure bluff, and what price it lays.
  */
+/**
+ * Pot-fraction sizings worth considering, by street.
+ *
+ * Real rooms allow any legal size; a strategist should still choose from sizes
+ * that mean something. Rivers get the widest grid (polarised overbets are real
+ * there); preflop is tightest because raise sizing is far more standardised.
+ */
+/**
+ * Guardrail against strategically inconsistent aggression.
+ *
+ * The failure this exists to stop: the model computing "needs 35% folds,
+ * estimated 21%, realized equity 13%, confidence low" and then raising anyway.
+ * Nothing here forbids the line — bluffs with blockers or a barrel plan are
+ * real — but the spot is labelled so the strategist has to justify it rather
+ * than drift into it.
+ */
+export function classifyViability(input: {
+  aggressive: boolean;
+  amount: number;
+  requiredFoldPct: number | null;
+  estimatedFoldPct: number | null;
+  foldConfidence: number | null;
+  realizedEquityPct: number | null;
+}): { viability: "SUPPORTED" | "THIN" | "UNSUPPORTED"; viabilityReason: string | null } {
+  if (!input.aggressive || input.amount <= 0) {
+    return { viability: "SUPPORTED", viabilityReason: null };
+  }
+  const required = input.requiredFoldPct;
+  const estimated = input.estimatedFoldPct;
+  if (required == null || estimated == null) {
+    return { viability: "SUPPORTED", viabilityReason: null };
+  }
+
+  const shortfall = required - estimated;
+  const poorEquity = (input.realizedEquityPct ?? 100) < 20;
+  const lowConfidence = (input.foldConfidence ?? 1) < 0.45;
+
+  if (shortfall > 0 && poorEquity) {
+    return {
+      viability: "UNSUPPORTED",
+      viabilityReason: lowConfidence
+        ? "needs_more_folds_than_expected_poor_equity_low_confidence"
+        : "needs_more_folds_than_expected_poor_equity",
+    };
+  }
+  if (shortfall > 0) {
+    return { viability: "THIN", viabilityReason: "needs_more_folds_than_expected" };
+  }
+  if (shortfall > -5) {
+    return { viability: "THIN", viabilityReason: "fold_equity_barely_covers_price" };
+  }
+  return { viability: "SUPPORTED", viabilityReason: null };
+}
+
+export function sizingGridFor(street: string): number[] {
+  switch (String(street).toLowerCase()) {
+    case "preflop":
+      return [0.5, 0.75, 1];
+    case "flop":
+      return [0.25, 0.33, 0.5, 0.66, 0.75, 1];
+    case "turn":
+      return [0.33, 0.5, 0.66, 0.75, 1, 1.25];
+    case "river":
+      return [0.25, 0.5, 0.66, 0.75, 1, 1.25, 1.5];
+    default:
+      return [0.33, 0.5, 0.75, 1];
+  }
+}
+
 export function buildCandidates(input: {
   legal: LegalAction[];
   pot: number;
@@ -681,6 +822,9 @@ export function buildCandidates(input: {
   street?: string;
   hand?: HandRelative;
   rawEquity?: number | null;
+  realizedEquityPct?: number | null;
+  observedFoldTendency?: number | null;
+  handsObserved?: number;
   continueBand?: string | null;
 }): CandidateAction[] {
   const { legal, pot, toCall, stack, bb } = input;
@@ -692,6 +836,16 @@ export function buildCandidates(input: {
   const push = (action: string, chips: number) => {
     const amount = Math.max(0, Math.min(stack, Math.round(chips)));
     if (out.some((c) => c.action === action && c.amountChips === amount)) return;
+    // A max-sized raise IS the all-in; offering both as separate candidates
+    // gives the strategist two identical lines with different labels.
+    const aggressiveDup =
+      (action === "raise" || action === "bet" || action === "all_in") &&
+      out.some(
+        (c) =>
+          c.amountChips === amount &&
+          (c.action === "all_in" || c.action === "raise" || c.action === "bet"),
+      );
+    if (aggressiveDup) return;
     const aggressive = action === "bet" || action === "raise" || action === "all_in";
     const potAfter = pot + amount;
     const foldEst =
@@ -699,6 +853,7 @@ export function buildCandidates(input: {
         ? estimateFoldToBet({
             pot,
             risk: amount,
+            toCall,
             rangeWidthPct: input.rangeWidthPct ?? 50,
             rangeConfidence: input.rangeConfidence ?? 0.5,
             board,
@@ -712,12 +867,76 @@ export function buildCandidates(input: {
       continueBand: input.continueBand ?? null,
       foldEst,
     });
+    const callPortion = aggressive ? Math.min(amount, toCall) : action === "call" ? amount : 0;
+    const increment = aggressive ? Math.max(0, amount - toCall) : 0;
+    const potAfterCall = pot + toCall;
     out.push({
       action,
       amountChips: amount,
       amountBb: toBb(amount, bb),
       isAllIn: amount >= stack && stack > 0,
       potAfterBb: toBb(potAfter, bb),
+      callPortionChips: callPortion,
+      raiseIncrementChips: increment,
+      potBeforeChips: pot,
+      potAfterCallChips: potAfterCall,
+      potAfterActionChips: potAfter,
+      // Measured against the pot the increment actually contests, not the pot
+      // before hero's call — that is what made a min-raise read as "8% pot".
+      sizingPctPot:
+        aggressive && increment > 0 && potAfterCall > 0
+          ? Math.round((increment / potAfterCall) * 1000) / 10
+          : null,
+      ev: (() => {
+        if (action === "fold" || action === "check") return null;
+        const conf = Math.min(
+          input.rangeConfidence ?? 0.5,
+          foldEst?.confidence ?? (input.rangeConfidence ?? 0.5),
+        );
+        if (action === "call") {
+          return evaluateCallEv({
+            pot,
+            toCall,
+            realizedEquity: (input.realizedEquityPct ?? 0) / 100,
+            confidence: conf,
+            bb,
+          });
+        }
+        const response = estimateResponse({
+          pot,
+          risk: amount,
+          toCall,
+          rangeWidthPct: input.rangeWidthPct ?? 50,
+          observedFoldTendency: input.observedFoldTendency ?? null,
+          handsObserved: input.handsObserved ?? 0,
+          street: input.street ?? "flop",
+          wetBoard:
+            input.board?.class === "WET" || input.board?.class === "MONOTONE",
+        });
+        return evaluateAggressiveEv({
+          pot,
+          risk: amount,
+          toCall,
+          // Villain's continuing range is stronger than their whole range, so
+          // hero's equity when called is below raw equity vs the full range.
+          equityWhenCalled: Math.max(
+            0,
+            Math.min(1, ((input.rawEquity ?? 50) / 100) * 0.88),
+          ),
+          response,
+          confidence: conf,
+          bb,
+        });
+      })(),
+      ...classifyViability({
+        aggressive,
+        amount,
+        requiredFoldPct:
+          aggressive && amount > 0 ? (amount / (amount + pot)) * 100 : null,
+        estimatedFoldPct: foldEst?.estimatedFoldPct ?? null,
+        foldConfidence: foldEst?.confidence ?? null,
+        realizedEquityPct: input.realizedEquityPct ?? null,
+      }),
       breakEvenFoldPct:
         aggressive && amount > 0 ? Math.round((amount / (amount + pot)) * 1000) / 10 : null,
       estimatedFoldPct: foldEst?.estimatedFoldPct ?? null,
@@ -741,13 +960,25 @@ export function buildCandidates(input: {
     } else if (l.action === "bet" || l.action === "raise") {
       const min = l.minAmount != null ? chipsToNumber(l.minAmount) : 0;
       const max = l.maxAmount != null ? chipsToNumber(l.maxAmount) : stack;
-      // Min, ~1/2 pot, ~3/4 pot, ~pot, and max — clamped into the legal band
-      // and deduplicated. Gives the strategist a real menu, not a free-for-all.
-      for (const target of [min, toCall + pot * 0.5, toCall + pot * 0.75, toCall + pot, max]) {
+      // Strategic sizing grid. A legal minimum is not automatically a sensible
+      // candidate: a $0.50 bet into $32.50 is legal but is not a bluff, and
+      // offering it as one produced "needs 2% folds" lines that no opponent
+      // would ever fold to. Sizes are expressed as a fraction of the pot AFTER
+      // hero calls, which is the pot the bet is actually contesting.
+      const potAfterCall = pot + toCall;
+      for (const frac of sizingGridFor(input.street ?? "flop")) {
+        const target = toCall + potAfterCall * frac;
         const clamped = Math.max(min, Math.min(max, Math.round(target)));
+        // Skip a "grid" size that the legal floor has dragged far away from
+        // its intended shape — it is really just the minimum in disguise.
+        if (clamped <= min && frac > 0.3) continue;
         push(l.action, clamped);
       }
+      // Always keep the legal extremes available, clearly labelled by intent.
+      push(l.action, min);
+      push(l.action, max);
     }
   }
-  return out;
+  // "BEST" must mean best in THIS spot, not merely above a threshold.
+  return rankByEv(out);
 }

@@ -185,7 +185,70 @@ export function CognitionStateDisplay({ status, compact = false }: Props) {
                 : ""}
             </div>
           ) : null}
-          {status.publicThinkingLog && status.publicThinkingLog.length > 0 ? (
+          {status.activity && status.activity.length > 0 ? (
+            <ol
+              ref={logRef}
+              aria-label="AI activity log"
+              aria-live="polite"
+              style={{
+                listStyle: "none",
+                margin: 0,
+                padding: 0,
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                maxHeight: compact ? 280 : 360,
+                overflowY: "auto",
+                scrollBehavior: "smooth",
+              }}
+            >
+              {status.activity.map((entry, i) => {
+                const prevStreet = i > 0 ? status.activity![i - 1]!.street : null;
+                const newGroup = i === 0 || entry.street !== prevStreet;
+                const transient = entry.status === "TRANSIENT";
+                const isAction = entry.kind === "ACTION";
+                const isDecision = entry.kind === "DECISION";
+                return (
+                  <li
+                    key={transient ? "transient" : `seq-${entry.seq}`}
+                    style={{
+                      fontFamily: font.sans,
+                      fontSize: compact ? 11.5 : 12.5,
+                      lineHeight: 1.5,
+                      display: "flex",
+                      gap: 6,
+                      color: transient
+                        ? color.textFaint
+                        : isDecision || isAction
+                          ? color.text
+                          : color.textMuted,
+                      fontStyle: transient ? "italic" : "normal",
+                      fontWeight: isDecision ? 600 : 400,
+                      opacity: transient ? 0.85 : 1,
+                      paddingTop: newGroup && i > 0 ? 7 : 0,
+                      borderTop: newGroup && i > 0 ? `1px solid ${color.line}` : undefined,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontFamily: font.mono,
+                        fontSize: 9,
+                        letterSpacing: "0.06em",
+                        color: isDecision ? color.accent : color.textFaint,
+                        minWidth: 18,
+                      }}
+                      aria-hidden={transient}
+                    >
+                      {/* Transient work carries no number — only finalized
+                          entries get a stable, server-assigned sequence. */}
+                      {transient ? "··" : String(entry.seq).padStart(2, "0")}
+                    </span>
+                    <span>{entry.text}</span>
+                  </li>
+                );
+              })}
+            </ol>
+          ) : status.publicThinkingLog && status.publicThinkingLog.length > 0 ? (
             <ol
               ref={logRef}
               aria-label="AI activity log"
