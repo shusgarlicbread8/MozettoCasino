@@ -644,6 +644,13 @@ a[role="button"],
     display: none !important;
   }
 
+  .mz-public-action-card {
+    top: 8px !important;
+    right: 8px !important;
+    width: min(220px, calc(100% - 16px)) !important;
+    max-height: min(34%, 200px) !important;
+  }
+
   .mz-table-seat {
     width: min(148px, 42vw) !important;
     transform: translate(-50%, -50%) scale(0.86);

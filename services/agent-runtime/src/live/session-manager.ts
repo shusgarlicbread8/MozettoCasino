@@ -247,6 +247,13 @@ export class LiveSessionManager {
       }
       this.provider = new GroqGptOss120BProvider({
         apiKey: key,
+        requestTimeoutMs:
+          Number(env.GROQ_REQUEST_TIMEOUT_MS) > 0
+            ? Math.trunc(Number(env.GROQ_REQUEST_TIMEOUT_MS))
+            : 12_000,
+        maxAttempts: 2,
+        circuitFailureThreshold: 10,
+        circuitCooldownMs: 8_000,
         sloHooks: {
           onDecisionComplete: (meta) => {
             // Hook stub — metrics recorded in act() with Energy context.

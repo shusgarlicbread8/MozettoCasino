@@ -17,6 +17,7 @@ import {
   type ArenaLeagueId,
 } from "./matchmaking.js";
 import type { ArenaMode } from "./arena-mode.js";
+import { releaseSession } from "./ledger.js";
 
 const USDC_DECIMALS = 6;
 
@@ -859,6 +860,8 @@ export async function getActiveOnchainTableForProfile(
        and t.max_seats = $3
        and t.variant_id = $4
        and ($6::text is null or t.league_id = $6)
+       -- Left this custody session already → never sticky-resume; Find Match
+       -- must open a fresh onchain_session (new hands, new seat ticket).
        and not exists (
          select 1 from table_sessions done
          where done.table_id = os.table_id
@@ -938,13 +941,36 @@ export async function abandonUnseatedOnchainPlayer(opts: {
        where table_id = $1 and owner_id = $2`,
       [opts.tableId, opts.profileId],
     );
-    await client.query(`update tables set is_active = false where id = $1`, [opts.tableId]);
-    await client.query(
-      `update onchain_sessions
-       set status = 'settling'
-       where session_id = $1 and status in ('pending', 'opened', 'playing', 'blocked')`,
-      [sessionId],
+
+    const othersActive = await client.query(
+      `select 1 from table_sessions
+       where table_id = $1 and status = 'active' and owner_id is distinct from $2
+       limit 1`,
+      [opts.tableId, opts.profileId],
     );
+    if (!othersActive.rows[0]) {
+      await client.query(
+        `update onchain_sessions
+         set status = 'settling'
+         where session_id = $1 and status in ('pending', 'opened', 'playing', 'blocked')`,
+        [sessionId],
+      );
+      const othersSeated = await client.query(
+        `select 1 from table_seats
+         where table_id = $1 and status = 'occupied' and owner_id is distinct from $2
+         limit 1`,
+        [opts.tableId, opts.profileId],
+      );
+      const queued = await client.query(
+        `select 1 from seat_tickets
+         where session_id = $1 and status in ('queued', 'matched') and profile_id is distinct from $2
+         limit 1`,
+        [sessionId, opts.profileId],
+      );
+      if (!othersSeated.rows[0] && !queued.rows[0]) {
+        await client.query(`update tables set is_active = false where id = $1`, [opts.tableId]);
+      }
+    }
 
     await client.query("commit");
     return { abandoned: true as const, sessionId };
@@ -1013,24 +1039,141 @@ export async function markOnchainSessionPlaying(sessionId: string) {
 
 /**
  * When no active table_sessions remain, mark the custody session ready for settlement.
- * Settlement-worker picks `playing` / `settling`.
+ * Settlement-worker picks `playing` / `settling` — prefer `settling` so leave
+ * immediately frees sticky matchmaking and the worker releases activeGames.
  */
 export async function markOnchainSessionReadyForSettlement(sessionId: string) {
   await query(
     `update onchain_sessions
-     set status = case
-       when status in ('opened', 'playing') then 'playing'
-       else status
-     end
+     set status = 'settling'
      where session_id = $1
-       and status in ('opened', 'playing')
+       and status in ('pending', 'opened', 'playing')
        and not exists (
          select 1 from table_sessions ts
-         join onchain_sessions os2 on os2.table_id = ts.table_id
-         where os2.session_id = $1 and ts.status = 'active'
+         where ts.table_id = (select table_id from onchain_sessions where session_id = $1)
+           and ts.status = 'active'
        )`,
     [sessionId],
   );
+}
+
+/**
+ * DB-only leave when the game-server is unreachable.
+ * Vacates the seat, completes the table session, kicks settlement when the
+ * table is empty, and deactivates empty tables (unless a queue ticket remains).
+ */
+export async function forceLeaveTableSession(opts: {
+  profileId: string;
+  tableId: string;
+}): Promise<{ ok: boolean; sessionId?: string; settling: boolean; tableClosed: boolean }> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+
+    const activeSess = await client.query<{ id: string; stack: string }>(
+      `select id, stack::text as stack from table_sessions
+       where table_id = $1 and owner_id = $2 and status = 'active'`,
+      [opts.tableId, opts.profileId],
+    );
+
+    await client.query(
+      `update table_sessions
+       set status = 'completed', ended_at = coalesce(ended_at, now())
+       where table_id = $1 and owner_id = $2 and status = 'active'`,
+      [opts.tableId, opts.profileId],
+    );
+    await client.query(
+      `update table_seats
+       set status = 'empty', agent_id = null, owner_id = null, stack = 0, updated_at = now()
+       where table_id = $1 and owner_id = $2`,
+      [opts.tableId, opts.profileId],
+    );
+
+    const oc = await client.query<{ session_id: string }>(
+      `select os.session_id
+       from onchain_sessions os
+       join onchain_session_players osp on osp.session_id = os.session_id
+       where os.table_id = $1 and osp.profile_id = $2
+         and os.status in ('pending', 'opened', 'playing', 'blocked')
+       order by os.created_at desc
+       limit 1`,
+      [opts.tableId, opts.profileId],
+    );
+    const sessionId = oc.rows[0]?.session_id;
+
+    if (sessionId) {
+      await client.query(
+        `update seat_tickets
+         set status = 'failed'
+         where profile_id = $1 and session_id = $2 and status in ('queued', 'matched', 'opened')`,
+        [opts.profileId, sessionId],
+      );
+    }
+
+    const remaining = await client.query<{ n: string }>(
+      `select count(*)::text as n from table_sessions
+       where table_id = $1 and status = 'active'`,
+      [opts.tableId],
+    );
+    const occupied = await client.query<{ n: string }>(
+      `select count(*)::text as n from table_seats
+       where table_id = $1 and status = 'occupied'`,
+      [opts.tableId],
+    );
+
+    let settling = false;
+    if (sessionId && Number(remaining.rows[0]?.n ?? 0) === 0) {
+      await client.query(
+        `update onchain_sessions
+         set status = 'settling'
+         where session_id = $1 and status in ('pending', 'opened', 'playing', 'blocked')`,
+        [sessionId],
+      );
+      settling = true;
+    }
+
+    let tableClosed = false;
+    if (Number(occupied.rows[0]?.n ?? 0) === 0 && Number(remaining.rows[0]?.n ?? 0) === 0) {
+      const queued = sessionId
+        ? await client.query(
+            `select 1 from seat_tickets
+             where session_id = $1 and status in ('queued', 'matched')
+             limit 1`,
+            [sessionId],
+          )
+        : { rows: [] as unknown[] };
+      if (!queued.rows.length) {
+        await client.query(`update tables set is_active = false where id = $1`, [opts.tableId]);
+        tableClosed = true;
+      }
+    }
+
+    await client.query("commit");
+
+    // Escrow cashout outside the txn (ledger transfers are their own units).
+    for (const row of activeSess.rows) {
+      const stack = Number(row.stack);
+      if (stack > 0) {
+        try {
+          await releaseSession(opts.profileId, stack, row.id, "onchain");
+        } catch {
+          // Settlement / prior leave may already have cleared escrow.
+        }
+      }
+    }
+
+    return {
+      ok: activeSess.rows.length > 0 || Boolean(sessionId),
+      sessionId,
+      settling,
+      tableClosed,
+    };
+  } catch (e) {
+    await client.query("rollback");
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -1041,7 +1184,7 @@ export async function markOnchainSessionReadyForSettlement(sessionId: string) {
 export async function closeOnchainSessionForSettlement(sessionId: string) {
   await query(
     `update onchain_sessions
-     set status = 'settling', updated_at = now()
+     set status = 'settling'
      where session_id = $1 and status in ('pending', 'opened', 'playing')`,
     [sessionId],
   );

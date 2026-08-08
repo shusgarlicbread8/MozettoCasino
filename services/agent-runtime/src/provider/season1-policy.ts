@@ -19,8 +19,16 @@ export const SEASON1_POLICY_VERSION = 1 as const;
 /** Season 1 hypothesis — temperatureMilli / 1000. Recalibrate only via new policy version. */
 export const SEASON1_TEMPERATURE = 0;
 
-/** Season 1 hypothesis — max output tokens for final decisions. */
+/**
+ * Season 1 hypothesis — max output tokens recorded in MODEL_POLICY_V1.
+ * Groq gpt-oss reasoning tokens share this completion budget; the provider
+ * requests a higher effective ceiling at call time (see GroqGptOss120BProvider)
+ * so structured JSON is not truncated into http_4xx json_validate_failed.
+ */
 export const SEASON1_MAX_OUTPUT_TOKENS = 256;
+
+/** Effective chat-completions max_tokens for final decisions (reasoning + JSON). */
+export const SEASON1_DECISION_MAX_OUTPUT_TOKENS = 768;
 
 /**
  * Season 1 hypothesis — Groq reasoning_effort for ranked poker.

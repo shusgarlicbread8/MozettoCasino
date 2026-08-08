@@ -119,6 +119,8 @@ export type ProviderErrorClass =
   | "timeout"
   | "network"
   | "invalid_schema"
+  /** Groq structured output truncated — reasoning burned max_tokens before JSON. */
+  | "json_truncated"
   | "illegal_action"
   | "circuit_open"
   | "missing_api_key";

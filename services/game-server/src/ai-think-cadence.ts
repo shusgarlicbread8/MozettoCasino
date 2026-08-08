@@ -110,6 +110,8 @@ export function buildPublicThinkingLines(opts: {
   action: string;
   amount?: number | null;
   fallbackUsed?: boolean;
+  /** When fallbackUsed — timeout | circuit_open | invalid_schema | … */
+  fallbackErrorClass?: string | null;
   pot?: number | null;
   toCall?: number | null;
   stack?: number | null;
@@ -193,7 +195,8 @@ export function buildPublicThinkingLines(opts: {
 
   const lines = [spotLine, estimateLine, strategyLine];
   if (opts.fallbackUsed) {
-    lines.push(`Provider timeout → degraded fallback ${intent} (not a profile decision).`);
+    const why = opts.fallbackErrorClass?.trim() || "provider_error";
+    lines.push(`Degraded fallback ${intent} (${why}) — not a profile decision.`);
   } else {
     lines.push(decisionLine);
   }

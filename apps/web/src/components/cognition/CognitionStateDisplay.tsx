@@ -196,7 +196,7 @@ export function CognitionStateDisplay({ status, compact = false }: Props) {
                 display: "flex",
                 flexDirection: "column",
                 gap: 7,
-                maxHeight: compact ? 160 : 240,
+                maxHeight: compact ? 280 : 360,
                 overflowY: "auto",
                 scrollBehavior: "smooth",
               }}

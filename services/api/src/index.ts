@@ -25,6 +25,8 @@ import {
   getProfileKind,
   getAgentProfileHash,
   assertBuyInClearsRatHole,
+  forceLeaveTableSession,
+  abandonUnseatedOnchainPlayer,
   type ArenaFormat,
 } from "@mozetto/database";
 import { getChainConfig } from "@mozetto/blockchain";
@@ -431,11 +433,49 @@ app.post("/v1/tables/:id/leave", async (req, reply) => {
       },
       // Fastify rejects application/json with an empty body.
       body: "{}",
+      signal: AbortSignal.timeout(8_000),
     });
     const data = await res.json().catch(() => ({}));
     return reply.code(res.status).send(data);
   } catch (e) {
-    return reply.code(502).send({ error: "game_server_unreachable", message: e instanceof Error ? e.message : "error" });
+    // Game-server down or timed out — still vacate DB seat + kick settlement so
+    // Find Match is not stuck on concurrent_games / sticky resume.
+    try {
+      const recovery = await forceLeaveTableSession({
+        profileId: session.profileId,
+        tableId: id,
+      });
+      if (!recovery.ok) {
+        const abandoned = await abandonUnseatedOnchainPlayer({
+          profileId: session.profileId,
+          tableId: id,
+        });
+        if (abandoned.abandoned) {
+          return reply.code(200).send({
+            ok: true,
+            queued: false,
+            offlineLeave: true,
+            message: "Left via recovery path. Settlement will release your game slot shortly.",
+          });
+        }
+      } else {
+        return reply.code(200).send({
+          ok: true,
+          queued: false,
+          offlineLeave: true,
+          settling: recovery.settling,
+          tableClosed: recovery.tableClosed,
+          message: "Left via recovery path. Settlement will release your game slot shortly.",
+        });
+      }
+    } catch (recoveryErr) {
+      console.error("leave recovery failed", id, recoveryErr);
+    }
+    return reply.code(502).send({
+      error: "game_server_unreachable",
+      message:
+        "Could not reach the game server to leave. Retry in a moment — if this persists, restart local services (game-server on :4001).",
+    });
   }
 });
 

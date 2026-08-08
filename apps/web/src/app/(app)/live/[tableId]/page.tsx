@@ -9,6 +9,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import { LiveTableFelt } from "@/components/table/LiveTableFelt";
+import { PublicActionCard } from "@/components/table/PublicActionCard";
 import { TableSideRail } from "@/components/table/TableSideRail";
 import { Button } from "@/components/ui";
 import { color } from "@/lib/design-tokens";
@@ -155,6 +156,7 @@ export default function LiveSpectatorPage() {
 
         <div
           style={{
+            position: "relative",
             flex: 1,
             minHeight: 0,
             display: "flex",
@@ -164,6 +166,7 @@ export default function LiveSpectatorPage() {
             overflow: "hidden",
           }}
         >
+          <PublicActionCard log={log} />
           <LiveTableFelt
             meta={meta}
             seatMeta={seatMeta}

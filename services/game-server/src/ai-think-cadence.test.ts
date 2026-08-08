@@ -108,7 +108,7 @@ describe("buildPublicThinkingLines", () => {
     assert.doesNotMatch(text, /marginal value/i);
   });
 
-  it("marks timeout fallback as degraded execution", () => {
+  it("marks provider fallback as degraded execution with the failure class", () => {
     const lines = buildPublicThinkingLines({
       profileKey: "fox",
       street: "preflop",
@@ -117,12 +117,14 @@ describe("buildPublicThinkingLines", () => {
       pot: 0.75,
       toCall: 0.25,
       fallbackUsed: true,
+      fallbackErrorClass: "circuit_open",
       equityPct: 54,
       equityBasis: "range",
       rangeKind: "holding",
       handLabel: "Ace-Ten offsuit",
     });
     assert.match(lines.join(" "), /degraded fallback/i);
+    assert.match(lines.join(" "), /circuit_open/i);
   });
 
   it("labels a vs-random estimate as an upper bound rather than a range read", () => {

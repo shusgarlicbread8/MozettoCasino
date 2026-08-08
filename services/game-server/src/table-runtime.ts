@@ -1951,16 +1951,123 @@ export class TableRuntime {
       await this.settleIfOnePlayerLeft("table_abandoned");
       this.resetToWaiting();
     }
-    if (this.arenaMode === "onchain" && this.onchainSessionId) {
+
+    // On-chain HU/cash: one leaver must not leave the opponent (often AI) alone
+    // holding everyone's activeGames slot forever. Cash out leftovers and settle.
+    const seatedAfter = this.state.seats.filter((s) => s.playerId);
+    if (this.arenaMode === "onchain" && seatedAfter.length < 2) {
+      await this.closeOnchainTableAfterUndermannedLeave("opponent_left").catch((err) =>
+        console.error("closeOnchainTableAfterUndermannedLeave failed", this.tableId, err),
+      );
+    } else if (this.arenaMode === "onchain" && this.onchainSessionId) {
       await markOnchainSessionReadyForSettlement(this.onchainSessionId).catch((err) =>
         console.error("markOnchainSessionReadyForSettlement failed", this.tableId, err),
       );
     }
+
     // Always push a fresh snapshot so every client flips the seat to SEAT OPEN.
     this.broadcastSnapshots();
     const startHand = sessionId ? (this.sessionStartHand.get(sessionId) ?? 0) : 0;
     const handsPlayed = Math.max(0, (Number(this.state.handNumber) || 0) - startHand);
     return { queued: false, ok: true, handsPlayed };
+  }
+
+  /**
+   * After a leave leaves fewer than two seats occupied, end the custody match:
+   * cash out remaining seats, mark settling, deactivate the table (unless a
+   * queue ticket is still waiting to sit before any hand has started).
+   */
+  async closeOnchainTableAfterUndermannedLeave(reason: string) {
+    if (!this.onchainSessionId) await this.loadOnchainSession();
+    const sessionId = this.onchainSessionId;
+    if (!sessionId) return;
+
+    // Pre-hand progressive fill: someone still in queue → keep table warm.
+    const hands = await query<{ n: string }>(
+      `select count(*)::text as n from hands where table_id = $1`,
+      [this.tableId],
+    );
+    const queued = await query(
+      `select 1 from seat_tickets
+       where session_id = $1 and status in ('queued', 'matched')
+       limit 1`,
+      [sessionId],
+    );
+    if (Number(hands.rows[0]?.n ?? 0) === 0 && queued.rows[0]) {
+      await markOnchainSessionReadyForSettlement(sessionId).catch(() => null);
+      return;
+    }
+
+    for (const s of [...this.state.seats]) {
+      if (!s.playerId) continue;
+      const uid = s.playerId;
+      const seatIndex = s.seatIndex;
+      try {
+        await this.collectSessionRakeTabs([seatIndex]);
+      } catch {
+        /* ignore */
+      }
+      const seatAfter = this.state.seats.find((x) => x.seatIndex === seatIndex);
+      const stack = Math.max(0, chipsToUsd(seatAfter?.stack ?? s.stack));
+      let sid = this.sessions.get(uid);
+      if (!sid) {
+        const row = await query(
+          `select id from table_sessions where table_id=$1 and owner_id=$2 and status='active' limit 1`,
+          [this.tableId, uid],
+        );
+        sid = row.rows[0]?.id;
+      }
+      const baseline = this.stackBaseline.get(uid) ?? stack;
+      if (baseline !== stack) {
+        try {
+          await rebalanceEscrowToStacks(
+            `leave_cleanup_${this.tableId}_${uid}_${Date.now()}`,
+            [{ userId: uid, prevStack: baseline, nextStack: stack }],
+            this.arenaMode,
+          );
+        } catch (err) {
+          console.error("cleanup escrow rebalance failed", this.tableId, err);
+        }
+      }
+      this.state = clearSeat(this.state, seatIndex);
+      await query(
+        `update table_seats set status='empty', agent_id=null, owner_id=null, stack=0, updated_at=now()
+         where table_id=$1 and seat_index=$2`,
+        [this.tableId, seatIndex],
+      );
+      if (sid) {
+        try {
+          if (stack > 0) await releaseSession(uid, stack, sid, this.arenaMode);
+        } catch (err) {
+          console.error("cleanup releaseSession failed", this.tableId, err);
+        }
+        await query(`update table_sessions set status='completed', stack=$1, ended_at=now() where id=$2`, [
+          stack,
+          sid,
+        ]);
+        this.sessions.delete(uid);
+        this.stackBaseline.delete(uid);
+        this.sessionStartHand.delete(sid);
+      } else {
+        await this.completeSessionsForUser(uid, stack);
+      }
+      this.agentProfiles.delete(seatIndex);
+      this.pendingLeaveOwners.delete(uid);
+      for (const c of this.clients) {
+        if (c.userId === uid) c.seatIndex = undefined;
+      }
+    }
+
+    await closeOnchainSessionForSettlement(sessionId).catch((err) =>
+      console.error("closeOnchainSessionForSettlement failed", this.tableId, err),
+    );
+    await query(`update tables set is_active = false where id = $1`, [this.tableId]);
+    this.matchClosed = true;
+    this.resetToWaiting();
+    await this.persistEvent("MATCH_COMPLETE", {
+      reason,
+      message: "Match closed — fewer than two players remain. Find Match starts a new session.",
+    }).catch(() => null);
   }
 
   /**
@@ -2770,6 +2877,7 @@ export class TableRuntime {
         action: botDecision.action,
         amount: botDecision.amount,
         fallbackUsed: botDecision.fallbackUsed,
+        fallbackErrorClass: botDecision.fallbackErrorClass ?? null,
       });
       this.sendOwnerAiCognition(seatIndex, {
         phase: "DECISION_READY",

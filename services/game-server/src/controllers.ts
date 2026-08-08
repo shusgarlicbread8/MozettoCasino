@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DecisionFacts, HoldemState } from "@mozetto/game-rules";
-import { chipsToUsd, getLegalActions } from "@mozetto/game-rules";
+import { chipsToNumber, chipsToUsd, getLegalActions } from "@mozetto/game-rules";
 import type { AgentRequest, AgentResponse, PokerAction } from "@mozetto/shared-types";
 
 const AGENT_RUNTIME_URL = process.env.AGENT_RUNTIME_URL ?? "http://localhost:4002";
@@ -35,6 +35,8 @@ export type SeatDecision = {
   cadenceWaitMs?: number;
   cadenceSleptMs?: number;
   fallbackUsed?: boolean;
+  /** Provider failure class when fallbackUsed (timeout, circuit_open, …). */
+  fallbackErrorClass?: string | null;
   energyDebited?: number;
   energyRemaining?: number;
   modelId?: string;
@@ -80,23 +82,24 @@ function buildAgentRequest(ctx: SeatControllerContext): AgentRequest & {
 } {
   const seat = ctx.state.seats.find((s) => s.seatIndex === ctx.seatIndex)!;
   const toCallChips = ctx.state.currentBet > seat.bet ? ctx.state.currentBet - seat.bet : 0n;
-  const callAmount = chipsToUsd(toCallChips);
+  // Agent-runtime amounts are CHIP integers (1 chip = $0.01). Sending USD
+  // floats made amountToString Math.trunc(0.25) → 0 and broke CALL/BET legality.
   return {
     agentVersion: "1",
     profileKey: (ctx.profileKey as AgentRequest["profileKey"]) ?? "machine",
     game: "holdem",
     legalActions: getLegalActions(ctx.state).map((l) => ({
       action: l.action,
-      minAmount: l.minAmount != null ? chipsToUsd(l.minAmount) : undefined,
-      maxAmount: l.maxAmount != null ? chipsToUsd(l.maxAmount) : undefined,
+      minAmount: l.minAmount != null ? chipsToNumber(l.minAmount) : undefined,
+      maxAmount: l.maxAmount != null ? chipsToNumber(l.maxAmount) : undefined,
     })),
     privateState: { holeCards: seat.hole ?? [] },
     publicState: {
       board: ctx.state.board,
-      pot: chipsToUsd(ctx.state.pot),
-      callAmount,
+      pot: chipsToNumber(ctx.state.pot),
+      callAmount: chipsToNumber(toCallChips),
       street: ctx.state.street,
-      stacks: ctx.state.seats.map((s) => chipsToUsd(s.stack)),
+      stacks: ctx.state.seats.map((s) => chipsToNumber(s.stack)),
       toActSeat: ctx.seatIndex,
     },
     computeRemaining: ctx.computeRemainingMs,
@@ -119,6 +122,7 @@ type AgentRuntimeActResponse = AgentResponse & {
   energyDebited?: number;
   energyRemaining?: number;
   modelId?: string;
+  audit?: { errorClass?: string | null; schemaRepairUsed?: boolean };
 };
 
 /**
@@ -136,11 +140,15 @@ export class AgentRuntimeController implements SeatController {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(buildAgentRequest(ctx)),
-        // Preserve room to commit inside the product's 12s maximum visible cadence.
-        signal: AbortSignal.timeout(Math.min(ctx.computeRemainingMs, 10_500)),
+        // Leave headroom for public cadence commit on the 15s table clock.
+        signal: AbortSignal.timeout(Math.min(ctx.computeRemainingMs, 12_500)),
       });
       if (!res.ok) {
-        return { ...pickLegalRandom(legal), providerLatencyMs: Date.now() - started };
+        return {
+          ...pickLegalRandom(legal),
+          providerLatencyMs: Date.now() - started,
+          fallbackErrorClass: `http_${res.status}`,
+        };
       }
       const body = (await res.json()) as AgentRuntimeActResponse;
       if (!legal.some((l) => l.action === body.action)) {
@@ -148,11 +156,19 @@ export class AgentRuntimeController implements SeatController {
           ...pickLegalRandom(legal),
           reasonCode: "illegal_retry_random",
           providerLatencyMs: Date.now() - started,
+          fallbackErrorClass: "illegal_action",
         };
       }
+      // Agent returns chip integers; table-runtime applyAction expects USD.
+      const amountChips =
+        body.amount != null && body.amount !== "" ? Number(body.amount) : NaN;
+      const amountUsd =
+        Number.isFinite(amountChips) && amountChips > 0
+          ? chipsToUsd(BigInt(Math.trunc(amountChips)))
+          : undefined;
       return {
         action: body.action,
-        amount: body.amount,
+        amount: amountUsd,
         reasonCode: body.reasonCode,
         computeUsed: body.computeUsed,
         latencyMs: body.latencyMs,
@@ -161,12 +177,17 @@ export class AgentRuntimeController implements SeatController {
         cadenceWaitMs: body.cadenceWaitMs,
         cadenceSleptMs: body.cadenceSleptMs,
         fallbackUsed: body.fallbackUsed ?? false,
+        fallbackErrorClass: body.audit?.errorClass ?? null,
         energyDebited: body.energyDebited,
         energyRemaining: body.energyRemaining,
         modelId: body.modelId ?? "agent-runtime",
       };
     } catch {
-      return { ...pickLegalRandom(legal), providerLatencyMs: Date.now() - started };
+      return {
+        ...pickLegalRandom(legal),
+        providerLatencyMs: Date.now() - started,
+        fallbackErrorClass: "timeout",
+      };
     }
   }
 }

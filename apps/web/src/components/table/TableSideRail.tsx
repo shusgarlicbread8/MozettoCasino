@@ -1,8 +1,6 @@
 "use client";
 
-import Link from "next/link";
 import { AiCognitionPanel } from "@/components/cognition/AiCognitionPanel";
-import { SessionTrustBadge } from "@/components/verify/SessionTrustBadge";
 import { color, font, radius } from "@/lib/design-tokens";
 import type { AiCognitionStatus } from "@/lib/ai-cognition";
 import type { LogRow } from "@/lib/table/format";
@@ -27,11 +25,12 @@ type Props = {
   seated?: boolean;
   analysis?: boolean;
   analysisStats?: SessionStat[];
-  log: LogRow[];
+  /** @deprecated Public action log floats over the felt — kept optional for callers. */
+  log?: LogRow[];
   fairness: FairRow[];
   fairOpen: boolean;
   onToggleFair: () => void;
-  /** WP-128 — on-chain session id for trust badge → /verify/[sessionId] */
+  /** @deprecated Trust badge lives in the table header — rail space is AI Activity. */
   trustSessionId?: string | null;
   verifyHref?: string;
   spectatorBanner?: string | null;
@@ -51,21 +50,20 @@ export function TableSideRail({
   seated = true,
   analysis,
   analysisStats,
-  log,
+  log: _log,
   fairness: _fairness,
   fairOpen: _fairOpen,
   onToggleFair: _onToggleFair,
-  trustSessionId,
-  verifyHref,
+  trustSessionId: _trustSessionId,
+  verifyHref: _verifyHref,
   spectatorBanner,
 }: Props) {
+  void _log;
   void _fairness;
   void _fairOpen;
   void _onToggleFair;
-  const displayLog =
-    log.length > 0
-      ? log
-      : [{ n: "00", name: "DEALER", act: "WAITING FOR PLAYERS", color: color.textFaint, actColor: color.textMuted }];
+  void _trustSessionId;
+  void _verifyHref;
   const phaseChip = (cognitionPhase ?? "observing").replace(/_/g, " ").toUpperCase();
 
   return (
@@ -206,44 +204,15 @@ export function TableSideRail({
         </div>
       ) : null}
 
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "14px 18px" }}>
-        <div className="mz-mono" style={{ fontSize: 9.5, fontWeight: 500, letterSpacing: ".14em", color: color.textFaint, marginBottom: 10 }}>
-          PUBLIC ACTION
-        </div>
-        {displayLog.map((l, li) => (
-          <div
-            key={`${l.n}-${li}-${l.act}`}
-            style={{
-              display: "flex",
-              gap: 10,
-              alignItems: "baseline",
-              padding: "6px 0",
-              borderBottom: `1px solid ${color.line}`,
-              animation: "ar-slidein .3s ease-out both",
-            }}
-          >
-            <div className="mz-mono" style={{ fontSize: 9.5, color: color.textFaint, width: 28, flex: "none" }}>
-              {l.n}
-            </div>
-            <div className="mz-mono" style={{ fontSize: 10.5, fontWeight: 500, color: l.color, flex: 1 }}>
-              {l.name}
-            </div>
-            <div className="mz-mono" style={{ fontSize: 10.5, color: l.actColor }}>
-              {l.act}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Cognition sits between the action log and the live-engine/trust footer. */}
+      {/* AI Activity owns the remaining rail — public actions float over the felt. */}
       <div
         data-ai-activity-rail
         style={{
-          flex: "none",
+          flex: "1 1 auto",
+          minHeight: 0,
           borderTop: `1px solid ${color.line}`,
-          padding: "12px 14px",
+          padding: "12px 14px 14px",
           background: "linear-gradient(180deg, rgba(61,220,138,0.04), transparent)",
-          maxHeight: "42%",
           overflowY: "auto",
         }}
       >
@@ -260,15 +229,6 @@ export function TableSideRail({
             </div>
           </>
         )}
-      </div>
-
-      <div style={{ flex: "none", borderTop: `1px solid ${color.line}`, padding: "10px 12px 14px" }}>
-        <SessionTrustBadge sessionId={trustSessionId ?? null} variant="rail" />
-        {!trustSessionId && verifyHref ? (
-          <Link href={verifyHref} className="mz-mono" style={{ display: "inline-block", fontSize: 11, marginTop: 8, marginLeft: 4, color: color.accent }}>
-            Open Verify →
-          </Link>
-        ) : null}
       </div>
     </aside>
   );

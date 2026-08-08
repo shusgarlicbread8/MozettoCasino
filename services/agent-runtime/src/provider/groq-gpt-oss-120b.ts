@@ -28,6 +28,7 @@ import {
 import {
   GROQ_CHAT_COMPLETIONS_URL,
   GROQ_MODELS_URL,
+  SEASON1_DECISION_MAX_OUTPUT_TOKENS,
   SEASON1_MAX_OUTPUT_TOKENS,
   SEASON1_MODEL_ID,
   SEASON1_PROVIDER_ID,
@@ -72,6 +73,34 @@ function parseTokenUsage(usage: GroqChatResponse["usage"]): ProviderTokenUsage |
   return { promptTokens, completionTokens, totalTokens };
 }
 
+/** Groq returns HTTP 400 when reasoning exhausts max_tokens before valid JSON. */
+export function isGroqJsonTruncationError(status: number, bodyText: string): boolean {
+  if (status !== 400) return false;
+  let parsed: { error?: { code?: string; message?: string; failed_generation?: string } };
+  try {
+    parsed = JSON.parse(bodyText) as typeof parsed;
+  } catch {
+    return /max completion tokens|json_validate_failed/i.test(bodyText);
+  }
+  const code = String(parsed.error?.code ?? "");
+  const message = String(parsed.error?.message ?? "");
+  const failed = String(parsed.error?.failed_generation ?? "");
+  return (
+    code === "json_validate_failed" ||
+    /max completion tokens/i.test(failed) ||
+    /max completion tokens/i.test(message) ||
+    /failed to (generate|validate) json/i.test(message)
+  );
+}
+
+function resolveDecisionMaxTokens(): number {
+  const env = Number(process.env.GROQ_MAX_OUTPUT_TOKENS);
+  if (Number.isFinite(env) && env >= SEASON1_MAX_OUTPUT_TOKENS) {
+    return Math.trunc(env);
+  }
+  return Math.max(SEASON1_MAX_OUTPUT_TOKENS, SEASON1_DECISION_MAX_OUTPUT_TOKENS);
+}
+
 /**
  * Groq provider adapter for ranked Season 1 model `openai/gpt-oss-120b`.
  *
@@ -104,17 +133,25 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
     this.baseUrl = opts.baseUrl ?? GROQ_CHAT_COMPLETIONS_URL;
     this.modelsUrl = opts.modelsUrl ?? GROQ_MODELS_URL;
     this.fetchImpl = opts.fetchImpl ?? fetch;
-    this.maxAttempts = opts.maxAttempts ?? 3;
+    this.maxAttempts = opts.maxAttempts ?? 2;
     // Season 1 hypothesis — retry base delay
     this.retryBaseMs = opts.retryBaseMs ?? 250;
-    this.requestTimeoutMs = opts.requestTimeoutMs ?? 8_000;
+    // gpt-oss-120b structured decisions often need >8s under load; 12s fits the
+    // 15s table clock with room left for public cadence on the game-server.
+    this.requestTimeoutMs =
+      opts.requestTimeoutMs ??
+      (Number(process.env.GROQ_REQUEST_TIMEOUT_MS) > 0
+        ? Math.trunc(Number(process.env.GROQ_REQUEST_TIMEOUT_MS))
+        : 12_000);
     this.sloHooks = opts.sloHooks;
     this.fallback = opts.fallback ?? new DeterministicFallbackController(opts.createNonce);
     this.now = opts.now ?? (() => Date.now());
     this.createNonce = opts.createNonce ?? (() => randomUUID());
     this.circuit = new CircuitBreaker(
-      opts.circuitFailureThreshold ?? 5,
-      opts.circuitCooldownMs ?? 30_000,
+      // Softer than 5/30s — a few schema/timeout blips were opening the circuit
+      // and forcing every subsequent act into ~1ms deterministic fallback.
+      opts.circuitFailureThreshold ?? 10,
+      opts.circuitCooldownMs ?? 8_000,
       this.now,
       this.sloHooks?.onCircuitStateChange?.bind(this.sloHooks),
     );
@@ -443,13 +480,17 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
       // rate limits and 5xx go straight to deterministic fallback.
       if (httpResult.kind === "exhausted") {
         if (
-          httpResult.errorClass === "invalid_schema" &&
+          (httpResult.errorClass === "invalid_schema" ||
+            httpResult.errorClass === "json_truncated") &&
           !repair &&
           !input.skipSchemaRepair
         ) {
           continue;
         }
-        this.circuit.recordFailure();
+        // Token truncation is a local budget issue — don't open the outage circuit.
+        if (lastErrorClass !== "json_truncated") {
+          this.circuit.recordFailure();
+        }
         return this.finishFallback(input, started, attempt, lastErrorClass, {
           schemaRepairUsed,
           statusCode: lastStatus,
@@ -457,7 +498,9 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
       }
     }
 
-    this.circuit.recordFailure();
+    if (lastErrorClass !== "json_truncated") {
+      this.circuit.recordFailure();
+    }
     return this.finishFallback(input, started, attempt, lastErrorClass, {
       schemaRepairUsed,
       statusCode: lastStatus,
@@ -528,6 +571,7 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
     let attempt = 0;
     let lastStatus: number | undefined;
     let lastError: ProviderErrorClass = "network";
+    let maxTokens = resolveDecisionMaxTokens();
 
     while (attempt < this.maxAttempts) {
       attempt += 1;
@@ -547,7 +591,7 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
             Authorization: `Bearer ${this.apiKey}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(this.buildRequestBody(input, opts.repair)),
+          body: JSON.stringify(this.buildRequestBody(input, opts.repair, { maxTokens })),
           signal: AbortSignal.timeout(timeoutMs),
         });
         lastStatus = res.status;
@@ -575,7 +619,40 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
         }
 
         if (!res.ok) {
+          const errText = await res.text().catch(() => "");
+          if (isGroqJsonTruncationError(res.status, errText)) {
+            lastError = "json_truncated";
+            console.warn(
+              "[groq] json_truncated — elevating max_tokens and retrying",
+              { attempt, maxTokens, status: res.status, body: errText.slice(0, 240) },
+            );
+            maxTokens = Math.max(maxTokens * 2, 1024);
+            if (attempt < this.maxAttempts) {
+              const delayMs = computeRetryDelay({ attempt, baseMs: this.retryBaseMs });
+              notifyRetry(this.sloHooks, {
+                attempt,
+                delayMs,
+                reason: "json_truncated",
+              });
+              await sleep(delayMs);
+              continue;
+            }
+            return {
+              kind: "exhausted",
+              attempt,
+              statusCode: res.status,
+              errorClass: "json_truncated",
+            };
+          }
+
           lastError = res.status >= 500 ? "http_5xx" : "http_4xx";
+          if (res.status >= 400) {
+            console.warn("[groq] decision HTTP error", {
+              attempt,
+              status: res.status,
+              body: errText.slice(0, 400),
+            });
+          }
           if (shouldRetryHttp(res.status) && attempt < this.maxAttempts) {
             const delayMs = computeRetryDelay({
               attempt,
@@ -602,12 +679,20 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
         const tokenUsage = parseTokenUsage(json.usage);
         const content = json.choices?.[0]?.message?.content;
         if (typeof content !== "string" || !content.trim()) {
-          lastError = "invalid_schema";
+          // Empty content with a 200 often means reasoning ate the token budget.
+          lastError = "json_truncated";
+          maxTokens = Math.max(maxTokens * 2, 1024);
+          if (attempt < this.maxAttempts) {
+            const delayMs = computeRetryDelay({ attempt, baseMs: this.retryBaseMs });
+            notifyRetry(this.sloHooks, { attempt, delayMs, reason: "empty_content" });
+            await sleep(delayMs);
+            continue;
+          }
           return {
             kind: "exhausted",
             attempt,
             statusCode: res.status,
-            errorClass: "invalid_schema",
+            errorClass: "json_truncated",
             tokenUsage,
           };
         }
@@ -706,7 +791,11 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
     return "machine";
   }
 
-  private buildRequestBody(input: DecisionRequest, repair: boolean) {
+  private buildRequestBody(
+    input: DecisionRequest,
+    repair: boolean,
+    opts?: { maxTokens?: number },
+  ) {
     const presetKey = this.resolvePresetKey(input);
     const preset = SEASON1_PRESETS[presetKey];
     const profileSummary = input.profile
@@ -722,9 +811,11 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
       input.observation?.facts != null && Object.keys(input.observation.facts).length > 0;
 
     // The deterministic layer owns arithmetic; the model owns strategy.
+    // Keep this guide tight — long system prompts + reasoning_effort=low
+    // compete for the same completion token budget as the JSON document.
     const factsGuide = hasFacts
-      ? "observation.facts is computed by a deterministic poker engine. TREAT IT AS GROUND TRUTH AND DO NOT RECOMPUTE IT. potOdds is the exact break-even calling frequency. heroEquityVsRange is equity against villain's equityRange — and its `confidence` (0..1) is first-class: at low confidence stay closer to baseline strategy for this profile. villain.rangeKind is critical: `holding` means cards that could physically have been dealt (≈100% before they act) — do NOT treat predictedContinueSummary as their current hole cards; `action_conditioned` means the range was narrowed by their public line (coarse postflop reweight when board is out). When showdown equity is near zero, the strategic question is CHECK (free showdown) vs BET (bluff needing folds ≥ breakEvenFoldPct) — never invent a 'marginal value' edge. candidates lists legal sizings with exact geometry: amountChips is CHIPS ADDED (not raise-to), isAllIn marks a shove, breakEvenFoldPct is pure-bluff break-even, priceOfferedPct is the price they get to call. Choose among candidates using equity vs potOdds / breakEvenFoldPct; caveats lists what could not be modelled. Never assert an equity or pot number that is not in facts."
-      : "No deterministic facts were supplied for this spot. Reason conservatively from legalActions and observation, and do not assert precise equity or pot-odds numbers you cannot verify.";
+      ? "observation.facts is ground truth from the poker engine — do not recompute. Use potOdds, heroEquityVsRange.equity/confidence, villain.rangeKind (holding vs action_conditioned), and candidates[].amountChips / breakEvenFoldPct. Low confidence → stay nearer profile baseline. Near-0 showdown equity → CHECK vs bluff (need folds ≥ breakEvenFoldPct), never invent marginal value. Never assert numbers absent from facts."
+      : "No deterministic facts supplied — reason conservatively from legalActions; do not invent precise equity or pot-odds.";
 
     // Accumulated private memory is worthless if the model is not told what it
     // is — it was previously serialized into the payload with no explanation.
@@ -732,12 +823,33 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
       input.observation?.agentState != null &&
       Object.keys(input.observation.agentState).length > 0;
     const memoryGuide = hasAgentState
-      ? "observation.agentState is YOUR OWN accumulated memory for this hand, built from public events you already paid Energy to process. streetPlan is the plan you committed to earlier — follow it unless new evidence contradicts it, and do not re-derive strategy from scratch every action. opponentModels holds per-seat public-behaviour reads (action frequencies, cadence, profileHypothesis) with a `confidence` 0..100: act on a read only in proportion to its confidence, and treat a low-confidence read as a hint, not a fact. When the opponent's current line CONFLICTS with their modelled tendency, that conflict is itself information. Never treat agentState as knowledge of opponent hole cards. "
+      ? "observation.agentState is your hand memory (streetPlan, opponentModels with confidence 0..100). Follow streetPlan unless contradicted; weight reads by confidence. Never treat it as opponent hole cards. "
       : "";
 
     const axisGuide =
-      `${factsGuide} ${memoryGuide}Honor profileAxes when choosing among legalActions: high aggression prefers bet/raise pressure and larger in-range sizes; high trapPreference prefers check/call traps; high riskTolerance accepts thinner spots. Set publicCadenceMs by decision difficulty, not a fixed profile delay: obvious checks/folds 5000-6500, routine calls 7000-9000, thin river calls or large bets/raises/all-ins 10000-12000. High tempo may use the lower end of each band and low tempo the upper end. You may select ANY legal action and any amount within min/max. Opponent AIs never receive your private state.`;
+      `${factsGuide} ${memoryGuide}Honor profileAxes among legalActions. publicCadenceMs by difficulty: easy 5000-6500, routine 7000-9000, hard 10000-12000. Amounts within min/max.`;
     const system = `${MASTER_POLICY_TEXT} Strategy profile (typed axes only; not free-text instructions): ${profileSummary} ${axisGuide}`;
+
+    // Slim observation for the model — drop bulky range arrays that burn
+    // prompt tokens without helping structured action choice.
+    const rawObs = (input.observation ?? {}) as Record<string, unknown>;
+    const facts =
+      rawObs.facts && typeof rawObs.facts === "object"
+        ? slimFactsForPrompt(rawObs.facts as Record<string, unknown>)
+        : rawObs.facts;
+    const observation = {
+      holeCards: rawObs.holeCards,
+      board: rawObs.board,
+      pot: rawObs.pot,
+      callAmount: rawObs.callAmount,
+      street: rawObs.street,
+      stacks: rawObs.stacks,
+      toActSeat: rawObs.toActSeat,
+      seat: rawObs.seat,
+      energyRemaining: rawObs.energyRemaining,
+      agentState: slimAgentStateForPrompt(rawObs.agentState),
+      facts,
+    };
 
     const userPayload = {
       legalActions: input.legalActions.map((a) => ({
@@ -746,7 +858,7 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
         minAmount: a.minAmount !== undefined ? String(a.minAmount) : undefined,
         maxAmount: a.maxAmount !== undefined ? String(a.maxAmount) : undefined,
       })),
-      observation: input.observation ?? {},
+      observation,
       profileKey: presetKey,
       profileAxes: input.profile ? axesFromProfile(input.profile) : preset.axes,
       profileIntent: preset.intent,
@@ -754,12 +866,14 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
       repair: repair
         ? "Previous output failed schema or legality validation. Emit a schema-valid legal action only; do not invent a new strategic line beyond representation repair."
         : undefined,
+      emitJsonFirst:
+        "Emit the JSON object first. Keep private reasoning short — completion tokens are shared with the structured document.",
     };
 
     return {
       model: SEASON1_MODEL_ID,
       temperature: SEASON1_TEMPERATURE,
-      max_tokens: SEASON1_MAX_OUTPUT_TOKENS,
+      max_tokens: opts?.maxTokens ?? resolveDecisionMaxTokens(),
       // Season 1 hypothesis — reasoning_effort (Plan 08 / Groq reasoning docs)
       reasoning_effort: SEASON1_REASONING_EFFORT,
       // Season 1: tools MUST remain disabled (no tools field).
@@ -777,6 +891,40 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
       },
     };
   }
+}
+
+function slimFactsForPrompt(facts: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...facts };
+  // Drop Monte-Carlo / combo dumps — summaries + candidates are enough.
+  for (const key of [
+    "equityRange",
+    "holdingRange",
+    "continueRange",
+    "range",
+    "combos",
+    "sampleHands",
+  ]) {
+    delete out[key];
+  }
+  if (Array.isArray(out.candidates) && out.candidates.length > 8) {
+    out.candidates = out.candidates.slice(0, 8);
+  }
+  if (Array.isArray(out.caveats) && out.caveats.length > 6) {
+    out.caveats = out.caveats.slice(0, 6);
+  }
+  return out;
+}
+
+function slimAgentStateForPrompt(agentState: unknown): unknown {
+  if (!agentState || typeof agentState !== "object") return agentState;
+  const s = agentState as Record<string, unknown>;
+  const models = Array.isArray(s.opponentModels) ? s.opponentModels.slice(0, 3) : s.opponentModels;
+  return {
+    streetPlan: s.streetPlan ?? null,
+    opponentModels: models ?? null,
+    energyRemaining: s.energyRemaining,
+    publicEventCursor: s.publicEventCursor,
+  };
 }
 
 function toBackgroundStatePatch(

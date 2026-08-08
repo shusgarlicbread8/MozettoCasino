@@ -218,15 +218,29 @@ export const GroqBackgroundPatchSchema = z.object({
 
 export type GroqBackgroundPatch = z.infer<typeof GroqBackgroundPatchSchema>;
 
+/**
+ * Normalize a legal/model amount to an unsigned integer chip string.
+ *
+ * Integers are treated as chip counts. Fractional numbers / decimal strings are
+ * treated as legacy USD display values and converted at 1 chip = $0.01
+ * (so `0.25` → `"25"`). Truncating dollars used to turn `$0.25` into `0` and
+ * break CALL/BET validation → cascading provider fallbacks.
+ */
 export function amountToString(value: string | number | undefined): string {
   if (value === undefined) return "0";
   if (typeof value === "number") {
     if (!Number.isFinite(value) || value < 0) return "0";
+    if (!Number.isInteger(value)) return String(Math.round(value * 100));
     return String(Math.trunc(value));
   }
   const trimmed = value.trim();
-  if (!/^[0-9]+$/.test(trimmed)) return "0";
-  return trimmed.replace(/^0+(?=\d)/, "") || "0";
+  if (/^[0-9]+$/.test(trimmed)) return trimmed.replace(/^0+(?=\d)/, "") || "0";
+  if (/^[0-9]+\.[0-9]+$/.test(trimmed)) {
+    const usd = Number(trimmed);
+    if (!Number.isFinite(usd) || usd < 0) return "0";
+    return String(Math.round(usd * 100));
+  }
+  return "0";
 }
 
 export function resolveActionType(legal: LegalAction): ActionTypeCode {

@@ -14,6 +14,7 @@ import { money, useSession } from "@/lib/session";
 import { useMozettoBalances } from "@/lib/use-mozetto-balances";
 import type { JoinTableData } from "@/components/JoinTableSheet";
 import { LiveTableFelt } from "@/components/table/LiveTableFelt";
+import { PublicActionCard } from "@/components/table/PublicActionCard";
 import { TableSideRail } from "@/components/table/TableSideRail";
 import { SessionTrustBadge } from "@/components/verify/SessionTrustBadge";
 import { Button } from "@/components/ui";
@@ -497,6 +498,7 @@ export default function TableClient() {
 
         <div
           style={{
+            position: "relative",
             flex: 1,
             minHeight: 0,
             display: "flex",
@@ -506,6 +508,7 @@ export default function TableClient() {
             overflow: "hidden",
           }}
         >
+          <PublicActionCard log={log} />
           <LiveTableFelt
             meta={meta}
             seatMeta={seatMeta}

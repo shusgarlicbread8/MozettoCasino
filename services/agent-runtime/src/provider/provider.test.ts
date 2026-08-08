@@ -7,9 +7,14 @@ import {
   GroqDecisionOutputSchema,
   validateAgainstLegal,
 } from "./decision-schema.js";
-import { GroqGptOss120BProvider } from "./groq-gpt-oss-120b.js";
+import { GroqGptOss120BProvider, isGroqJsonTruncationError } from "./groq-gpt-oss-120b.js";
 import { CircuitBreaker, computeRetryDelay, shouldRetryHttp } from "./retry.js";
-import { SEASON1_MODEL_ID, SEASON1_PROVIDER_ID, SEASON1_TEMPERATURE } from "./season1-policy.js";
+import {
+  SEASON1_DECISION_MAX_OUTPUT_TOKENS,
+  SEASON1_MODEL_ID,
+  SEASON1_PROVIDER_ID,
+  SEASON1_TEMPERATURE,
+} from "./season1-policy.js";
 import type { DecisionRequest, ProviderSloHooks } from "./types.js";
 
 const legalFacingBet: DecisionRequest = {
@@ -124,6 +129,20 @@ describe("retry / circuit helpers", () => {
     assert.equal(shouldRetryHttp(400), false);
   });
 
+  it("detects Groq json truncation 400s", () => {
+    const body = JSON.stringify({
+      error: {
+        message: "Failed to generate JSON. Please adjust your prompt.",
+        type: "invalid_request_error",
+        code: "json_validate_failed",
+        failed_generation: "max completion tokens reached before generating a valid document",
+      },
+    });
+    assert.equal(isGroqJsonTruncationError(400, body), true);
+    assert.equal(isGroqJsonTruncationError(500, body), false);
+    assert.equal(isGroqJsonTruncationError(400, '{"error":{"code":"other"}}'), false);
+  });
+
   it("honors Retry-After seconds", () => {
     const delay = computeRetryDelay({
       attempt: 1,
@@ -233,7 +252,7 @@ describe("GroqGptOss120BProvider", () => {
       const body = JSON.parse(String(init?.body));
       assert.equal(body.model, SEASON1_MODEL_ID);
       assert.equal(body.temperature, 0);
-      assert.equal(body.max_tokens, 256);
+      assert.equal(body.max_tokens, SEASON1_DECISION_MAX_OUTPUT_TOKENS);
       assert.equal(body.response_format?.type, "json_schema");
       assert.equal(body.response_format?.json_schema?.strict, true);
       assert.equal(body.response_format?.json_schema?.name, "controller_decision_v1");

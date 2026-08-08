@@ -179,7 +179,8 @@ export function arenaFormatConfig(format: ArenaFormat) {
   };
 }
 
-const IDLE_MINUTES = 10;
+/** Empty tables close quickly; progressive-fill keeps 1-player waiting tables open. */
+const IDLE_MINUTES = 1;
 
 /**
  * Stakes come from the CITY, not from the player's wallet.
