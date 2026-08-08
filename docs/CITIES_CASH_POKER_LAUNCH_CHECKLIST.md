@@ -35,6 +35,9 @@ Gate status for treating Cities as launch-ready. Failing conservation is a ship 
 - [x] Rat-hole persistence + find-match enforcement
 - [x] `SEASON1_CASH_MECHANICS` (antes/straddles/RIT/bomb/insurance OFF)
 - [x] Missed-blind wait-for-BB enforced in deal loop (`releaseSeatsAwaitingBigBlind`)
+- [x] Find Match sticky resume is city-scoped (Porto cannot reopen another city’s stack)
+- [x] Tab close / WS disconnect leaves the seat (mid-hand folds) after a short grace
+- [x] Migration `035` deactivates live tables whose blinds disagree with their city
 
 ## G4 — AI Intelligence V2
 
