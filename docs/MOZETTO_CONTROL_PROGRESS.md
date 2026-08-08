@@ -13,8 +13,8 @@
 
 | Field | Value |
 |---|---|
-| **Active wave** | **C10 Incidents** (C9 governance in repo; C11 next) |
-| **Active packets** | MC-110+ release; C6 drain/resume remaining |
+| **Active wave** | **C11 Release hardening** |
+| **Active packets** | MC-110–115; residuals MC-046, MC-063/064, MC-075/076, MC-085 |
 | **Baseline SHA** | `6b7ab332de11e24ead3549eaea2c0b04dcf61df4` |
 | **Superadmin allowlist** | Env `ADMIN_SUPERADMIN_ADDRESSES` only — never hardcode wallet in app code |
 | **App** | Evolve `apps/admin` @ `:3001` into Mozetto Control |
