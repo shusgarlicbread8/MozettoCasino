@@ -13,8 +13,8 @@
 
 | Field | Value |
 |---|---|
-| **Active wave** | **C5 Risk + C8 Protocol** (C0–C4/C7 largely DONE) |
-| **Active packets** | MC-050+; MC-080+; MC-046 export; C6 drain/resume |
+| **Active wave** | **C8 Protocol** (C5 DONE; C6 drain/resume; MC-046 export) |
+| **Active packets** | MC-080+; MC-046 export; C6 drain/resume |
 | **Baseline SHA** | `6b7ab332de11e24ead3549eaea2c0b04dcf61df4` |
 | **Superadmin allowlist** | Env `ADMIN_SUPERADMIN_ADDRESSES` only — never hardcode wallet in app code |
 | **App** | Evolve `apps/admin` @ `:3001` into Mozetto Control |
@@ -31,7 +31,7 @@
 | 2 | Control shell & IA | `DONE` | Shell, primitives, search, IA routes; existing pages inherit rail |
 | 3 | Command Center | `DONE` | MC-030–033 overview API + hero UI + thresholds |
 | 4 | Economics / treasury / P&L | `DONE` | MC-040–045; city econ + players; export MC-046 remaining |
-| 5 | Players / risk / support | `IN_PROGRESS` | Player list/detail (C4); integrity/restrictions C5 |
+| 5 | Players / risk / support | `DONE` | MC-050–054; migration `039`; `/risk` + player integrity UI |
 | 6 | Table / session / MM ops | `IN_PROGRESS` | MC-060/061/065 DONE; drain/resume remaining |
 | 7 | AI model & agent ops | `DONE` | MC-070–074 DONE; mutate controls MC-075/076 remaining |
 | 8 | Chain / solvency / randomness / proofs | `NOT_STARTED` | Plan `09`; wave C8 |
@@ -123,11 +123,11 @@ MC-000 baseline → MC-001 manifest
 
 | Packet | Status | Evidence / notes |
 |---|---|---|
-| MC-050 Integrity aggregation | `NOT_STARTED` | |
-| MC-051 Player restriction controls | `NOT_STARTED` | |
-| MC-052 Replay request workflow | `NOT_STARTED` | |
-| MC-053 Responsible-play state | `NOT_STARTED` | |
-| MC-054 Player admin timeline | `NOT_STARTED` | |
+| MC-050 Integrity aggregation | `DONE` | `GET /v1/admin/players/:id/integrity` + `GET /v1/admin/risk/overview`; `services/api/src/admin-players-risk.ts` |
+| MC-051 Player restriction controls | `DONE` | Migration `039`, `POST /v1/admin/players/:id/restrictions`; `packages/database/src/admin-player-ops.ts` |
+| MC-052 Replay request workflow | `DONE` | `POST /v1/admin/players/:id/request-replay` → session ops `request_replay` + player audit |
+| MC-053 Responsible-play state | `DONE` | `GET /v1/admin/players/:id/responsible-play` — best-effort; UNAVAILABLE until dedicated tables |
+| MC-054 Player admin timeline | `DONE` | `GET /v1/admin/players/:id/admin-history`; `/risk` + player detail integrity wired |
 
 ### Wave C6 — Live game operations
 
@@ -156,11 +156,11 @@ MC-000 baseline → MC-001 manifest
 
 | Packet | Status | Evidence / notes |
 |---|---|---|
-| MC-080 Solvency v2 | `NOT_STARTED` | |
-| MC-081 Chain manifest/code hash | `NOT_STARTED` | |
-| MC-082 Randomness lifecycle UI | `NOT_STARTED` | |
-| MC-083 Proof continuity UI | `NOT_STARTED` | |
-| MC-084 Settlement queue UI | `NOT_STARTED` | |
+| MC-080 Solvency v2 | `DONE` | `/solvency` — source/block/age, watchtower signal, `ControlHealthBadge` |
+| MC-081 Chain manifest/code hash | `DONE` | `/chain` — `GET /v1/admin/chain`, manifest vs env, live code hash |
+| MC-082 Randomness lifecycle UI | `DONE` | `/randomness` — lifecycle stages COMMITTED→DECK_BATCH_REGISTERED |
+| MC-083 Proof continuity UI | `DONE` | `/settlement` proofs section — `GET /v1/admin/proofs` |
+| MC-084 Settlement queue UI | `DONE` | `/settlement` queue — `GET /v1/admin/settlements` |
 | MC-085 Reconciliation/watchtower triggers | `NOT_STARTED` | |
 
 ### Wave C9 — Governance
@@ -207,7 +207,7 @@ MC-000 baseline → MC-001 manifest
 | 2026-08-08 | C0/C1 | MC-001 DONE — architecture manifest at `docs/MOZETTO_CONTROL_ARCHITECTURE.md` |
 | 2026-08-08 | C1 | MC-010–015 DONE — migration `037`, SIWE auth API, admin wallet login, tests |
 | 2026-08-08 | C4 | MC-040–045 DONE — economics schema, city API, player view `038`, players UI |
-| 2026-08-08 | C3 | MC-030–033 — overview API, Command Center hero UI, service registry probes, alert thresholds |
+| 2026-08-09 | C5 | MC-050–054 DONE — integrity API, player restrictions, replay, timeline, risk UI |
 
 ---
 

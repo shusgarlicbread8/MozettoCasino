@@ -9,11 +9,14 @@ import {
 import {
   checkpointAgeSeconds,
   classifyAiHealth,
-  classifyRandomnessEpoch,
   latencyPercentiles,
 } from "./admin-ops.js";
 import { buildAdminOverviewSnapshot } from "./admin-overview.js";
-import { buildChainOpsSnapshot, buildSolvencySnapshot } from "./admin-solvency.js";
+import { buildChainOpsSnapshot } from "./admin-chain.js";
+import { buildSolvencySnapshot } from "./admin-solvency.js";
+import { buildProofsSnapshot } from "./admin-proofs.js";
+import { buildSettlementsSnapshot } from "./admin-settlements.js";
+import { buildRandomnessSnapshot } from "./admin-randomness.js";
 import { buildTreasuryRevenueSnapshot } from "./admin-treasury.js";
 import { buildEconomicsInstrumentationSnapshot } from "./admin-economics.js";
 import { buildCityEconomicsSnapshot } from "./admin-economics-cities.js";
@@ -24,10 +27,18 @@ import {
   buildAiEconomicsSnapshot,
 } from "./admin-ai.js";
 import { getAdminPlayerDetail, listAdminPlayers } from "./admin-players.js";
+import {
+  getAdminPlayerIntegrity,
+  getAdminPlayerResponsiblePlay,
+  getAdminPlayerTimeline,
+  getRiskOverview,
+  requestPlayerReplay,
+} from "./admin-players-risk.js";
+import { isPlayerRestrictionAction, mutatePlayerRestrictions } from "@mozetto/database";
+import { requireAdmin, requireAdminControl, requestMeta } from "./admin-auth.js";
+import { registerAdminAuthRoutes } from "./admin-wallet-auth.js";
 import { buildMatchmakingOverview } from "./admin-matchmaking.js";
 import { fetchSessionDetailSections, fetchSessionList } from "./admin-sessions.js";
-import { requireAdmin, requestMeta } from "./admin-auth.js";
-import { registerAdminAuthRoutes } from "./admin-wallet-auth.js";
 
 export { requireAdmin } from "./admin-auth.js";
 
@@ -162,6 +173,208 @@ export function registerAdminRoutes(app: FastifyInstance) {
     } catch (err) {
       return reply.code(500).send({
         error: "player_list_failed",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  /** MC-050 — player integrity aggregation (pair caps, linked accounts, rat-hole). */
+  app.get("/v1/admin/players/:id/integrity", async (req, reply) => {
+    if (!(await requireAdmin(req, reply, "read"))) return;
+    const { id } = req.params as { id: string };
+    if (!id?.trim()) {
+      return reply.code(400).send({ error: "invalid_profile_id" });
+    }
+    try {
+      const integrity = await getAdminPlayerIntegrity(id.trim());
+      if (!integrity) {
+        return reply.code(404).send({ error: "player_not_found" });
+      }
+      return integrity;
+    } catch (err) {
+      return reply.code(500).send({
+        error: "player_integrity_failed",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  /** MC-053 — responsible-play read surface (best-effort; UNAVAILABLE when missing). */
+  app.get("/v1/admin/players/:id/responsible-play", async (req, reply) => {
+    if (!(await requireAdmin(req, reply, "read"))) return;
+    const { id } = req.params as { id: string };
+    if (!id?.trim()) {
+      return reply.code(400).send({ error: "invalid_profile_id" });
+    }
+    try {
+      const state = await getAdminPlayerResponsiblePlay(id.trim());
+      if (!state) {
+        return reply.code(404).send({ error: "player_not_found" });
+      }
+      return state;
+    } catch (err) {
+      return reply.code(500).send({
+        error: "player_responsible_play_failed",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  /** MC-054 — unified player admin timeline (best-effort aggregation). */
+  app.get("/v1/admin/players/:id/admin-history", async (req, reply) => {
+    if (!(await requireAdmin(req, reply, "read"))) return;
+    const { id } = req.params as { id: string };
+    const q = req.query as { limit?: string };
+    const limit = q.limit != null && q.limit !== "" ? Number(q.limit) : undefined;
+    if (limit != null && !Number.isFinite(limit)) {
+      return reply.code(400).send({ error: "invalid_limit" });
+    }
+    if (!id?.trim()) {
+      return reply.code(400).send({ error: "invalid_profile_id" });
+    }
+    try {
+      const history = await getAdminPlayerTimeline(id.trim(), limit);
+      if (!history) {
+        return reply.code(404).send({ error: "player_not_found" });
+      }
+      return history;
+    } catch (err) {
+      return reply.code(500).send({
+        error: "player_timeline_failed",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  /** MC-051 — player restriction controls (matchmaking / review flags only). */
+  app.post("/v1/admin/players/:id/restrictions", async (req, reply) => {
+    const principal = await requireAdminControl(req, reply, "players.restrict_matchmaking");
+    if (!principal) return;
+
+    const profileId = (req.params as { id: string }).id?.trim();
+    const body = (req.body ?? {}) as { action?: string; reason?: string };
+    const action = typeof body.action === "string" ? body.action.trim() : "";
+    const reason = typeof body.reason === "string" ? body.reason : "";
+
+    if (!profileId) {
+      return reply.code(400).send({ error: "invalid_profile_id" });
+    }
+    if (!isPlayerRestrictionAction(action)) {
+      return reply.code(400).send({
+        error: "invalid_action",
+        allowed: [
+          "restrict_new_matchmaking",
+          "clear_restrict_new_matchmaking",
+          "mark_under_review",
+          "clear_under_review",
+          "require_integrity_review",
+          "clear_integrity_review",
+          "clear_review",
+        ],
+      });
+    }
+    if (!reason.trim()) {
+      return reply.code(400).send({ error: "reason_required" });
+    }
+
+    const meta = requestMeta(req);
+    try {
+      const result = await mutatePlayerRestrictions({
+        profileId,
+        action,
+        reason,
+        role: principal.role,
+        actorLabel: principal.actorLabel,
+        requestId: meta.requestId,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+      });
+      return {
+        ok: true,
+        mutatedBalances: false,
+        ops: result.ops,
+        auditId: result.auditId,
+        role: principal.role,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message === "player_not_found") {
+        return reply.code(404).send({ error: "player_not_found" });
+      }
+      if (message === "reason_required") {
+        return reply.code(400).send({ error: "reason_required" });
+      }
+      if (message === "player_ops_unavailable") {
+        return reply.code(503).send({ error: "player_ops_unavailable", message: "Run migration 039" });
+      }
+      return reply.code(500).send({ error: "player_restrictions_failed", message });
+    }
+  });
+
+  /** MC-052 — request replay for a player-linked session. */
+  app.post("/v1/admin/players/:id/request-replay", async (req, reply) => {
+    const principal = await requireAdminControl(req, reply, "sessions.request_replay");
+    if (!principal) return;
+
+    const profileId = (req.params as { id: string }).id?.trim();
+    const body = (req.body ?? {}) as { reason?: string; sessionId?: string };
+    const reason = typeof body.reason === "string" ? body.reason : "";
+    const sessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : undefined;
+
+    if (!profileId) {
+      return reply.code(400).send({ error: "invalid_profile_id" });
+    }
+    if (!reason.trim()) {
+      return reply.code(400).send({ error: "reason_required" });
+    }
+
+    const meta = requestMeta(req);
+    try {
+      const result = await requestPlayerReplay({
+        profileId,
+        sessionId,
+        reason,
+        role: principal.role,
+        actorLabel: principal.actorLabel,
+        requestId: meta.requestId,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+      });
+      return {
+        ok: true,
+        mutatedBalances: false,
+        sessionId: result.sessionId,
+        ops: result.ops,
+        auditId: result.auditId,
+        playerAuditId: result.playerAuditId,
+        role: principal.role,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message === "player_not_found") {
+        return reply.code(404).send({ error: "player_not_found" });
+      }
+      if (message === "no_session_for_replay") {
+        return reply.code(404).send({ error: "no_session_for_replay" });
+      }
+      if (message === "session_not_linked_to_player") {
+        return reply.code(400).send({ error: "session_not_linked_to_player" });
+      }
+      if (message === "reason_required") {
+        return reply.code(400).send({ error: "reason_required" });
+      }
+      return reply.code(500).send({ error: "player_replay_failed", message });
+    }
+  });
+
+  /** MC-050 — risk cockpit summary (restricted players + open signals). */
+  app.get("/v1/admin/risk/overview", async (req, reply) => {
+    if (!(await requireAdmin(req, reply, "read"))) return;
+    try {
+      return await getRiskOverview();
+    } catch (err) {
+      return reply.code(500).send({
+        error: "risk_overview_failed",
         message: err instanceof Error ? err.message : String(err),
       });
     }
@@ -352,78 +565,47 @@ export function registerAdminRoutes(app: FastifyInstance) {
     }
   });
 
-  /** Randomness / dealer epoch health (WP-092). */
+  /** Randomness / dealer epoch health (MC-082). */
   app.get("/v1/admin/randomness", async (req, reply) => {
     if (!(await requireAdmin(req, reply, "read"))) return;
     const limit = Math.min(Number((req.query as { limit?: string }).limit ?? 100), 300);
+    try {
+      return await buildRandomnessSnapshot({ limit });
+    } catch (err) {
+      return reply.code(500).send({
+        error: "randomness_snapshot_failed",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
 
-    const [statusCounts, epochs, deckEvents, dealerRows, stalePending] = await Promise.all([
-      query<{ status: string; count: string }>(
-        `select status, count(*)::text as count from randomness_requests group by status order by status`,
-      ),
-      query(
-        `select rr.session_id, rr.epoch_id, rr.dealer_root, rr.vrf_request_id, rr.status, rr.created_at,
-                rf.vrf_word::text as vrf_word, rf.tx_hash as fulfill_tx, rf.fulfilled_at,
-                dc.secret_count, dc.revealed_after_settlement,
-                os.status as session_status
-         from randomness_requests rr
-         left join randomness_fulfillments rf
-           on rf.session_id = rr.session_id and rf.epoch_id = rr.epoch_id
-         left join dealer_commitments dc on dc.session_id = rr.session_id
-         left join onchain_sessions os on os.session_id = rr.session_id
-         order by rr.created_at desc
-         limit $1`,
-        [limit],
-      ),
-      query(
-        `select chain_id, event_name, tx_hash, block_number::text, args, created_at
-         from chain_events
-         where removed = false
-           and event_name in (
-             'SecretRootCommitted', 'VrfRequested', 'VrfFulfilled', 'DeckBatchRegistered',
-             'RandomnessBound', 'SeedBatchCommitted', 'RandomnessFulfilled'
-           )
-         order by block_number desc, created_at desc
-         limit $1`,
-        [Math.min(limit, 100)],
-      ),
-      query(
-        `select session_id, dealer_root, secret_count, revealed_after_settlement, created_at
-         from dealer_commitments order by created_at desc limit $1`,
-        [Math.min(limit, 50)],
-      ),
-      query<{ count: string }>(
-        `select count(*)::text as count from randomness_requests
-         where status in ('committed', 'requested')
-           and created_at < now() - interval '5 minutes'`,
-      ),
-    ]);
+  /** MC-083 — proof batch continuity + watchtower (GET only). */
+  app.get("/v1/admin/proofs", async (req, reply) => {
+    if (!(await requireAdmin(req, reply, "read"))) return;
+    const limit = Math.min(Number((req.query as { limit?: string }).limit ?? 50), 200);
+    try {
+      return await buildProofsSnapshot({ limit });
+    } catch (err) {
+      return reply.code(500).send({
+        error: "proofs_snapshot_failed",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
 
-    const epochRows = epochs.rows.map((row) => {
-      const r = row as {
-        status: string;
-        created_at: string;
-        fulfilled_at?: string | null;
-      };
-      return {
-        ...r,
-        health: classifyRandomnessEpoch({
-          status: r.status,
-          createdAt: r.created_at,
-          fulfilledAt: r.fulfilled_at,
-        }),
-      };
-    });
-
-    return {
-      readOnly: true,
-      note: "Dealer secret roots and VRF words are public commitments/results — never expose enclave private keys.",
-      statusCounts: Object.fromEntries(statusCounts.rows.map((r) => [r.status, Number(r.count)])),
-      stalePendingCount: Number(stalePending.rows[0]?.count ?? 0),
-      epochs: epochRows,
-      recentChainEvents: deckEvents.rows,
-      dealerCommitments: dealerRows.rows,
-    };
+  /** MC-084 — settlement queue (GET only). */
+  app.get("/v1/admin/settlements", async (req, reply) => {
+    if (!(await requireAdmin(req, reply, "read"))) return;
+    const q = req.query as { limit?: string; status?: string };
+    const limit = Math.min(Number(q.limit ?? 80), 200);
+    try {
+      return await buildSettlementsSnapshot({ limit, status: q.status });
+    } catch (err) {
+      return reply.code(500).send({
+        error: "settlements_snapshot_failed",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
   });
 
   /** AI provider health / fallback rates (WP-092). */

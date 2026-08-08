@@ -1,45 +1,93 @@
 import Link from "next/link";
 import { adminFetch } from "@/lib/api";
+import {
+  ControlHealthBadge,
+  ControlMetricCard,
+  ControlPageHeader,
+  ControlTable,
+  type ControlColumn,
+} from "../../components/control";
+import type { ControlHealth } from "../../components/control/types";
+
+type LifecycleStage =
+  | "COMMITTED"
+  | "VRF_PENDING"
+  | "VRF_FULFILLED"
+  | "DECK_BATCH_REGISTERED"
+  | "DEGRADED"
+  | "FAILED";
 
 type RandomnessPayload = {
-  readOnly: boolean;
-  note?: string;
-  statusCounts: Record<string, number>;
+  lifecycleCounts: Record<LifecycleStage, number>;
   stalePendingCount: number;
   epochs: Array<{
-    session_id: string;
-    epoch_id: string;
-    dealer_root: string;
+    sessionId: string;
+    epochId: string;
+    lifecycle: LifecycleStage;
     status: string;
     health: string;
-    vrf_request_id: string | null;
-    fulfill_tx: string | null;
-    secret_count: number | null;
-    session_status: string | null;
-    created_at: string;
-    fulfilled_at: string | null;
+    dealerRoot: string;
+    vrfRequestId: string | null;
+    requestBlock: string | null;
+    fulfillmentBlock: string | null;
+    deckBatchRoot: string | null;
+    attestationState: string;
+    secretCount: number | null;
+    createdAt: string;
   }>;
   recentChainEvents: Array<{
-    chain_id: number;
-    event_name: string;
-    tx_hash: string;
-    block_number: string;
-    created_at: string;
-  }>;
-  dealerCommitments: Array<{
-    session_id: string;
-    dealer_root: string;
-    secret_count: number;
-    revealed_after_settlement: boolean;
-    created_at: string;
+    eventName: string;
+    blockNumber: string;
+    txHash: string;
+    createdAt: string;
   }>;
 };
 
-function badge(health: string): string {
-  if (health === "healthy") return "badge-ok";
-  if (health === "pending" || health === "stale") return "badge-warn";
-  return "badge-err";
+function lifecycleHealth(stage: LifecycleStage): ControlHealth {
+  if (stage === "DECK_BATCH_REGISTERED") return "HEALTHY";
+  if (stage === "VRF_FULFILLED" || stage === "COMMITTED" || stage === "VRF_PENDING") return "PENDING";
+  if (stage === "DEGRADED") return "STALE";
+  if (stage === "FAILED") return "CRITICAL";
+  return "UNAVAILABLE";
 }
+
+const LIFECYCLE_ORDER: LifecycleStage[] = [
+  "COMMITTED",
+  "VRF_PENDING",
+  "VRF_FULFILLED",
+  "DECK_BATCH_REGISTERED",
+  "DEGRADED",
+  "FAILED",
+];
+
+const epochColumns: ControlColumn<RandomnessPayload["epochs"][number]>[] = [
+  {
+    key: "session",
+    header: "Session",
+    mono: true,
+    render: (e) => (
+      <Link href={`/sessions/${encodeURIComponent(e.sessionId)}`}>{e.sessionId.slice(0, 12)}…</Link>
+    ),
+  },
+  {
+    key: "lifecycle",
+    header: "Lifecycle",
+    render: (e) => (
+      <ControlHealthBadge status={lifecycleHealth(e.lifecycle)} label={e.lifecycle} />
+    ),
+  },
+  { key: "vrf", header: "VRF req", mono: true, render: (e) => e.vrfRequestId ?? "—" },
+  { key: "reqBlk", header: "Req blk", render: (e) => e.requestBlock ?? "—" },
+  { key: "fulBlk", header: "Ful blk", render: (e) => e.fulfillmentBlock ?? "—" },
+  {
+    key: "deck",
+    header: "Deck batch",
+    mono: true,
+    render: (e) => (e.deckBatchRoot ? `${e.deckBatchRoot.slice(0, 10)}…` : "—"),
+  },
+  { key: "attest", header: "Attestation", render: (e) => e.attestationState },
+  { key: "created", header: "Created", render: (e) => new Date(e.createdAt).toLocaleString() },
+];
 
 export default async function RandomnessPage() {
   let data: RandomnessPayload | null = null;
@@ -50,109 +98,72 @@ export default async function RandomnessPage() {
     error = e instanceof Error ? e.message : "fetch failed";
   }
 
-  const counts = data?.statusCounts ?? {};
+  const globalHealth: ControlHealth =
+    (data?.lifecycleCounts.FAILED ?? 0) > 0
+      ? "CRITICAL"
+      : (data?.stalePendingCount ?? 0) > 0
+        ? "STALE"
+        : data
+          ? "HEALTHY"
+          : "UNAVAILABLE";
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold">Randomness / dealer</h1>
-        <p className="muted text-sm mt-1">
-          Epoch commit → VRF → deck-batch health. Public roots only — no enclave private keys.
-        </p>
-      </div>
+    <div className="space-y-6">
+      <ControlPageHeader
+        title="Randomness"
+        description="Commit → VRF → deck batch → attestation. Public roots only — no dealer private keys."
+        status={globalHealth}
+      />
+
       {error && <div className="card badge-err text-sm">{error}</div>}
-      {data?.note && <p className="muted text-xs">{data.note}</p>}
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        {["committed", "requested", "fulfilled", "failed"].map((k) => (
-          <div key={k} className="card">
-            <div className="muted text-xs uppercase mb-1">{k}</div>
-            <div className="text-2xl">{counts[k] ?? 0}</div>
+      {data && (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {LIFECYCLE_ORDER.map((stage) => (
+              <ControlMetricCard
+                key={stage}
+                label={stage.replace(/_/g, " ")}
+                value={data.lifecycleCounts[stage] ?? 0}
+                status={lifecycleHealth(stage)}
+              />
+            ))}
+            <ControlMetricCard
+              label="Stale pending (>5m)"
+              value={data.stalePendingCount}
+              status={data.stalePendingCount > 0 ? "STALE" : "HEALTHY"}
+            />
           </div>
-        ))}
-        <div className="card">
-          <div className="muted text-xs uppercase mb-1">Stale pending (&gt;5m)</div>
-          <div className={`text-2xl ${(data?.stalePendingCount ?? 0) > 0 ? "badge-warn" : ""}`}>
-            {data?.stalePendingCount ?? "—"}
+
+          <div className="card">
+            <h2 className="text-sm font-semibold mb-2">Epoch lifecycle</h2>
+            <ControlTable
+              columns={epochColumns}
+              rows={data.epochs}
+              rowKey={(e) => `${e.sessionId}-${e.epochId}`}
+              empty="No randomness epochs yet."
+              stale={data.stalePendingCount > 0}
+            />
           </div>
-        </div>
-      </div>
 
-      <div className="card overflow-x-auto">
-        <h2 className="text-sm font-semibold mb-2">Recent epochs</h2>
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="text-left muted">
-              <th className="pb-2 pr-3">Session</th>
-              <th className="pr-3">Epoch</th>
-              <th className="pr-3">Status</th>
-              <th className="pr-3">Health</th>
-              <th className="pr-3">Secrets</th>
-              <th>Created</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data?.epochs ?? []).map((e) => (
-              <tr key={`${e.session_id}-${e.epoch_id}`} className="border-t border-[#2a2a2a]">
-                <td className="py-2 pr-3 font-mono max-w-[120px] truncate">
-                  <Link href={`/sessions/${encodeURIComponent(e.session_id)}`}>{e.session_id}</Link>
-                </td>
-                <td className="pr-3 font-mono max-w-[100px] truncate" title={e.epoch_id}>
-                  {e.epoch_id}
-                </td>
-                <td className="pr-3">{e.status}</td>
-                <td className={`pr-3 ${badge(e.health)}`}>{e.health}</td>
-                <td className="pr-3">{e.secret_count ?? "—"}</td>
-                <td className="muted">{new Date(e.created_at).toLocaleString()}</td>
-              </tr>
-            ))}
-            {!data?.epochs.length && !error && (
-              <tr>
-                <td colSpan={6} className="py-4 muted">
-                  No randomness epochs yet.
-                </td>
-              </tr>
+          <div className="card">
+            <h2 className="text-sm font-semibold mb-2">Recent chain events</h2>
+            {!data.recentChainEvents.length ? (
+              <p className="muted text-sm">No indexed beacon/coordinator events yet.</p>
+            ) : (
+              <ul className="text-xs space-y-2">
+                {data.recentChainEvents.slice(0, 15).map((ev, i) => (
+                  <li key={`${ev.txHash}-${i}`} className="border-t border-[#2a2a2a] pt-2">
+                    <ControlHealthBadge status="HEALTHY" label={ev.eventName} />{" "}
+                    <span className="muted">block {ev.blockNumber}</span>
+                    <div className="font-mono truncate muted">{ev.txHash}</div>
+                  </li>
+                ))}
+              </ul>
             )}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="card overflow-x-auto">
-          <h2 className="text-sm font-semibold mb-2">Dealer commitments</h2>
-          <ul className="text-xs space-y-2">
-            {(data?.dealerCommitments ?? []).map((d) => (
-              <li key={d.session_id} className="border-t border-[#2a2a2a] pt-2">
-                <Link href={`/sessions/${encodeURIComponent(d.session_id)}`}>{d.session_id}</Link>
-                <div className="muted font-mono truncate">{d.dealer_root}</div>
-                <div className="muted">
-                  secrets {d.secret_count}
-                  {d.revealed_after_settlement ? " · revealed" : ""}
-                </div>
-              </li>
-            ))}
-            {!data?.dealerCommitments.length && (
-              <li className="muted">No dealer commitments.</li>
-            )}
-          </ul>
-        </div>
-
-        <div className="card overflow-x-auto">
-          <h2 className="text-sm font-semibold mb-2">Chain randomness events</h2>
-          <ul className="text-xs space-y-2">
-            {(data?.recentChainEvents ?? []).map((ev, i) => (
-              <li key={`${ev.tx_hash}-${i}`} className="border-t border-[#2a2a2a] pt-2">
-                <span className="badge-ok">{ev.event_name}</span>{" "}
-                <span className="muted">block {ev.block_number}</span>
-                <div className="font-mono truncate muted">{ev.tx_hash}</div>
-              </li>
-            ))}
-            {!data?.recentChainEvents.length && (
-              <li className="muted">No indexed beacon/coordinator events yet.</li>
-            )}
-          </ul>
-        </div>
-      </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

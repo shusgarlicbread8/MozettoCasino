@@ -10,6 +10,7 @@ export * from "./epoch-rotation.js";
 export * from "./epoch-store.js";
 export * from "./outbox.js";
 export * from "./admin-audit.js";
+export * from "./admin-player-ops.js";
 export * from "./proof-batch-inclusion.js";
 export * from "./identity-clusters.js";
 export * from "./linked-accounts.js";

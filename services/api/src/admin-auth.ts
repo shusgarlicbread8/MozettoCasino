@@ -324,6 +324,47 @@ export async function requireAdmin(
   return principal;
 }
 
+/**
+ * Authorize via fine-grained Control capability OR legacy mutate.
+ * Used when risk/support roles have control caps without broad mutate.
+ */
+export async function requireAdminControl(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  controlNeed: ControlCapability,
+): Promise<AdminPrincipal | null> {
+  if (!adminAuthConfigured()) {
+    reply.code(503).send({
+      error: "admin_disabled",
+      message:
+        "Configure ADMIN_SESSION_SECRET for wallet login and/or ADMIN_TOKEN / ADMIN_READ_TOKEN / ADMIN_MUTATE_TOKEN",
+    });
+    return null;
+  }
+
+  const principal = await resolveAdminPrincipal(req);
+  if (!principal) {
+    reply.code(401).send({ error: "unauthorized" });
+    return null;
+  }
+
+  const allowed =
+    roleHasCapability(principal.role, "mutate") ||
+    roleHasControlCapability(principal.role, controlNeed) ||
+    principal.controlCapabilities.includes(controlNeed);
+
+  if (!allowed) {
+    reply.code(403).send({
+      error: "forbidden",
+      message: `${controlNeed} control capability required`,
+      role: principal.role,
+      controlCapabilities: principal.controlCapabilities,
+    });
+    return null;
+  }
+  return principal;
+}
+
 export function requestMeta(req: FastifyRequest): {
   requestId: string | null;
   ip: string | null;

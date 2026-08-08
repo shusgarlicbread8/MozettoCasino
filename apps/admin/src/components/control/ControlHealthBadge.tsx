@@ -7,6 +7,7 @@ const STYLES: Record<ControlHealth, { color: string; bg: string }> = {
   PENDING: { color: "#93c5fd", bg: "rgba(147,197,253,0.12)" },
   STALE: { color: "#fbbf24", bg: "rgba(251,191,36,0.12)" },
   UNAVAILABLE: { color: "#9ca3af", bg: "rgba(156,163,175,0.12)" },
+  DIVERGED: { color: "#fb7185", bg: "rgba(251,113,133,0.14)" },
   UNDER_REVIEW: { color: "#c4b5fd", bg: "rgba(196,181,253,0.14)" },
   PAUSED: { color: "#fb923c", bg: "rgba(251,146,60,0.14)" },
 };

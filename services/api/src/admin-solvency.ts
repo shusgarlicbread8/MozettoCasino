@@ -19,6 +19,11 @@ import {
   solvencyStatusLabel,
   type ViemReadClient,
 } from "@mozetto/reconciliation";
+import {
+  classifyWatchtowerSignal,
+  mapSolvencyControlHealth,
+  type WatchtowerVerificationSignal,
+} from "./admin-ops.js";
 
 const INDEXER_LAG_WARN_BLOCKS = Number(process.env.ADMIN_INDEXER_LAG_WARN_BLOCKS ?? 50);
 const INDEXER_STALE_MS = Number(process.env.ADMIN_INDEXER_STALE_MS ?? 120_000);
@@ -182,11 +187,65 @@ export async function buildSolvencySnapshot(opts?: { chainId?: number }) {
   const thisCursor = cursorRows.find((c) => c.chainId === chainId) ?? null;
   const status = solvencyStatusLabel({ liveOk, criticalFailure, rpcError });
 
+  const [latestWatchtower, latestSnapshot] = await Promise.all([
+    query<{ status: string; created_at: string }>(
+      `select status, created_at from watchtower_reports order by created_at desc limit 1`,
+    ).catch(() => ({ rows: [] as { status: string; created_at: string }[] })),
+    query<{ taken_at: string; difference_usdc: string | null; ok: boolean }>(
+      `select taken_at, difference_usdc::text, ok
+       from vault_balance_snapshots
+       where chain_id = $1
+       order by taken_at desc
+       limit 1`,
+      [chainId],
+    ).catch(() => ({ rows: [] as { taken_at: string; difference_usdc: string | null; ok: boolean }[] })),
+  ]);
+
+  const lastRecon = runs.rows[0] ?? null;
+  const confirmationAnchor = lastRecon?.finished_at ?? latestSnapshot.rows[0]?.taken_at ?? null;
+  const confirmationAgeMs =
+    confirmationAnchor != null
+      ? Math.max(0, Date.now() - new Date(confirmationAnchor).getTime())
+      : null;
+
+  const watchtowerSignal: WatchtowerVerificationSignal = classifyWatchtowerSignal({
+    operatorOk: liveOk,
+    watchtowerStatus: latestWatchtower.rows[0]?.status ?? null,
+  });
+
+  const health = mapSolvencyControlHealth({
+    status,
+    indexerStale: thisCursor?.stale ?? false,
+    indexerLagWarn: thisCursor?.lagWarn ?? false,
+  });
+
+  const reconciliationSource =
+    rpcError || !vault
+      ? ("unavailable" as const)
+      : liveReport
+        ? ("live_rpc" as const)
+        : ("snapshot" as const);
+
   return {
     readOnly: true as const,
     mutatedBalances: false as const,
     status,
+    health,
     generatedAt: new Date().toISOString(),
+    reconciliation: {
+      source: reconciliationSource,
+      sourceBlock: rpcHead,
+      confirmationAgeMs,
+      lastConfirmedAt: confirmationAnchor,
+      differenceUsdc: liveReport?.lockedSkewUsdc ?? latestSnapshot.rows[0]?.difference_usdc ?? null,
+      ok: liveOk,
+      criticalFailure,
+    },
+    watchtower: {
+      signal: watchtowerSignal,
+      lastStatus: latestWatchtower.rows[0]?.status ?? null,
+      lastCheckedAt: latestWatchtower.rows[0]?.created_at ?? null,
+    },
     chain: {
       chainId,
       env,
@@ -229,18 +288,5 @@ export async function buildSolvencySnapshot(opts?: { chainId?: number }) {
       ? !matchmakingFlag.rows[0].enabled
       : null,
     matchmakingFlag: matchmakingFlag.rows[0] ?? null,
-  };
-}
-
-/** Narrow chain/indexer panel without full solvency compare (still read-only). */
-export async function buildChainOpsSnapshot(opts?: { chainId?: number }) {
-  const snap = await buildSolvencySnapshot(opts);
-  return {
-    readOnly: true as const,
-    generatedAt: snap.generatedAt,
-    chain: snap.chain,
-    indexer: snap.indexer,
-    matchmakingPaused: snap.matchmakingPaused,
-    recentReconciliation: snap.history.reconciliationRuns.slice(0, 3),
   };
 }

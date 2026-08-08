@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { adminFetch } from "@/lib/api";
+import { PlayerIntegritySection } from "../../../components/PlayerIntegritySection";
+import { PlayerTimelineSection } from "../../../components/PlayerTimelineSection";
 import { ControlMetricCard } from "../../../components/control/ControlMetricCard";
 import { ControlPageHeader } from "../../../components/control/ControlPageHeader";
 import { ControlTable } from "../../../components/control/ControlTable";
@@ -248,6 +250,10 @@ export default async function PlayerDetailPage({
               empty="No sessions"
             />
           </section>
+
+          <PlayerIntegritySection profileId={p.profileId} canMutate />
+
+          <PlayerTimelineSection profileId={p.profileId} />
 
           {detail?.privacy ? (
             <div className="ctrl-stub-note" style={{ marginTop: 16 }}>

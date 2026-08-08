@@ -5,6 +5,7 @@ export type ControlHealth =
   | "PENDING"
   | "STALE"
   | "UNAVAILABLE"
+  | "DIVERGED"
   | "UNDER_REVIEW"
   | "PAUSED";
 

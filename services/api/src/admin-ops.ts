@@ -107,3 +107,124 @@ export function classifyRandomnessEpoch(input: {
   if (ageSec >= staleAfter) return "stale";
   return "pending";
 }
+
+export type RandomnessLifecycleStage =
+  | "COMMITTED"
+  | "VRF_PENDING"
+  | "VRF_FULFILLED"
+  | "DECK_BATCH_REGISTERED"
+  | "DEGRADED"
+  | "FAILED";
+
+/** MC-082 — map DB + deck-batch signals to operator lifecycle labels. */
+export function mapRandomnessLifecycle(input: {
+  status: string;
+  health: RandomnessEpochHealth;
+  hasDeckBatch: boolean;
+  deckBatchRegisteredOnChain: boolean;
+}): RandomnessLifecycleStage {
+  if (input.status === "failed" || input.health === "failed") return "FAILED";
+  if (input.health === "stale") return "DEGRADED";
+  if (input.hasDeckBatch || input.deckBatchRegisteredOnChain) return "DECK_BATCH_REGISTERED";
+  if (input.status === "fulfilled") return "VRF_FULFILLED";
+  if (input.status === "requested") return "VRF_PENDING";
+  return "COMMITTED";
+}
+
+export type SolvencyControlHealth = "HEALTHY" | "CRITICAL" | "UNAVAILABLE" | "STALE" | "DEGRADED";
+
+export function mapSolvencyControlHealth(input: {
+  status: "PROTOCOL SOLVENT" | "PROTOCOL INSOLVENT" | "UNAVAILABLE";
+  indexerStale?: boolean;
+  indexerLagWarn?: boolean;
+}): SolvencyControlHealth {
+  if (input.status === "UNAVAILABLE") return "UNAVAILABLE";
+  if (input.status === "PROTOCOL INSOLVENT") return "CRITICAL";
+  if (input.indexerStale) return "STALE";
+  if (input.indexerLagWarn) return "DEGRADED";
+  return "HEALTHY";
+}
+
+export type SettlementQueueStage =
+  | "READY_TO_SETTLE"
+  | "WAITING_ATTESTORS"
+  | "SUBMISSION_PENDING"
+  | "CONFIRMING"
+  | "SETTLED"
+  | "RETRY"
+  | "FAILED"
+  | "EMERGENCY_ELIGIBLE";
+
+const DEFAULT_ATTESTOR_QUORUM = Number(process.env.ATTESTOR_MIN_SIGNATURES ?? 3);
+
+/** MC-084 — map proposal + tx rows to operator queue labels. */
+export function mapSettlementQueueStage(input: {
+  proposalStatus: string;
+  attestationCount: number;
+  requiredQuorum?: number;
+  txStatus: string | null;
+  txHash: string | null;
+  txError: string | null;
+  emergencyEligible?: boolean;
+}): SettlementQueueStage {
+  if (input.emergencyEligible) return "EMERGENCY_ELIGIBLE";
+  const quorum = input.requiredQuorum ?? DEFAULT_ATTESTOR_QUORUM;
+  const status = input.proposalStatus;
+  if (status === "confirmed") return "SETTLED";
+  if (status === "rejected" || status === "blocked") return "FAILED";
+  if (input.txError && status === "submitted") return "RETRY";
+  if (status === "submitted") {
+    if (input.txHash && input.txStatus === "pending") return "CONFIRMING";
+    return "SUBMISSION_PENDING";
+  }
+  if (status === "attesting" || (status === "proposed" && input.attestationCount > 0 && input.attestationCount < quorum)) {
+    return "WAITING_ATTESTORS";
+  }
+  if (status === "proposed") return "READY_TO_SETTLE";
+  return "READY_TO_SETTLE";
+}
+
+export type ProofContinuityStatus = "CONTINUOUS" | "GAP_DETECTED" | "UNAVAILABLE";
+
+/** MC-083 — detect missing proof-batch sequence numbers (sorted ascending). */
+export function detectProofBatchGaps(sequences: number[]): {
+  status: ProofContinuityStatus;
+  gaps: Array<{ after: number; missing: number }>;
+} {
+  if (!sequences.length) {
+    return { status: "UNAVAILABLE", gaps: [] };
+  }
+  const sorted = [...sequences].sort((a, b) => a - b);
+  const gaps: Array<{ after: number; missing: number }> = [];
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = sorted[i - 1]!;
+    const cur = sorted[i]!;
+    if (cur - prev > 1) {
+      for (let missing = prev + 1; missing < cur; missing++) {
+        gaps.push({ after: prev, missing });
+      }
+    }
+  }
+  return { status: gaps.length ? "GAP_DETECTED" : "CONTINUOUS", gaps };
+}
+
+export type WatchtowerVerificationSignal =
+  | "OPERATOR_VERIFIED"
+  | "WATCHTOWER_VERIFIED"
+  | "BOTH_VERIFIED"
+  | "MISMATCH"
+  | "PENDING";
+
+export function classifyWatchtowerSignal(input: {
+  operatorOk: boolean | null;
+  watchtowerStatus: string | null;
+}): WatchtowerVerificationSignal {
+  const wtOk = input.watchtowerStatus === "VERIFIED";
+  const wtFailed = input.watchtowerStatus === "FAILED" || input.watchtowerStatus === "ERROR";
+  if (input.operatorOk === null && !input.watchtowerStatus) return "PENDING";
+  if (input.operatorOk === true && wtOk) return "BOTH_VERIFIED";
+  if (input.operatorOk === true && !input.watchtowerStatus) return "OPERATOR_VERIFIED";
+  if (wtOk && input.operatorOk !== true) return "WATCHTOWER_VERIFIED";
+  if (input.operatorOk === false || wtFailed) return "MISMATCH";
+  return "PENDING";
+}

@@ -4,7 +4,12 @@ import {
   checkpointAgeSeconds,
   classifyAiHealth,
   classifyRandomnessEpoch,
+  classifyWatchtowerSignal,
+  detectProofBatchGaps,
   latencyPercentiles,
+  mapRandomnessLifecycle,
+  mapSettlementQueueStage,
+  mapSolvencyControlHealth,
   percentileSorted,
 } from "./admin-ops.js";
 
@@ -99,5 +104,79 @@ describe("checkpointAgeSeconds", () => {
     const now = Date.parse("2026-08-07T12:00:10Z");
     assert.equal(checkpointAgeSeconds("2026-08-07T12:00:00Z", now), 10);
     assert.equal(checkpointAgeSeconds(null, now), null);
+  });
+});
+
+describe("mapRandomnessLifecycle", () => {
+  it("maps stages", () => {
+    assert.equal(
+      mapRandomnessLifecycle({ status: "committed", health: "pending", hasDeckBatch: false, deckBatchRegisteredOnChain: false }),
+      "COMMITTED",
+    );
+    assert.equal(
+      mapRandomnessLifecycle({ status: "requested", health: "pending", hasDeckBatch: false, deckBatchRegisteredOnChain: false }),
+      "VRF_PENDING",
+    );
+    assert.equal(
+      mapRandomnessLifecycle({ status: "fulfilled", health: "healthy", hasDeckBatch: true, deckBatchRegisteredOnChain: false }),
+      "DECK_BATCH_REGISTERED",
+    );
+  });
+});
+
+describe("detectProofBatchGaps", () => {
+  it("finds missing sequences", () => {
+    const r = detectProofBatchGaps([1, 2, 4]);
+    assert.equal(r.status, "GAP_DETECTED");
+    assert.deepEqual(r.gaps, [{ after: 2, missing: 3 }]);
+  });
+
+  it("continuous when no gaps", () => {
+    assert.equal(detectProofBatchGaps([1, 2, 3]).status, "CONTINUOUS");
+    assert.equal(detectProofBatchGaps([]).status, "UNAVAILABLE");
+  });
+});
+
+describe("mapSettlementQueueStage", () => {
+  it("maps confirmed to settled", () => {
+    assert.equal(
+      mapSettlementQueueStage({
+        proposalStatus: "confirmed",
+        attestationCount: 3,
+        txStatus: null,
+        txHash: null,
+        txError: null,
+      }),
+      "SETTLED",
+    );
+  });
+
+  it("maps attesting to waiting", () => {
+    assert.equal(
+      mapSettlementQueueStage({
+        proposalStatus: "attesting",
+        attestationCount: 1,
+        txStatus: null,
+        txHash: null,
+        txError: null,
+      }),
+      "WAITING_ATTESTORS",
+    );
+  });
+});
+
+describe("classifyWatchtowerSignal", () => {
+  it("both verified", () => {
+    assert.equal(
+      classifyWatchtowerSignal({ operatorOk: true, watchtowerStatus: "VERIFIED" }),
+      "BOTH_VERIFIED",
+    );
+  });
+});
+
+describe("mapSolvencyControlHealth", () => {
+  it("maps insolvent to critical", () => {
+    assert.equal(mapSolvencyControlHealth({ status: "PROTOCOL INSOLVENT" }), "CRITICAL");
+    assert.equal(mapSolvencyControlHealth({ status: "PROTOCOL SOLVENT", indexerStale: true }), "STALE");
   });
 });
