@@ -1,5 +1,6 @@
 /** Mock data and tokens for marketing surfaces — presentation only. */
 
+import { CITIES, cityDisplay } from "@mozetto/game-rules/cities";
 import { color, leagueColors } from "@/lib/design-tokens";
 
 export const LC: Record<string, string> = {
@@ -12,7 +13,7 @@ export const LC: Record<string, string> = {
 };
 
 export const landingSteps = [
-  { n: "01", k: "Choose a league", t: "Fixed buy-ins from Bronze upward. Matchmaking finds your seat — you never pick the table or opponent." },
+  { n: "01", k: "Choose a city", t: "The city sets the blinds; you choose a buy-in between 40 and 100 big blinds. Matchmaking finds your seat — you never pick the table or opponent." },
   { n: "02", k: "Tune your AI", t: "Shark, Fox, Professor, or Machine. Bounded traits — not a coding workshop." },
   { n: "03", k: "Find Match", t: "Buy-in locks only when a match forms. One standardized engine. Published capped rake." },
   { n: "04", k: "Watch it play", t: "Your agent acts. You see public state, Energy, and verification — never private reasoning." },
@@ -25,19 +26,25 @@ export const landingGames = [
   { name: "Short Deck", glyph: "♣", color: color.warn, ring: "rgba(232,184,74,.45)", type: "PvP", typeColor: color.accent, art: "radial-gradient(120% 130% at 50% 22%,rgba(232,184,74,.15),#0C1210 72%)", desc: "Sixes through aces. Faster, more volatile, different rankings." },
 ];
 
-export const landingLeagues = [
-  { k: "Bronze", min: "$10", req: "Open to any funded wallet. Where every AI starts.", op: "1" },
-  { k: "Silver", min: "$100", req: "Verified account. The busiest league on the platform.", op: "1" },
-  { k: "Gold", min: "$1,000", req: "Verified, with 50 completed sessions behind you.", op: "1" },
-  { k: "Platinum", min: "$10,000", req: "Rating threshold plus enhanced verification.", op: "1" },
-  { k: "Diamond", min: "$100,000", req: "By invitation, rating or deposit history.", op: ".8" },
-  { k: "Sovereign", min: "$1M", req: "Private onboarding. Institutional and private tables.", op: ".7" },
-].map((l) => ({
-  ...l,
-  color: LC[l.k],
-  border: LC[l.k] + "3D",
-  bg: `linear-gradient(165deg,${LC[l.k]}10,#070A08 68%)`,
-}));
+/**
+ * The real ladder, read straight from the canonical cities so the landing page
+ * cannot drift from what the lobby actually offers. A card shows the blinds —
+ * the city name alone tells a visitor nothing about the price of a seat.
+ */
+export const landingLeagues = CITIES.map((c) => {
+  const d = cityDisplay(c);
+  return {
+    k: d.name,
+    min: d.stakesLabel,
+    req: `NLHE · ${d.modeLabel}. Buy in ${d.buyInLabel} (${d.buyInBbLabel}) — ${
+      d.rated ? "results move Arena Rating" : "no result touches Arena Rating"
+    }.`,
+    op: "1",
+    color: d.color,
+    border: d.color + "3D",
+    bg: `linear-gradient(165deg,${d.color}10,#070A08 68%)`,
+  };
+});
 
 /** Illustrative component labels for marketing — not live session digests. */
 export const landingFairness = [

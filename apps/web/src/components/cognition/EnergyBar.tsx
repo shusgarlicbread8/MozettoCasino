@@ -23,9 +23,12 @@ export function EnergyBar({
   const known = remaining != null && Number.isFinite(remaining);
   const value = known ? Math.max(0, Math.min(perHand, remaining)) : null;
   const pct = value == null ? 0 : Math.round((value / perHand) * 100);
-  const unavailable = !known || signalSource === "unavailable";
+  // Keep the meter when we have a ledger value even if signalSource is stale.
+  const unavailable = !known;
   const low = known && value! <= 20;
   const fill = unavailable ? color.textFaint : low ? color.warn : color.accent;
+  const sourceHint =
+    !unavailable && signalSource === "unavailable" ? null : signalSource === "energy" ? "Ledger" : null;
 
   return (
     <div
@@ -113,6 +116,17 @@ export function EnergyBar({
           }}
         >
           Ledger signal unavailable
+        </div>
+      ) : sourceHint ? (
+        <div
+          style={{
+            fontFamily: font.mono,
+            fontSize: 9,
+            letterSpacing: "0.06em",
+            color: color.textFaint,
+          }}
+        >
+          {sourceHint}
         </div>
       ) : null}
     </div>

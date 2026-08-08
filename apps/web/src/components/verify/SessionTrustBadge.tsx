@@ -180,23 +180,31 @@ export function SessionTrustBadge({
       return;
     }
     let cancelled = false;
-    setLoading(true);
-    setLoadError(null);
-    fetchVerifySession(sessionId)
-      .then((data) => {
-        if (!cancelled) setPayload(data);
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          setPayload(null);
-          setLoadError(e instanceof Error ? e.message : "verify unavailable");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    const load = (initial: boolean) => {
+      if (initial) {
+        setLoading(true);
+        setLoadError(null);
+      }
+      fetchVerifySession(sessionId)
+        .then((data) => {
+          if (!cancelled) setPayload(data);
+        })
+        .catch((e) => {
+          if (!cancelled) {
+            setPayload(null);
+            setLoadError(e instanceof Error ? e.message : "verify unavailable");
+          }
+        })
+        .finally(() => {
+          if (!cancelled && initial) setLoading(false);
+        });
+    };
+    load(true);
+    // Keep header + rail badges in sync while the match is live.
+    const poll = setInterval(() => load(false), 4_000);
     return () => {
       cancelled = true;
+      clearInterval(poll);
     };
   }, [sessionId]);
 

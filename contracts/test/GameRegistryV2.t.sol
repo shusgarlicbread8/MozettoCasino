@@ -35,8 +35,8 @@ contract GameRegistryV2Test is Test {
             minSeatsToStart: 2,
             smallBlind: 0.5e6,
             bigBlind: 1e6,
-            minBuyIn: 100e6,
-            maxBuyIn: 200e6,
+            minBuyIn: 40e6, // 40BB
+            maxBuyIn: 100e6, // 100BB
             engineHash: ENGINE,
             rulesHash: RULES,
             randomnessPolicyId: RAND,
@@ -123,6 +123,50 @@ contract GameRegistryV2Test is Test {
         bad.maxSeats = 2;
         vm.expectRevert(GameRegistryV2.InvalidTemplate.selector);
         registry.registerTemplate(bad);
+    }
+
+    // -------------------------------------------------------------------------
+    // Season 1 buy-in band (40–100BB, derived from the template's big blind)
+    // -------------------------------------------------------------------------
+
+    function test_register_requiresSeason1BuyInBand() public {
+        assertEq(registry.MIN_BUY_IN_BB(), 40);
+        assertEq(registry.MAX_BUY_IN_BB(), 100);
+
+        GameRegistryV2.GameTemplateV2 memory bad = _huBody();
+        bad.minBuyIn = 39e6;
+        vm.expectRevert(GameRegistryV2.InvalidTemplate.selector);
+        registry.registerTemplate(bad);
+
+        bad = _huBody();
+        bad.minBuyIn = 41e6;
+        vm.expectRevert(GameRegistryV2.InvalidTemplate.selector);
+        registry.registerTemplate(bad);
+
+        bad = _huBody();
+        bad.maxBuyIn = 200e6;
+        vm.expectRevert(GameRegistryV2.InvalidTemplate.selector);
+        registry.registerTemplate(bad);
+
+        // Blinds move the band with them: Monaco ($25/$50) is 2000–5000 USDC.
+        GameRegistryV2.GameTemplateV2 memory monaco = _huBody();
+        monaco.templateId = keccak256("NLHE_HU_DIAMOND_V1");
+        monaco.smallBlind = 25e6;
+        monaco.bigBlind = 50e6;
+        monaco.minBuyIn = 2_000e6;
+        monaco.maxBuyIn = 5_000e6;
+        monaco.leagueBit = 32;
+        registry.registerTemplate(monaco);
+
+        (uint256 minBuyIn, uint256 maxBuyIn) = registry.buyInBand(monaco.templateId);
+        assertEq(minBuyIn, 2_000e6);
+        assertEq(maxBuyIn, 5_000e6);
+    }
+
+    function test_buyInBand_unknownTemplateReturnsZero() public view {
+        (uint256 minBuyIn, uint256 maxBuyIn) = registry.buyInBand(keccak256("NEVER_REGISTERED"));
+        assertEq(minBuyIn, 0);
+        assertEq(maxBuyIn, 0);
     }
 
     function test_register_immutability_cannotOverwrite() public {

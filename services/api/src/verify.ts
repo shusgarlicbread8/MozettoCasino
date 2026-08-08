@@ -54,7 +54,25 @@ function normalizeHex(q: string): string {
   return t;
 }
 
-async function loadSessionPayload(sessionId: string) {
+async function resolveOnchainSessionId(idOrTable: string): Promise<string | null> {
+  const exact = await query(`select session_id from onchain_sessions where session_id = $1 limit 1`, [
+    idOrTable,
+  ]);
+  if (exact.rows[0]) return String((exact.rows[0] as { session_id: string }).session_id);
+  // Match Result URLs use table ids (arena_…) — map to the latest on-chain session.
+  const byTable = await query(
+    `select session_id from onchain_sessions where table_id = $1
+     order by coalesce(settled_at, opened_at, created_at) desc nulls last
+     limit 1`,
+    [idOrTable],
+  );
+  if (byTable.rows[0]) return String((byTable.rows[0] as { session_id: string }).session_id);
+  return null;
+}
+
+async function loadSessionPayload(idOrTable: string) {
+  const sessionId = await resolveOnchainSessionId(idOrTable);
+  if (!sessionId) return null;
   const session = await query(
     `select session_id, chain_id, game_template_id, dealer_root, engine_hash, profile_set_hash,
             open_tx_hash, open_block, status, last_sequence, last_balance_root, last_event_root,
@@ -272,16 +290,13 @@ export function registerVerifyRoutes(app: FastifyInstance) {
     }
     const q = looksLikeHex(qRaw) ? normalizeHex(qRaw) : qRaw;
 
-    // Exact session id
-    const bySession = await query(
-      `select session_id from onchain_sessions where session_id = $1 limit 1`,
-      [q],
-    );
-    if (bySession.rows[0]) {
+    // Exact session id or table id (arena_…)
+    const resolvedSession = await resolveOnchainSessionId(q);
+    if (resolvedSession) {
       return {
         kind: "session",
-        sessionId: (bySession.rows[0] as { session_id: string }).session_id,
-        href: `/verify/${encodeURIComponent((bySession.rows[0] as { session_id: string }).session_id)}`,
+        sessionId: resolvedSession,
+        href: `/verify/${encodeURIComponent(resolvedSession)}`,
       };
     }
 

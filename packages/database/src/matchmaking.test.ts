@@ -2,10 +2,18 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   allocateRankedMatch,
+  ARENA_LEAGUES,
+  arenaRakeForLeague,
   assertRankedParticipantIntegrity,
+  stackDepthBb,
+  stakesForCity,
+  resolveBuyIn,
   evaluateOpponentIntegrity,
   filterEligibleCandidates,
   isPairAtCap,
+  isRankedLeague,
+  leagueIsRated,
+  leaguePairCapMode,
   matchesRankedPool,
   MAX_PAIR_MATCHES_PER_DAY,
   PAIR_REDUCED_WEIGHT_UNTIL,
@@ -18,6 +26,19 @@ import {
   type PoolConstraints,
   type TablePoolFields,
 } from "./matchmaking.js";
+import {
+  buyInBand,
+  CITIES,
+  isChipAligned,
+  MAX_BUY_IN_BB,
+  MIN_BUY_IN_BB,
+  minimumReentryAtoms,
+  RAT_HOLE_COOLDOWN_MS,
+  requireCity,
+  requireCityId,
+  usdcToAtoms,
+  validateBuyIn,
+} from "@mozetto/game-rules";
 
 function seqRandom(values: number[]): () => number {
   let i = 0;
@@ -344,13 +365,14 @@ describe("random allocation (WP-040)", () => {
     }
   });
 
-  it("allocateRankedMatch creates table when all candidates rejected", () => {
+  it("ranked allocateRankedMatch hard-blocks pair_capped (create table)", () => {
     const decision = allocateRankedMatch({
       userId: "me",
       format: "hu",
       maxSeats: 2,
       candidates: [{ id: "t1", name: "X", seated: 1, owners: ["rival"] }],
       pairCapped: () => true,
+      pairCapMode: "hard",
       random: () => 0,
     });
     assert.equal(decision.kind, "create_table");
@@ -359,9 +381,247 @@ describe("random allocation (WP-040)", () => {
     }
   });
 
+  it("casual allocateRankedMatch soft-avoids pair_capped then joins", () => {
+    const decision = allocateRankedMatch({
+      userId: "me",
+      format: "hu",
+      maxSeats: 2,
+      candidates: [{ id: "t1", name: "X", seated: 1, owners: ["rival"] }],
+      pairCapped: () => true,
+      pairCapMode: "soft",
+      random: () => 0,
+    });
+    assert.equal(decision.kind, "join_existing");
+    if (decision.kind === "join_existing") {
+      assert.equal(decision.candidate.id, "t1");
+      assert.equal(decision.rejects[0]?.reason, "pair_capped");
+    }
+  });
+
+  it("allocateRankedMatch creates table when candidates are hard-blocked (linked)", () => {
+    const decision = allocateRankedMatch({
+      userId: "me",
+      format: "hu",
+      maxSeats: 2,
+      candidates: [{ id: "t1", name: "X", seated: 1, owners: ["linked"] }],
+      pairCapped: () => false,
+      linkedToUser: (id) => id === "linked",
+      random: () => 0,
+    });
+    assert.equal(decision.kind, "create_table");
+    if (decision.kind === "create_table") {
+      assert.equal(decision.rejects[0]?.reason, "linked_account");
+    }
+  });
+
   it("randomSeatOrder is a permutation", () => {
     const order = randomSeatOrder(6, seqRandom([0.1, 0.2, 0.3, 0.4, 0.5]));
     assert.equal(order.length, 6);
     assert.deepEqual([...order].sort((a, b) => a - b), [0, 1, 2, 3, 4, 5]);
+  });
+});
+
+describe("pair-cap policy follows the mode, not the stakes", () => {
+  it("gives Porto a soft cap and every ranked city a hard one", () => {
+    assert.equal(leaguePairCapMode("casual"), "soft");
+    for (const city of CITIES) {
+      const expected = city.id === "casual" ? "soft" : "hard";
+      assert.equal(leaguePairCapMode(city.id), expected, `${city.name} pair-cap`);
+      assert.equal(leagueIsRated(city.id), city.id !== "casual", `${city.name} rated`);
+    }
+  });
+
+  it("runs ranked from Berlin through Monaco", () => {
+    for (const id of ["bronze", "silver", "gold", "platinum", "diamond"]) {
+      assert.equal(isRankedLeague(id), true, `${id} should be ranked`);
+      assert.equal(leaguePairCapMode(id), "hard", `${id} should hard-cap`);
+    }
+  });
+
+  it("hard-caps a rated rematch but lets a Casual one through", () => {
+    const candidates: MatchCandidate[] = [{ id: "t1", name: "X", seated: 1, owners: ["rival"] }];
+    const ranked = allocateRankedMatch({
+      userId: "me",
+      format: "hu",
+      maxSeats: 2,
+      candidates,
+      pairCapped: () => true,
+      pairCapMode: leaguePairCapMode("bronze"),
+      random: () => 0,
+    });
+    assert.equal(ranked.kind, "create_table");
+
+    const casual = allocateRankedMatch({
+      userId: "me",
+      format: "hu",
+      maxSeats: 2,
+      candidates,
+      pairCapped: () => true,
+      pairCapMode: leaguePairCapMode("casual"),
+      random: () => 0,
+    });
+    assert.equal(casual.kind, "join_existing");
+  });
+
+  it("keeps the soft cap from overriding a linked-account block", () => {
+    const decision = allocateRankedMatch({
+      userId: "me",
+      format: "hu",
+      maxSeats: 2,
+      candidates: [{ id: "t1", name: "X", seated: 1, owners: ["linked"] }],
+      pairCapped: () => true,
+      linkedToUser: (id) => id === "linked",
+      pairCapMode: leaguePairCapMode("casual"),
+      random: () => 0,
+    });
+    assert.equal(decision.kind, "create_table");
+  });
+});
+
+describe("league_id ≡ cityId at the matchmaking boundary", () => {
+  it("reads the city id under either name", () => {
+    for (const city of CITIES) {
+      assert.equal(requireCityId({ cityId: city.id }), city.id);
+      assert.equal(requireCityId({ leagueId: city.id.toUpperCase() }), city.id);
+    }
+  });
+
+  it("exposes both names on the compatibility league view", () => {
+    for (const league of ARENA_LEAGUES) {
+      assert.equal(league.cityId, league.id);
+    }
+  });
+});
+
+describe("cities define the stakes (not the bankroll)", () => {
+  it("derives the buy-in band from the city's big blind, 40-100BB", () => {
+    for (const city of CITIES) {
+      const { bigBlind, minBuyIn, maxBuyIn } = stakesForCity(city.id);
+      assert.equal(stackDepthBb(minBuyIn, bigBlind), MIN_BUY_IN_BB, `${city.id} min`);
+      assert.equal(stackDepthBb(maxBuyIn, bigBlind), MAX_BUY_IN_BB, `${city.id} max`);
+    }
+  });
+
+  it("keeps the small blind at exactly half the big blind", () => {
+    for (const city of CITIES) {
+      const { smallBlind, bigBlind } = stakesForCity(city.id);
+      assert.equal(Number((bigBlind / 2).toFixed(2)), smallBlind, city.id);
+    }
+  });
+
+  it("puts every blind on the cent chip grid", () => {
+    for (const city of CITIES) {
+      assert.ok(isChipAligned(city.smallBlindAtoms), `${city.id} sb`);
+      assert.ok(isChipAligned(city.bigBlindAtoms), `${city.id} bb`);
+    }
+  });
+
+  it("never floors a city's rake cap to zero", () => {
+    for (const city of CITIES) {
+      const { bigBlind } = stakesForCity(city.id);
+      const { rakeCap, rakePct } = arenaRakeForLeague(city.id, bigBlind);
+      assert.ok(rakeCap > 0, `${city.id} rake cap floored to zero at bb=${bigBlind}`);
+      assert.ok(rakePct > 0 && rakePct < 0.1, `${city.id} rake pct out of range`);
+    }
+  });
+
+  it("a whale cannot bring more than 100BB into a small city", () => {
+    const berlin = requireCity("bronze");
+    const band = buyInBand(berlin);
+    const whale = validateBuyIn({
+      city: berlin,
+      requestedAtoms: usdcToAtoms(100_000),
+      availableAtoms: usdcToAtoms(1_000_000),
+    });
+    assert.equal(whale.ok, false);
+    assert.equal(whale.reason, "above_maximum");
+    // The cap is the table's, not the wallet's.
+    assert.equal(band.maxAtoms, usdcToAtoms(100));
+  });
+
+  it("a short bankroll still cannot sit below the 40BB floor", () => {
+    const london = requireCity("silver");
+    const short = validateBuyIn({ city: london, requestedAtoms: usdcToAtoms(10) });
+    assert.equal(short.ok, false);
+    assert.equal(short.reason, "below_minimum");
+  });
+
+  it("accepts any chip-aligned buy-in inside the band", () => {
+    const london = requireCity("silver");
+    for (const usd of [80, 100, 160, 200]) {
+      const v = validateBuyIn({ city: london, requestedAtoms: usdcToAtoms(usd) });
+      assert.equal(v.ok, true, `$${usd} should be legal at ${london.name}`);
+    }
+  });
+
+  it("bankroll can only ever reduce what you may bring, never raise it", () => {
+    const london = requireCity("silver");
+    const poor = validateBuyIn({
+      city: london,
+      requestedAtoms: usdcToAtoms(200),
+      availableAtoms: usdcToAtoms(150),
+    });
+    assert.equal(poor.ok, false);
+    assert.equal(poor.reason, "insufficient_balance");
+  });
+
+  it("defaults an unspecified buy-in to the city maximum", () => {
+    assert.equal(resolveBuyIn("silver", null), 200);
+    assert.equal(resolveBuyIn("bronze", null), 100);
+  });
+
+  it("rejects an out-of-band buy-in at the matchmaking boundary", () => {
+    assert.throws(() => resolveBuyIn("bronze", 100_000), /Maximum buy-in/);
+    assert.throws(() => resolveBuyIn("bronze", 1), /Minimum buy-in/);
+  });
+
+  it("no longer produces the 10BB shove-fest stakes", () => {
+    // Regression: the big blind used to be 10% of the buy-in, so a $100 seat
+    // sat down with exactly 10 big blinds and hands ended preflop all-in.
+    const { bigBlind, maxBuyIn } = stakesForCity("bronze");
+    assert.equal(bigBlind, 1);
+    assert.equal(stackDepthBb(maxBuyIn, bigBlind), 100);
+  });
+});
+
+describe("anti rat-holing", () => {
+  it("forces a quick re-entrant to return with what they left", () => {
+    const city = requireCity("silver");
+    const min = minimumReentryAtoms({
+      city,
+      lastLeavingStackAtoms: usdcToAtoms(180),
+      msSinceLeaving: 60_000,
+    });
+    assert.equal(min, usdcToAtoms(180));
+  });
+
+  it("never demands more than the table maximum", () => {
+    const city = requireCity("silver");
+    const min = minimumReentryAtoms({
+      city,
+      lastLeavingStackAtoms: usdcToAtoms(900),
+      msSinceLeaving: 60_000,
+    });
+    assert.equal(min, buyInBand(city).maxAtoms);
+  });
+
+  it("drops back to the normal floor after the cooldown", () => {
+    const city = requireCity("silver");
+    const min = minimumReentryAtoms({
+      city,
+      lastLeavingStackAtoms: usdcToAtoms(180),
+      msSinceLeaving: RAT_HOLE_COOLDOWN_MS + 1,
+    });
+    assert.equal(min, buyInBand(city).minAtoms);
+  });
+
+  it("ignores a short leaving stack", () => {
+    const city = requireCity("silver");
+    const min = minimumReentryAtoms({
+      city,
+      lastLeavingStackAtoms: usdcToAtoms(50),
+      msSinceLeaving: 1_000,
+    });
+    assert.equal(min, buyInBand(city).minAtoms);
   });
 });

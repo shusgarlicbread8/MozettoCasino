@@ -7,6 +7,8 @@
 
 import {
   applyAction,
+  asChips,
+  chipsToNumber,
   createTable,
   getLegalActions,
   seatPlayer,
@@ -115,10 +117,13 @@ async function runHand(
       eventType: "HOLE_CARDS_DEALT",
       kind: "other",
       street: state.street,
-      pot: state.pot,
+      pot: chipsToNumber(state.pot),
       boardCardCount: state.board.length,
       activeSeats: [0, 1],
-      stacksBySeat: { "0": state.seats[0]!.stack, "1": state.seats[1]!.stack },
+      stacksBySeat: {
+        "0": chipsToNumber(state.seats[0]!.stack),
+        "1": chipsToNumber(state.seats[1]!.stack),
+      },
     },
   });
 
@@ -130,7 +135,7 @@ async function runHand(
     if (!legal.length) break;
 
     const seatState = state.seats.find((s) => s.seatIndex === seat)!;
-    const callAmount = Math.max(0, state.currentBet - seatState.bet);
+    const callAmount = Math.max(0, chipsToNumber(state.currentBet - seatState.bet));
     const profileKey = opts.profiles[seat as 0 | 1] ?? "machine";
 
     const decision: LiveActResponse = await manager.act({
@@ -142,16 +147,16 @@ async function runHand(
       cadenceWait: opts.skipCadence ? "off" : "server",
       legalActions: legal.map((l) => ({
         action: l.action,
-        minAmount: l.minAmount,
-        maxAmount: l.maxAmount,
+        minAmount: l.minAmount != null ? chipsToNumber(l.minAmount) : undefined,
+        maxAmount: l.maxAmount != null ? chipsToNumber(l.maxAmount) : undefined,
       })),
       privateState: { holeCards: seatState.hole ?? [] },
       publicState: {
         board: state.board,
-        pot: state.pot,
+        pot: chipsToNumber(state.pot),
         callAmount,
         street: state.street,
-        stacks: state.seats.map((s) => s.stack),
+        stacks: state.seats.map((s) => chipsToNumber(s.stack)),
         toActSeat: seat,
       },
     });
@@ -174,10 +179,12 @@ async function runHand(
 
     const match = legal.find((l) => l.action === decision.action);
     const action = match?.action ?? legal.find((l) => l.action === "check")?.action ?? legal[0]!.action;
-    let amount = decision.amount ?? match?.minAmount;
+    let amountRaw = decision.amount ?? match?.minAmount;
     if (action === "call" || action === "check" || action === "fold") {
-      amount = legal.find((l) => l.action === action)?.minAmount;
+      amountRaw = legal.find((l) => l.action === action)?.minAmount;
     }
+    const amount =
+      amountRaw == null ? undefined : typeof amountRaw === "bigint" ? chipsToNumber(amountRaw) : Number(amountRaw);
 
     const applied = applyAction(state, action, amount);
     state = applied.state;
@@ -195,10 +202,12 @@ async function runHand(
         street: state.street,
         actorSeat: seat,
         amount: amount ?? 0,
-        pot: state.pot,
+        pot: chipsToNumber(state.pot),
         boardCardCount: state.board.length,
         activeSeats: state.seats.filter((s) => !s.folded && s.playerId).map((s) => s.seatIndex),
-        stacksBySeat: Object.fromEntries(state.seats.map((s) => [String(s.seatIndex), s.stack])),
+        stacksBySeat: Object.fromEntries(
+          state.seats.map((s) => [String(s.seatIndex), chipsToNumber(s.stack)]),
+        ),
         summaryCode: `ACTION_${action.toUpperCase()}`,
       },
     });
@@ -221,10 +230,12 @@ async function runHand(
       eventType: "HAND_SETTLED",
       kind: "hand_end",
       street: "settlement",
-      pot: state.pot,
-      rake: state.rake,
+      pot: chipsToNumber(state.pot),
+      rake: chipsToNumber(state.rake),
       boardCardCount: state.board.length,
-      stacksBySeat: Object.fromEntries(state.seats.map((s) => [String(s.seatIndex), s.stack])),
+      stacksBySeat: Object.fromEntries(
+        state.seats.map((s) => [String(s.seatIndex), chipsToNumber(s.stack)]),
+      ),
     },
   });
 
@@ -236,13 +247,13 @@ async function runHand(
       handId: null,
       actingIndex: null,
       board: [],
-      pot: 0,
+      pot: 0n,
       deck: [],
       winners: [],
       seats: state.seats.map((s) => ({
         ...s,
-        bet: 0,
-        totalBet: 0,
+        bet: 0n,
+        totalBet: 0n,
         folded: false,
         allIn: false,
         hole: undefined,
@@ -299,16 +310,18 @@ export async function runLiveTableSmoke(
   const notes: string[] = [];
 
   for (let h = 1; h <= hands; h += 1) {
-    const live = state.seats.filter((s) => s.playerId && s.stack > 0);
+    const live = state.seats.filter((s) => s.playerId && s.stack > 0n);
     if (live.length < 2) {
       notes.push(`stopped early at hand ${h}: insufficient stacks`);
       break;
     }
     // Top-up busted seats for long runs (smoke continuity).
+    const refill = asChips(stack);
+    const minKeep = asChips(bb * 2);
     state = {
       ...state,
       seats: state.seats.map((s) =>
-        s.playerId && s.stack < bb * 2 ? { ...s, stack: stack } : s,
+        s.playerId && s.stack < minKeep ? { ...s, stack: refill } : s,
       ),
     };
 
@@ -331,7 +344,7 @@ export async function runLiveTableSmoke(
         handNumber: h,
         handId,
         actions: result.actions,
-        stacks: state.seats.map((s) => s.stack),
+        stacks: state.seats.map((s) => chipsToNumber(s.stack)),
       });
     } catch (err) {
       notes.push(
@@ -353,7 +366,7 @@ export async function runLiveTableSmoke(
     fallbackActions,
     illegalFallbacks,
     avgActionsPerHand: handsCompleted ? totalActions / handsCompleted : 0,
-    finalStacks: state.seats.map((s) => s.stack),
+    finalStacks: state.seats.map((s) => chipsToNumber(s.stack)),
     metrics,
     sampleDecisions: sampleDecisions.slice(0, 12),
     ok,

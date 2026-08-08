@@ -1,6 +1,13 @@
 import { color } from "@/lib/design-tokens";
 import { money } from "@/lib/session";
 
+/** Engine seats are 0-based; players always see Seat 1…N. */
+export function displaySeat(seatIndex: unknown): string {
+  const n = Number(seatIndex);
+  if (!Number.isFinite(n) || n < 0) return "—";
+  return String(Math.floor(n) + 1);
+}
+
 export function formatActionLabel(action: string, amount?: number): { text: string; color: string } {
   const a = String(action || "").toLowerCase();
   if (a === "fold") return { text: "FOLD", color: color.danger };

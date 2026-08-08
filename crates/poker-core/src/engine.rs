@@ -191,6 +191,21 @@ pub fn uncalled_bet_amount(seats: &[SeatState], winner_seat: u8) -> Chips {
     (winner.bet - max_other).max(0)
 }
 
+/// Uncalled portion of the top totalBet that nobody covered (showdown path).
+pub fn uncalled_from_totals(seats: &[SeatState]) -> Chips {
+    let mut live: Vec<&SeatState> = seats.iter().filter(|s| s.total_bet > 0).collect();
+    if live.len() < 2 {
+        return 0;
+    }
+    live.sort_by(|a, b| b.total_bet.cmp(&a.total_bet));
+    let top = live[0];
+    let second = live[1];
+    if top.folded || top.total_bet == second.total_bet {
+        return 0;
+    }
+    (top.total_bet - second.total_bet).max(0)
+}
+
 pub fn start_hand(
     state: HoldemState,
     server_seed: impl Into<String>,
@@ -381,37 +396,17 @@ pub fn settle_showdown(state: HoldemState) -> Transition {
     let layers = build_pots_impl(&state.seats);
     let total_pot: Chips = layers.iter().map(|p| p.amount).sum();
     let pot_pool = if total_pot > 0 { total_pot } else { state.pot };
-    let rake = state.config.compute_rake(pot_pool, live.len());
-
-    let mut rake_left = rake;
-    let net_layers: Vec<PotLayer> = layers
-        .iter()
-        .enumerate()
-        .map(|(i, layer)| {
-            let layer_rake = if rake > 0 && pot_pool > 0 {
-                if i + 1 == layers.len() {
-                    rake_left
-                } else {
-                    let lr = (layer.amount * rake) / pot_pool;
-                    rake_left -= lr;
-                    lr
-                }
-            } else {
-                0
-            };
-            PotLayer {
-                amount: layer.amount - layer_rake,
-                contributors: layer.contributors.clone(),
-                eligible: layer.eligible.clone(),
-            }
-        })
-        .collect();
+    // NLHE_ENGINE_RC1: uncalled chips stay in pot layers but are excluded from rake.
+    let uncalled = uncalled_from_totals(&state.seats);
+    let eligible_for_rake = (pot_pool - uncalled).max(0);
+    let rake = state.config.compute_rake(eligible_for_rake, live.len());
 
     let mut seats = state.seats.clone();
     let mut won: Vec<(u8, Chips, String)> = Vec::new();
     let button_order = seats_after_button(state.button, state.seats.len());
 
-    for layer in &net_layers {
+    // Award gross pot layers, then deduct rake from winners (net-on-award).
+    for layer in &layers {
         if layer.amount <= 0 || layer.eligible.is_empty() {
             continue;
         }
@@ -422,7 +417,6 @@ pub fn settle_showdown(state: HoldemState) -> Transition {
         if contenders.is_empty() {
             continue;
         }
-        // Highest score first (compare_scores(b,a) > 0 ⇒ b stronger).
         contenders.sort_by(|a, b| compare_scores(&b.3, &a.3).cmp(&0));
         let top = &contenders[0].3;
         let mut winners: Vec<&(u8, [Card; 2], String, Vec<u8>)> = contenders
@@ -454,6 +448,69 @@ pub fn settle_showdown(state: HoldemState) -> Transition {
                 prev.1 += amount;
             } else {
                 won.push((w.0, amount, w.2.clone()));
+            }
+        }
+    }
+
+    // Deduct rake proportional to gross awards; never take more than a seat won.
+    if rake > 0 && !won.is_empty() {
+        let total_gross: Chips = won.iter().map(|(_, a, _)| *a).sum();
+        if total_gross > 0 {
+            let mut ordered = won.clone();
+            ordered.sort_by(|a, b| {
+                let ia = button_order
+                    .iter()
+                    .position(|&x| x == a.0)
+                    .unwrap_or(usize::MAX);
+                let ib = button_order
+                    .iter()
+                    .position(|&x| x == b.0)
+                    .unwrap_or(usize::MAX);
+                ia.cmp(&ib)
+            });
+            let mut allocated: Chips = 0;
+            let mut tabs: Vec<(u8, Chips)> = Vec::new();
+            for (i, (seat_idx, gross, _)) in ordered.iter().enumerate() {
+                let mut share = if i + 1 == ordered.len() {
+                    rake - allocated
+                } else {
+                    (*gross * rake) / total_gross
+                };
+                if share > *gross {
+                    share = *gross;
+                }
+                tabs.push((*seat_idx, share));
+                allocated += share;
+            }
+            let mut remaining = rake.saturating_sub(allocated);
+            if remaining > 0 {
+                for (seat_idx, gross, _) in &ordered {
+                    if remaining == 0 {
+                        break;
+                    }
+                    let have = tabs
+                        .iter()
+                        .find(|(i, _)| i == seat_idx)
+                        .map(|(_, t)| *t)
+                        .unwrap_or(0);
+                    let room = gross.saturating_sub(have);
+                    if room == 0 {
+                        continue;
+                    }
+                    let add = remaining.min(room);
+                    if let Some(t) = tabs.iter_mut().find(|(i, _)| i == seat_idx) {
+                        t.1 += add;
+                    }
+                    remaining -= add;
+                }
+            }
+            for (seat_idx, tab) in &tabs {
+                if let Some(seat) = seats.iter_mut().find(|s| s.seat_index == *seat_idx) {
+                    seat.stack = seat.stack.saturating_sub(*tab);
+                }
+                if let Some(w) = won.iter_mut().find(|(i, _, _)| i == seat_idx) {
+                    w.1 = w.1.saturating_sub(*tab);
+                }
             }
         }
     }

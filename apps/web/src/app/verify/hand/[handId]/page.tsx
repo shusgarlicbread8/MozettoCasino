@@ -5,6 +5,7 @@ import { HashRow } from "@/components/verify/HashRow";
 import { Section, VerifyShell } from "@/components/verify/VerifyShell";
 import { StatusBadge } from "@/components/verify/StatusBadge";
 import { explorerTx, fetchVerifyHand, shortHash } from "@/lib/verify/api";
+import { isGameVerified } from "@/lib/verify/trust";
 
 export async function generateMetadata({ params }: { params: Promise<{ handId: string }> }) {
   const { handId } = await params;
@@ -30,11 +31,19 @@ export default async function VerifyHandPage({ params }: { params: Promise<{ han
   }
 
   const chainId = data?.session?.chainId ?? 0;
+  const verified = isGameVerified(data?.session?.result);
+  const chainLabel =
+    chainId === 31337 ? "Local Anvil" : chainId === 84532 ? "Base Sepolia" : chainId === 8453 ? "Base" : `Chain ${chainId}`;
 
   return (
     <VerifyShell
       title={`Hand #${data?.handNumber ?? "?"}`}
-      subtitle={<span className="font-mono break-all text-[13px]">{data?.handId ?? handId}</span>}
+      subtitle={
+        <span>
+          Plain-language check for this hand ·{" "}
+          <span className="font-mono break-all text-[13px]">{data?.handId ?? handId}</span>
+        </span>
+      }
     >
       {error ? <p className="mb-6 text-sm text-red-400">{error}</p> : null}
 
@@ -44,12 +53,48 @@ export default async function VerifyHandPage({ params }: { params: Promise<{ han
             <StatusBadge result={data.session.result} legacy={data.session.status} />
           ) : null}
 
-          <p className="text-[#8A8A8A]">
-            Session{" "}
-            <Link href={data.sessionHref} className="font-mono">
-              {shortHash(data.sessionId, 14, 8)}
-            </Link>
-          </p>
+          <div className="rounded-xl border border-white/[0.08] bg-white/[0.02] px-4 py-4 space-y-2">
+            <p className="text-[15px] leading-relaxed text-[#E8EEE9]">
+              {verified
+                ? "You can trust this hand’s public outcome for settlement: stacks, attestors, and a chain checkpoint are in place."
+                : "This hand is not fully verified yet — settlement or chain anchors may still be publishing."}
+            </p>
+            <p className="text-[13px] leading-relaxed text-[#8A8A8A]">
+              Network: <span className="text-[#cfcfcf]">{chainLabel}</span>
+              {chainId === 31337
+                ? ". Local Anvil uses committed dealer seeds (not live Chainlink VRF) and does not publish L1 proof-batches — that is expected and still matches the Season 1 Anvil plan."
+                : "."}{" "}
+              Session{" "}
+              <Link href={data.sessionHref} className="font-mono text-[#9AE6C4]">
+                {shortHash(data.sessionId, 14, 8)}
+              </Link>
+            </p>
+          </div>
+
+          <Section title="In plain English">
+            <ol className="list-decimal space-y-2 pl-5 text-[13.5px] leading-relaxed text-[#cfcfcf]">
+              <li>Both players locked buy-ins into the vault before play.</li>
+              <li>This hand’s public actions were hashed into a hand digest.</li>
+              <li>
+                {data.checkpoint?.tx_hash
+                  ? "A checkpoint transaction on-chain anchors those digests."
+                  : "Waiting for a checkpoint transaction to anchor digests."}
+              </li>
+              <li>
+                {data.session?.settlement?.txHash
+                  ? "Settlement paid final stacks (and platform fees) on-chain."
+                  : "Settlement has not been confirmed on-chain yet."}
+              </li>
+            </ol>
+          </Section>
+
+          <Section title="Trust checklist">
+            {data.session?.components ? (
+              <ComponentGrid components={data.session.components} friendly />
+            ) : (
+              <p className="text-[#8A8A8A]">Session components not loaded.</p>
+            )}
+          </Section>
 
           <Section title="Hand digests">
             <dl>
@@ -75,17 +120,14 @@ export default async function VerifyHandPage({ params }: { params: Promise<{ han
             </dl>
           </Section>
 
-          {data.session?.components ? (
-            <Section title="Session components">
-              <ComponentGrid components={data.session.components} />
-            </Section>
-          ) : null}
-
           <Section title="Public events">
+            <p className="mb-3 text-[12.5px] text-[#8A8A8A]">
+              Technical log of what the table published for this hand (actions, streets, showdown).
+            </p>
             {data.events.length === 0 ? (
               <p className="text-[#8A8A8A]">No canonical events for this hand.</p>
             ) : (
-              <ul className="space-y-1.5 font-mono text-[12px] text-[#9A9A9A]">
+              <ul className="max-h-80 space-y-1.5 overflow-y-auto font-mono text-[12px] text-[#9A9A9A]">
                 {data.events.map((e) => (
                   <li key={`${e.sequence}-${e.event_hash}`} className="break-all">
                     #{e.sequence} {e.event_type} {shortHash(e.event_hash)}
@@ -123,7 +165,7 @@ export default async function VerifyHandPage({ params }: { params: Promise<{ han
             </Section>
           ) : null}
 
-          <Section title="Local verification">
+          <Section title="Advanced / local tools">
             <CliEvidence hints={data.session?.localVerify} />
           </Section>
         </div>

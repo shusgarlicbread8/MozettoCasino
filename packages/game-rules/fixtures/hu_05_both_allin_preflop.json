@@ -42,7 +42,7 @@
         "street": "preflop",
         "pot": 600,
         "actingIndex": 1,
-        "stateHash": "0xe295ea4c57969fd7b58fb4601624823a25ca3317b2b38a5205014cf7133cf856",
+        "stateHash": "0xdd4dedb59b7b94e09236eacacb7c054bb27a983a90f0c35137b11c6a3b5a72df",
         "legalActionsHash": "0xf2edf41744e51ace09a8463dcbff96f806b013bba37fbfd6d5e4aa6211f72f63"
       }
     },
@@ -55,7 +55,7 @@
       "expect": {
         "actingIndex": null,
         "pot": 1000,
-        "stateHash": "0xafc28faca32c7f3dd3b7b2ad7bbc5d41f0b2d2ca0bfe3f91d506227412921526"
+        "stateHash": "0x914b7dece1250aa739d99f4a5d2abef12435741875bd33a6af623ba59515073c"
       }
     },
     {
@@ -76,7 +76,7 @@
         "street": "settlement",
         "pot": 0,
         "rake": 0,
-        "stateHash": "0x6dee69e252e8363c8ce61c8735b466a06178d51576b6a5639ed66f60e5ab92ef"
+        "stateHash": "0x3ffc9fe23919660160f289b0cf14e2ce470073e0cdc6638f604b01b857804671"
       }
     }
   ]

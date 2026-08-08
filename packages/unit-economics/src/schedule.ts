@@ -53,7 +53,7 @@ export function season1RakeParams(
   const row = season1Row(league);
   return {
     rakeBps: row.rakeBps,
-    rakeCap: rakeCapFromBb(bigBlindChips, row.rakeCapBb),
+    rakeCap: Number(rakeCapFromBb(bigBlindChips, row.rakeCapBb)),
     status: SEASON1_SCHEDULE_STATUS,
   };
 }

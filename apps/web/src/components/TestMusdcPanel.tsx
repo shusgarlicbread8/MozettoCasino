@@ -22,7 +22,7 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
   const wallet = useWalletBrand();
-  const { me } = useSession();
+  const { me, refresh } = useSession();
   const balances = useMozettoBalances();
   const [amount, setAmount] = useState(DEFAULT_FAUCET);
   const [busy, setBusy] = useState(false);
@@ -82,6 +82,9 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
         setMsg(
           `Confirmed on Anvil: ${res.amountUsdc.toLocaleString()} mUSDC minted. Arena Account balance is now ${res.accountBalanceUsdc.toLocaleString()} mUSDC.`,
         );
+        // Factory redeploys move the CREATE2 account — refresh session so chrome
+        // stops reading the stale $0 address.
+        await refresh();
       } else {
         if (!asset?.usdc || !address || !publicClient) {
           throw new Error("Mock USDC address or wallet provider missing.");
@@ -110,6 +113,7 @@ export function TestMusdcPanel({ onUpdated }: { onUpdated?: () => void }) {
         );
       }
       balances.refetch();
+      await refresh();
       onUpdated?.();
     } catch (e) {
       const message =

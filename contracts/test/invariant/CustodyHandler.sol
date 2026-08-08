@@ -131,7 +131,9 @@ contract CustodyHandler is Test {
     /// @notice Open a V2 HU session (mutable epoch; top-up still allowed).
     function openV2Session(uint256 seed, uint256 buyInSeed) external {
         (uint256 a, uint256 b) = _twoPlayers(seed);
-        uint256 buyIn = bound(buyInSeed, ONE, 200 * ONE);
+        // Stay inside the registered template's 40–100BB band so the fuzzer explores
+        // custody accounting rather than bouncing off ArenaVaultV2.BuyInOutOfBand.
+        uint256 buyIn = bound(buyInSeed, 240 * ONE, 500 * ONE);
         if (!_canLock(accounts[a], buyIn) || !_canLock(accounts[b], buyIn)) return;
 
         bytes32 sid = keccak256(abi.encodePacked("v2", seed, nextTicketNonce, block.timestamp));
@@ -164,7 +166,7 @@ contract CustodyHandler is Test {
     /// @notice Atomic V3 seal-and-fund (immutable participants for the epoch).
     function sealV3Session(uint256 seed, uint256 buyInSeed) external {
         (uint256 a, uint256 b) = _twoPlayers(seed);
-        uint256 buyIn = bound(buyInSeed, ONE, 200 * ONE);
+        uint256 buyIn = bound(buyInSeed, 240 * ONE, 500 * ONE);
         if (!_canLock(accounts[a], buyIn) || !_canLock(accounts[b], buyIn)) return;
 
         ArenaVaultV2.SeatTicketV3[] memory tickets = new ArenaVaultV2.SeatTicketV3[](2);

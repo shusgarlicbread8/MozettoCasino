@@ -25,8 +25,9 @@ Season 1 user-visible fee: **poker rake only**. Mozetto pays AI inference, relay
 | No rake from uncalled bets | **DONE (WP-109)** — `foldWin` returns uncalled street bet; rake uses eligible pot only | Preflop still noFlopNoDrop (rake 0) |
 | Side-pot rake method | `allocateSidePotRake` — proportional floor, remainder last layer | Matches prior TS/Rust engine behavior |
 | Provisional league schedule | `@mozetto/unit-economics` `SEASON1_RAKE_SCHEDULE` | Status **`hypothesis`** — not auto-mainnet |
-| Hand conservation | `checkHandConservation` + engine fixtures / tests | `sum(before) == sum(after) + handRake` |
+| Hand conservation (net stacks) | `checkHandConservation` | `sum(before) == sum(afterNet) + handRake` |
 | Session conservation | `checkSessionConservation`; `root-builder` `checkConservation`; attestors refuse broken digests | `opening == payouts + totalRake` |
+| Collect at hand settle | Net-on-award in `holdem.ts`; `sessionRake` accumulates; `applyRakeClawback` is a no-op | Stacks always equal money belonging to the seat |
 | No AI fee in conservation | Settlement identity has only `totalRake` | Energy is compute budget, not USDC |
 | Internal COGS / contribution | `computeContribution` / `buildRevenueTransparencyReport` + WP-111 ledger | Live Groq tokens + placeholders; see `docs/WP-111_ECONOMICS_INSTRUMENTATION.md` |
 | 100 Energy cost guard | Energy ledger WP-074 + `SEASON1_AI_COST_BANDS_USD_MICRO` | Hypotheses; never silent mid-season Energy cut |

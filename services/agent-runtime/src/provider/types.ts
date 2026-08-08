@@ -25,6 +25,24 @@ export interface DecisionObservation {
   seat?: number;
   handId?: string;
   sessionId?: string;
+  /**
+   * Deterministic decision facts computed by the poker intelligence layer
+   * (`buildDecisionFacts` in @mozetto/game-rules): pot odds, SPR, position,
+   * effective stack, opponent range model + equity against it, and candidate
+   * sizings with their exact price geometry.
+   *
+   * The model MUST treat these as given and MUST NOT recompute them.
+   */
+  facts?: Record<string, unknown>;
+  /** Pot / SPR hints for Energy importance selection (structured only). */
+  potBb?: number;
+  spr?: number;
+  effectiveStackBb?: number;
+  /**
+   * Live AgentState summary wired into final decisions (street plan + opponent
+   * models). Never includes CoT or opponent Energy.
+   */
+  agentState?: Record<string, unknown>;
 }
 
 export interface DecisionRequest {

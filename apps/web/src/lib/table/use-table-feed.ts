@@ -10,7 +10,7 @@ import {
   parseAiCognitionMessage,
   type AiCognitionStatus,
 } from "@/lib/ai-cognition";
-import { formatActionLabel, type LogRow } from "@/lib/table/format";
+import { displaySeat, formatActionLabel, type LogRow } from "@/lib/table/format";
 import type { LiveTableState, SeatActionFx, SeatMeta, TableMeta, WinFx } from "@/lib/table/types";
 import { parseServerWsData, WS_CLIENT } from "@/lib/table/ws-client";
 import { presentationFromTableAction } from "@/lib/table-presentation";
@@ -25,9 +25,10 @@ type Options = {
   onMetaRefresh?: () => void;
 };
 
-function emptySeatsFromMeta(seats: SeatMeta[]): LiveTableState["seats"] {
+function emptySeatsFromMeta(seats: SeatMeta[], maxSeats = 6): LiveTableState["seats"] {
   const byIndex = new Map(seats.map((s) => [Number(s.seat_index), s]));
-  return Array.from({ length: 6 }, (_, seatIndex) => {
+  const count = Math.max(2, Math.min(6, Math.floor(Number(maxSeats) || 6)));
+  return Array.from({ length: count }, (_, seatIndex) => {
     const s = byIndex.get(seatIndex);
     const occupied = s?.status === "occupied" && s?.owner_id;
     return {
@@ -53,6 +54,7 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
   const [winFx, setWinFx] = useState<WinFx | null>(null);
   const [wsRef, setWsRef] = useState<WebSocket | null>(null);
   const [connecting, setConnecting] = useState(true);
+  const [feedError, setFeedError] = useState<string | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
   /** WP-126: owner energy from energy_summary / ai_cognition when present. */
   const [ownerEnergyPct, setOwnerEnergyPct] = useState<number | null>(null);
@@ -61,15 +63,25 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
     emptyAiCognitionStatus(),
   );
   const liveRef = useRef<LiveTableState | null>(null);
+  const metaRef = useRef<TableMeta | null>(null);
+  const onMetaRefreshRef = useRef(onMetaRefresh);
+  const subscribedRef = useRef(false);
+  /** Hand-local public-action index (#1…N); resets each HAND_STARTED. */
+  const handLogSeqRef = useRef(0);
   liveRef.current = live;
+  metaRef.current = meta;
+  onMetaRefreshRef.current = onMetaRefresh;
 
   const refreshMeta = useCallback(async () => {
     try {
       const r = await api<{ table: TableMeta; seats: SeatMeta[] }>(`/v1/tables/${tableId}`);
       setMeta(r.table);
       setSeatMeta(r.seats || []);
+      setFeedError(null);
       // REST snapshot is enough to leave "CONNECTING" — WS subscribe still preferred for live.
+      // Do not flip back to CONNECTING on WS reconnect once table identity is known.
       setConnecting(false);
+      const maxSeats = Number(r.table?.max_seats ?? 6);
       setLive((prev) => {
         if (prev?.handId || (prev && prev.street !== "waiting")) return prev;
         return {
@@ -77,7 +89,7 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
           street: "waiting",
           pot: 0,
           board: [],
-          seats: emptySeatsFromMeta(r.seats || []),
+          seats: emptySeatsFromMeta(r.seats || [], maxSeats),
           actingIndex: null,
           deadlineAt: null,
           holeCards: [],
@@ -89,22 +101,31 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
           allInRunout: false,
           myHand: null,
           myEquity: null,
+          feesOnTab: 0,
         };
       });
-      onMetaRefresh?.();
-    } catch {
-      /* offline */
+      onMetaRefreshRef.current?.();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "table_meta_failed";
+      setFeedError(msg);
     }
-  }, [tableId, onMetaRefresh]);
+  }, [tableId]);
 
+  // Reset + poll only when the table id changes — never when parent re-renders.
   useEffect(() => {
     setLive(null);
     setMeta(null);
     setSeatMeta([]);
     setLog([]);
+    setFeedError(null);
+    setConnecting(true);
     setOwnerEnergyPct(null);
     setOwnerCognition(emptyAiCognitionStatus());
     void refreshMeta();
+    const poll = setInterval(() => {
+      void refreshMeta();
+    }, 4_000);
+    return () => clearInterval(poll);
   }, [tableId, refreshMeta]);
 
   useEffect(() => {
@@ -140,6 +161,7 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
     function subscribe() {
       if (closed || !ws || ws.readyState !== WebSocket.OPEN) return;
       subscribed = true;
+      subscribedRef.current = true;
       ws.send(JSON.stringify({ type: WS_CLIENT.subscribe_table, tableId, role }));
       setConnecting(false);
     }
@@ -150,8 +172,12 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
 
     async function connect() {
       subscribed = false;
+      subscribedRef.current = false;
       identityBound = false;
-      setConnecting(true);
+      // Only show CONNECTING before the first usable REST/WS snapshot — never thrash on reconnect.
+      if (!metaRef.current && !liveRef.current) {
+        setConnecting(true);
+      }
       const token = await getAccessToken();
       ws = new WebSocket(gameWsUrl());
       setWsRef(ws);
@@ -203,15 +229,29 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
               Math.round((cog.energyRemaining / (cog.energyPerHand || ENERGY_PER_HAND)) * 100),
             );
           }
-          setOwnerCognition((prev) => ({
-            ...cog,
-            energyRemaining: cog.energyRemaining ?? prev.energyRemaining,
-            seat: cog.seat ?? prev.seat,
-          }));
+          setOwnerCognition((prev) => {
+            const incoming = cog.publicThinkingLog ?? [];
+            const mergedLog =
+              incoming.length > 0
+                ? [
+                    ...(prev.publicThinkingLog ?? []).filter((l) => !incoming.includes(l)),
+                    ...incoming,
+                  ].slice(-12)
+                : prev.publicThinkingLog ?? null;
+            return {
+              ...cog,
+              energyRemaining: cog.energyRemaining ?? prev.energyRemaining,
+              seat: cog.seat ?? prev.seat,
+              publicThinkingLog: mergedLog,
+              publicNarrative: cog.publicNarrative ?? prev.publicNarrative,
+            };
+          });
         }
 
         if (msg.type === "snapshot" && msg.state && typeof msg.state === "object") {
           const state = msg.state as Record<string, unknown>;
+          setConnecting(false);
+          setFeedError(null);
           setLive((prev) => {
             const handId = (state.handId as string | null) ?? null;
             const sameHand = Boolean(prev && handId && prev.handId === handId);
@@ -264,6 +304,7 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
                   : clearReveals
                     ? null
                     : prev?.myEquity ?? null,
+              feesOnTab: Number(state.feesOnTab ?? prev?.feesOnTab ?? 0),
             };
           });
         }
@@ -458,7 +499,16 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
               revealed: prev?.revealed ?? {},
             }));
             setLive((prev) =>
-              prev ? { ...prev, street: "settlement", actingIndex: null, legalActions: [], equity: [], allInRunout: false } : prev,
+              prev
+                ? {
+                    ...prev,
+                    street: "settlement",
+                    actingIndex: null,
+                    legalActions: [],
+                    equity: [],
+                    allInRunout: false,
+                  }
+                : prev,
             );
           }
 
@@ -473,11 +523,12 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
             et === "RUNOUT_REVEALED" ||
             et === "EQUITY_UPDATED" ||
             et === "PLAYER_LEFT" ||
-            et === "PLAYER_JOINED"
+            et === "PLAYER_JOINED" ||
+            et === "MATCH_COMPLETE"
           ) {
             const act =
               et === "HAND_STARTED"
-                ? `HAND #${p.handNumber ?? "?"} · BTN SEAT ${p.button ?? "—"}`
+                ? `HAND #${p.handNumber ?? "?"} · BTN SEAT ${displaySeat(p.button)}`
                 : et === "BLINDS_POSTED"
                   ? "BLINDS POSTED"
                   : et === "STREET_DEALT"
@@ -489,22 +540,31 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
                         : et === "EQUITY_UPDATED"
                           ? "ODDS UPDATED"
                           : et === "PLAYER_LEFT"
-                            ? `SEAT ${p.seatIndex} LEFT`
+                            ? `SEAT ${displaySeat(p.seatIndex)} LEFT`
                             : et === "PLAYER_JOINED"
-                              ? `SEAT ${p.seatIndex} JOINED`
-                              : et === "HAND_SETTLED"
+                              ? `SEAT ${displaySeat(p.seatIndex)} JOINED`
+                              : et === "MATCH_COMPLETE"
+                                ? "MATCH OVER · FIND MATCH TO REBUY"
+                                : et === "HAND_SETTLED"
                                 ? Array.isArray(p.winners) && (p.winners as WinFx["winners"])[0]
-                                  ? `WON ${money((p.winners as WinFx["winners"])[0].amount)} WITH ${String((p.winners as WinFx["winners"])[0].label || "POT").toUpperCase()}`
+                                  ? (() => {
+                                      const w = (p.winners as WinFx["winners"])[0];
+                                      const raw = String(w.label || "POT").trim();
+                                      const handLabel = /^won without showdown$/i.test(raw)
+                                        ? "WITHOUT SHOWDOWN"
+                                        : raw.toUpperCase();
+                                      return `WON ${money(w.amount)} · ${handLabel}`;
+                                    })()
                                   : "HAND SETTLED"
                                 : et === "HAND_COMPLETE"
                                   ? "NEXT HAND"
                                   : formatActionLabel(String(p.action || ""), p.amount as number | undefined).text;
             const name =
               et === "PLAYER_ACTED" && p.seatIndex != null
-                ? `SEAT ${p.seatIndex}`
+                ? `SEAT ${displaySeat(p.seatIndex)}`
                 : et === "HAND_SETTLED" && Array.isArray(p.winners) && (p.winners as WinFx["winners"])[0]
-                  ? `SEAT ${(p.winners as WinFx["winners"])[0].seatIndex}`
-                  : et === "PLAYER_LEFT" || et === "PLAYER_JOINED"
+                  ? `SEAT ${displaySeat((p.winners as WinFx["winners"])[0].seatIndex)}`
+                  : et === "PLAYER_LEFT" || et === "PLAYER_JOINED" || et === "MATCH_COMPLETE"
                     ? "TABLE"
                     : "DEALER";
             const actColor =
@@ -515,8 +575,14 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
                   : et === "PLAYER_ACTED"
                     ? formatActionLabel(String(p.action || ""), p.amount as number | undefined).color
                     : "#6A6A6A";
+            // Start a fresh hand-local log so prior-hand step numbers don't interleave.
+            if (et === "HAND_STARTED") {
+              handLogSeqRef.current = 0;
+              setLog([]);
+            }
+            handLogSeqRef.current += 1;
             pushLog({
-              n: String(event.sequence ?? "").padStart(2, "0").slice(-2),
+              n: String(handLogSeqRef.current).padStart(2, "0"),
               name,
               act,
               color: et === "PLAYER_ACTED" || et === "HAND_SETTLED" ? "#EDEDED" : "#5A5A5A",
@@ -540,7 +606,7 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
       ws?.close();
       setWsRef(null);
     };
-  }, [tableId, role, ownerUserId, refreshMeta, onMetaRefresh]);
+  }, [tableId, role, ownerUserId, refreshMeta]);
 
   return {
     meta,
@@ -554,6 +620,7 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
     winFx,
     wsRef,
     connecting,
+    feedError,
     remaining,
     ownerEnergyPct,
     ownerCognition,

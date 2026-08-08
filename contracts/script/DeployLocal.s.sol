@@ -20,12 +20,12 @@ import {CheckpointRegistryV1} from "../src/CheckpointRegistryV1.sol";
 import {RandomnessCoordinatorV1} from "../src/RandomnessCoordinatorV1.sol";
 import {RandomnessBeaconV2} from "../src/RandomnessBeaconV2.sol";
 import {ProofBatchRegistryV1} from "../src/ProofBatchRegistryV1.sol";
+import {CityTemplates} from "./CityTemplates.sol";
 
 /// @dev Local Anvil deploy — mintable mUSDC + V1 (compat) + ArenaAccount V2 stack.
 ///      Helpers keep `run()` under the EVM stack limit (via-IR still stressed by many locals).
 contract DeployLocal is Script {
     bytes32 internal constant NLHE_HU_STANDARD_V1 = keccak256("NLHE_HU_STANDARD_V1");
-    bytes32 internal constant FAMILY_NLHE = keccak256("NLHE");
 
     struct Core {
         MockUSDC usdc;
@@ -229,60 +229,29 @@ contract DeployLocal is Script {
         vm.writeFile("../packages/chain-manifest/deployments/anvil.json", json);
     }
 
+    /// @dev Registers the legacy fixed-id pair plus one HU template per city and six-max
+    ///      for Berlin/London. See `CityTemplates` for the id naming rule.
     function _seedGameRegistryV2(GameRegistryV2 gameRegistry) internal {
-        GameRegistryV2.GameTemplateV2 memory hu = GameRegistryV2.GameTemplateV2({
-            templateId: gameRegistry.NLHE_HU_STANDARD_V2(),
-            protocolVersion: 3,
-            gameFamilyId: FAMILY_NLHE,
-            maxSeats: 2,
-            minSeatsToStart: 2,
-            smallBlind: 0.5e6,
-            bigBlind: 1e6,
-            minBuyIn: 100e6,
-            maxBuyIn: 200e6,
-            // WP-109: GameTemplate.engineHash → Rust canonical core (event vectors keep draft).
-            engineHash: keccak256("mozetto-nlhe-rust-wp109"),
-            rulesHash: keccak256("nlhe-rules-v2"),
-            randomnessPolicyId: keccak256("randomness-policy-v2"),
-            settlementPolicyId: keccak256("settlement-policy-v3"),
-            modelPolicyHash: keccak256("model-policy-groq"),
-            energyPolicyHash: keccak256("energy-policy-v1"),
-            rakePolicyHash: keccak256("rake-policy-v1"),
-            actionDeadlineMs: 15_000,
-            emergencyExitDelaySec: 7 days,
-            ranked: true,
-            aiOnly: true,
-            leagueBit: 1
-        });
-        gameRegistry.registerTemplate(hu);
-        gameRegistry.scheduleActivation(hu.templateId);
-        gameRegistry.executeActivation(hu.templateId);
+        _registerAndActivate(gameRegistry, CityTemplates.standardTemplate(gameRegistry.NLHE_HU_STANDARD_V2(), 2));
+        _registerAndActivate(
+            gameRegistry, CityTemplates.standardTemplate(gameRegistry.NLHE_SIXMAX_STANDARD_V2(), 6)
+        );
 
-        GameRegistryV2.GameTemplateV2 memory six = GameRegistryV2.GameTemplateV2({
-            templateId: gameRegistry.NLHE_SIXMAX_STANDARD_V2(),
-            protocolVersion: 3,
-            gameFamilyId: FAMILY_NLHE,
-            maxSeats: 6,
-            minSeatsToStart: 2,
-            smallBlind: 0.5e6,
-            bigBlind: 1e6,
-            minBuyIn: 100e6,
-            maxBuyIn: 200e6,
-            engineHash: keccak256("mozetto-nlhe-rust-wp109"),
-            rulesHash: keccak256("nlhe-rules-v2"),
-            randomnessPolicyId: keccak256("randomness-policy-v2"),
-            settlementPolicyId: keccak256("settlement-policy-v3"),
-            modelPolicyHash: keccak256("model-policy-groq"),
-            energyPolicyHash: keccak256("energy-policy-v1"),
-            rakePolicyHash: keccak256("rake-policy-v1"),
-            actionDeadlineMs: 15_000,
-            emergencyExitDelaySec: 7 days,
-            ranked: true,
-            aiOnly: true,
-            leagueBit: 1
-        });
-        gameRegistry.registerTemplate(six);
-        gameRegistry.scheduleActivation(six.templateId);
-        gameRegistry.executeActivation(six.templateId);
+        CityTemplates.City[] memory cities = CityTemplates.cities();
+        for (uint256 i = 0; i < cities.length; i++) {
+            _registerAndActivate(gameRegistry, CityTemplates.huTemplate(cities[i]));
+        }
+        // Six-max opens at Berlin and London only; the deeper cities stay heads-up
+        // until there is enough population to fill a six-handed table.
+        _registerAndActivate(gameRegistry, CityTemplates.sixMaxTemplate(cities[1]));
+        _registerAndActivate(gameRegistry, CityTemplates.sixMaxTemplate(cities[2]));
+    }
+
+    function _registerAndActivate(GameRegistryV2 gameRegistry, GameRegistryV2.GameTemplateV2 memory body)
+        internal
+    {
+        gameRegistry.registerTemplate(body);
+        gameRegistry.scheduleActivation(body.templateId);
+        gameRegistry.executeActivation(body.templateId);
     }
 }

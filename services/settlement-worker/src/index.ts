@@ -6,7 +6,7 @@
  */
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
-import type { Hex } from "viem";
+import type { Address, Hex } from "viem";
 import { probeAttestorKeys, tryLoadAttestorKey } from "@mozetto/attestors";
 import { query } from "@mozetto/database";
 import { requestDealerAttestation } from "@mozetto/dealer/client";
@@ -206,15 +206,46 @@ async function buildProposalV2(session: SessionRow) {
 
   const finalSequence = BigInt(canonical.rows[0]?.sequence ?? 0);
 
+  // Abandoned-before-play refund: no canonical events and no hand was ever
+  // dealt, so nobody's chips moved. Settling it at the buy-in is what releases
+  // the vault lock and the ArenaAccount's concurrent-game slot; leaving it
+  // unsettled is what strands the player's funds and locks them out.
+  //
+  // Keyed on hands, not events: a table can legitimately record PLAYER_JOINED
+  // and other lifecycle events without a card ever being dealt. Those events
+  // are real and still root normally — it is the hand set that is empty.
+  const dealt = await query<{ n: string }>(
+    `select count(*)::text as n from hands where table_id = $1`,
+    [session.table_id],
+  ).catch(() => ({ rows: [{ n: "0" }] }));
+  const noPlay = Number(dealt.rows[0]?.n ?? 0) === 0;
+
   const handRootRow = await query<{ hand_root: string }>(
     `select hand_root from hand_roots where session_id = $1 order by created_at desc limit 1`,
     [session.session_id],
   ).catch(() => ({ rows: [] as { hand_root: string }[] }));
 
   // WP-108: refuse keccak stub roots when REQUIRE_REAL_ROOTS / MOZETTO_GOLDEN.
-  const { resolveSettlementRoots, StubRootError, requireRealRoots } = await import(
-    "./v3/real-roots.js"
-  );
+  const { resolveSettlementRoots, StubRootError, requireRealRoots, balanceLeavesFromPlayers } =
+    await import("./v3/real-roots.js");
+
+  // A refund has no stored balance root, so build real leaves from the
+  // unchanged buy-ins rather than letting the gate fall through to a stub.
+  const noPlayLeaves = noPlay
+    ? balanceLeavesFromPlayers({
+        sessionId: session.session_id as Hex,
+        finalSequence,
+        players: stacks.rows.map((row, i) => {
+          const locked = BigInt(Math.round(Number(row.buy_in) * 1_000_000));
+          return {
+            user: row.wallet_address as Address,
+            seat: i,
+            startLocked: locked,
+            endBalance: locked,
+          };
+        }),
+      })
+    : undefined;
   let eventRoot: Hex;
   let handRoot: Hex;
   let balanceRoot: Hex;
@@ -224,6 +255,8 @@ async function buildProposalV2(session: SessionRow) {
       storedEventRoot: canonical.rows[0]?.event_hash,
       storedHandRoot: handRootRow.rows[0]?.hand_root,
       finalSequence,
+      noPlay,
+      balanceLeaves: noPlayLeaves,
     });
     eventRoot = roots.finalEventRoot;
     handRoot = roots.handRoot;
@@ -251,12 +284,15 @@ async function buildProposalV2(session: SessionRow) {
   let endTotal = 0;
   for (const row of stacks.rows) {
     const start = Number(row.buy_in);
-    const end = Number(row.stack);
+    // No hand was dealt ⇒ nobody won or lost anything, so the buy-in returns
+    // untouched. Trusting `stack` here would let a stale row rake a session
+    // that never played, and the vault would reject startSum != endSum + rake.
+    const end = noPlay ? start : Number(row.stack);
     balances[row.wallet_address] = end;
     startTotal += start;
     endTotal += end;
   }
-  const totalRake = Math.max(0, startTotal - endTotal);
+  const totalRake = noPlay ? 0 : Math.max(0, startTotal - endTotal);
 
   const deadline = new Date(Date.now() + 86400_000);
   const insert = await query<{ id: string }>(
@@ -504,18 +540,41 @@ async function processOnchainSettlementsV2(hub: Hex) {
              where ts.table_id = os.table_id and ts.status = 'completed'
            )
          )
+         -- Abandoned sessions still hold the on-chain lock. Until they settle,
+         -- the player's ArenaAccount keeps the buy-in at risk and burns one of
+         -- its maxConcurrentGames slots, so the account eventually cannot join
+         -- any match at all. 'blocked' is a DB verdict, not an on-chain one.
+         or (
+           status in ('blocked', 'pending', 'opened')
+           and created_at < now() - interval '2 minutes'
+           and exists (
+             select 1 from onchain_session_players osp
+             where osp.session_id = os.session_id
+           )
+         )
        )
      order by created_at asc
      limit 5`,
   ).catch(() => ({ rows: [] as SessionRow[] }));
 
   for (const session of sessions.rows) {
+    // Stale in-flight proposals used to pin leave→settling forever:
+    // "proposal already exists" → activeGames never released → Find Match blocked.
+    await query(
+      `update settlement_proposals
+       set status = 'rejected'
+       where session_id = $1
+         and status in ('proposed', 'attesting', 'submitted')
+         and created_at < now() - interval '90 seconds'`,
+      [session.session_id],
+    ).catch(() => null);
+
     const existing = await query(
       `select id from settlement_proposals where session_id = $1 and status in ('proposed','attesting','submitted') limit 1`,
       [session.session_id],
     );
     if (existing.rows[0]) {
-      console.log("[settlement-worker] proposal already exists", session.session_id);
+      console.log("[settlement-worker] fresh proposal in flight — skip for now", session.session_id);
       continue;
     }
     const proposal = await buildProposalV2(session);

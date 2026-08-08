@@ -557,7 +557,14 @@ export async function loadPublicProfile(handle: string) {
     `select m.*,
        case when m.owner_a = $1 then m.score_a else (1 - m.score_a) end as my_score,
        case when m.owner_a = $1 then ob.handle else oa.handle end as opponent_handle,
-       case when m.owner_a = $1 then ab.handle else aa.handle end as opponent_agent,
+       case when m.owner_a = $1
+         then coalesce(nullif(ob.display_name, ''), ob.handle)
+         else coalesce(nullif(oa.display_name, ''), oa.handle)
+       end as opponent_display_name,
+       case when m.owner_a = $1
+         then coalesce(nullif(ab.display_name, ''), ab.handle)
+         else coalesce(nullif(aa.display_name, ''), aa.handle)
+       end as opponent_agent,
        t.name as table_name
      from rated_matches m
      join profiles oa on oa.id = m.owner_a

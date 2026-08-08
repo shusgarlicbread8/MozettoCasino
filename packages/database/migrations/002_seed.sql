@@ -19,6 +19,7 @@ insert into game_variants (id, game_id, name, status, max_seats, metadata) value
 on conflict (id) do update set status = excluded.status, name = excluded.name, max_seats = excluded.max_seats, metadata = excluded.metadata;
 
 insert into leagues (id, name, color, min_buy_in, sort_order) values
+  ('casual', 'Casual', '#9AA88A', 100, 0),
   ('bronze', 'Bronze', '#B87333', 10, 1),
   ('silver', 'Silver', '#B8C0C8', 50, 2),
   ('gold', 'Gold', '#C9A227', 250, 3),

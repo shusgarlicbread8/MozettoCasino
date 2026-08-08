@@ -26,6 +26,7 @@ import { preferredChainId } from "@/lib/wagmi";
 type PlayStatus = {
   enabled: boolean;
   signerRotationRequired?: boolean;
+  permissionUpgradeRequired?: boolean;
   ownerAddress: string;
   arenaAccountAddress: string;
   deployed: boolean;
@@ -43,6 +44,8 @@ type PlayStatus = {
     maxConcurrentGames: number;
     lifetimeCommittedCap: string;
     maxTotalAtRisk: string;
+    leagueMask?: number;
+    ratedOnly?: boolean;
   } | null;
   defaults: {
     sessionSigner: string;
@@ -79,10 +82,16 @@ export function PlayPermissionsPanel({
   onUpdated,
   compact,
   autoOpen,
+  cityId,
 }: {
   onUpdated?: () => void;
   compact?: boolean;
   autoOpen?: boolean;
+  /**
+   * City this grant is for. A GamePermission names one game template and a
+   * template is one city's table, so the grant is per city. Defaults to Berlin.
+   */
+  cityId?: string;
 }) {
   const { address, isConnected } = useAccount();
   const wallet = useWalletBrand();
@@ -99,14 +108,15 @@ export function PlayPermissionsPanel({
 
   const refresh = useCallback(async () => {
     try {
-      const s = await api<PlayStatus>("/v1/arena/play-status");
+      const q = cityId ? `?cityId=${encodeURIComponent(cityId)}` : "";
+      const s = await api<PlayStatus>(`/v1/arena/play-status${q}`);
       setStatus(s);
       setLoadError(false);
     } catch {
       setStatus(null);
       setLoadError(true);
     }
-  }, []);
+  }, [cityId]);
 
   useEffect(() => {
     void refresh();
@@ -394,6 +404,14 @@ export function PlayPermissionsPanel({
         <p style={{ margin: `${space[2]}px 0 0`, color: color.warn, fontSize: 12.5 }}>
           The local session signer was rotated. Enable Seamless Play again to replace the old
           authorization.
+        </p>
+      ) : null}
+
+      {status?.permissionUpgradeRequired ? (
+        <p style={{ margin: `${space[2]}px 0 0`, color: color.warn, fontSize: 12.5 }}>
+          Your permission was granted before the current city ladder. Enable Seamless Play again to
+          refresh it — the new grant covers every city, Porto (Casual) through Monaco, and allows
+          unrated Casual tickets.
         </p>
       ) : null}
 

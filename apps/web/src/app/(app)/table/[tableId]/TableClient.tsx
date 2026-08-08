@@ -6,7 +6,7 @@
  */
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { useLeaveGuard } from "@/lib/leave-guard";
@@ -21,6 +21,7 @@ import { color, font, radius } from "@/lib/design-tokens";
 import { verifyHref } from "@/lib/verify/trust";
 import { CARD_BACK, engineCard } from "@/lib/table/cards";
 import { deriveSeatCognition, statusFromSeatView } from "@/lib/table/cognition";
+import { displaySeat } from "@/lib/table/format";
 import { useTableFeed } from "@/lib/table/use-table-feed";
 import { WS_CLIENT } from "@/lib/table/ws-client";
 
@@ -41,10 +42,14 @@ export default function TableClient() {
   const [actingBusy, setActingBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  // balances.refetch is a new function every render — keep it behind a ref so
+  // the table feed never tears down meta/WS on balance polls (stuck CONNECTING).
+  const balancesRefetchRef = useRef(balances.refetch);
+  balancesRefetchRef.current = balances.refetch;
   const onMetaRefresh = useCallback(() => {
     void refresh();
-    balances.refetch();
-  }, [refresh, balances]);
+    balancesRefetchRef.current();
+  }, [refresh]);
 
   const {
     meta,
@@ -57,6 +62,7 @@ export default function TableClient() {
     winFx,
     wsRef,
     connecting,
+    feedError,
     remaining,
     ownerEnergyPct,
     ownerCognition,
@@ -68,12 +74,53 @@ export default function TableClient() {
     onMetaRefresh,
   });
 
+  const myMetaSeat = seatMeta.find(
+    (s) =>
+      s.status === "occupied" &&
+      me?.profile?.id &&
+      String(s.owner_id || "") === me.profile.id,
+  );
   const myLiveSeat = live?.seats?.find((s) => s.playerId && me?.profile?.id && s.playerId === me.profile.id);
-  const mySeatIndex = myLiveSeat?.seatIndex;
+  const mySeatIndex =
+    myLiveSeat?.seatIndex ??
+    (myMetaSeat?.seat_index != null ? Number(myMetaSeat.seat_index) : undefined);
+  // REST seat occupancy is authoritative when WS is still catching up.
   const amSeated = mySeatIndex != null;
   const mySeated = amSeated;
-  const needTopUp = Boolean(myLiveSeat && Number(myLiveSeat.stack) <= 0);
+  const myStack =
+    myLiveSeat != null
+      ? Number(myLiveSeat.stack)
+      : myMetaSeat != null
+        ? Number(myMetaSeat.stack || 0)
+        : 0;
+  const needTopUp = Boolean(amSeated && myStack <= 0);
+  // Sitting out keeps the seat and the stack — it only stops you being dealt in.
+  // Distinct from Leave, which settles the stack and gives the seat up.
+  const sittingOut = Boolean(myLiveSeat?.sitOut);
   const myTurn = mySeatIndex != null && live?.actingIndex === mySeatIndex;
+  const [sitOutBusy, setSitOutBusy] = useState(false);
+  async function toggleSitOut() {
+    if (sitOutBusy) return;
+    setSitOutBusy(true);
+    setActionError(null);
+    const next = !sittingOut;
+    try {
+      await api(`/v1/tables/${tableId}/sit-out`, {
+        method: "POST",
+        body: JSON.stringify({ sitOut: next }),
+      });
+      setActionError(
+        next
+          ? "Sitting out after this hand — your seat and stack are held."
+          : "Sitting back in — you will be dealt the next hand.",
+      );
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Sit out failed — try again");
+    } finally {
+      setSitOutBusy(false);
+    }
+  }
+
   const legal = live?.legalActions ?? [];
   const callAmt = legal.find((a) => a.action === "call")?.minAmount;
   const betRaise = legal.find((a) => a.action === "raise") || legal.find((a) => a.action === "bet");
@@ -84,26 +131,80 @@ export default function TableClient() {
     return () => setSeatedTable(null);
   }, [amSeated, tableId, setSeatedTable]);
 
+  // If Find Match opened custody but join failed, seat the account holder once.
+  const autoJoinAttempted = useRef<string | null>(null);
+  useEffect(() => {
+    if (!tableId || !me?.profile?.id || amSeated || !meta) return;
+    // Do not wait on WS "connecting" — REST meta is enough to join.
+    if (autoJoinAttempted.current === tableId) return;
+    const buyIn = Number(meta.min_buy_in || 0);
+    if (!(buyIn > 0)) return;
+    autoJoinAttempted.current = tableId;
+    let cancelled = false;
+    void (async () => {
+      for (let i = 0; i < 8; i++) {
+        if (cancelled) return;
+        try {
+          await api(`/v1/tables/${tableId}/join`, {
+            method: "POST",
+            body: JSON.stringify({ buyIn }),
+          });
+          if (!cancelled) {
+            await refreshMeta();
+            await refresh();
+            balances.refetch();
+          }
+          return;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "";
+          if (/already seated/i.test(msg)) {
+            if (!cancelled) await refreshMeta();
+            return;
+          }
+          const retryable = /Insufficient available|indexer|mirror|opening on-chain|not opened|busy|lease/i.test(
+            msg,
+          );
+          if (!retryable) return;
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tableId, me?.profile?.id, amSeated, meta, refreshMeta, refresh, balances]);
+
   async function leaveTable() {
     const wasSeated = amSeated;
-    if (
-      !confirmLeave(
-        wasSeated
-          ? "Leave the table? If a hand is in progress you'll fold. Your remaining stack is cashed back after the hand/settlement."
-          : "Leave this table? This clears a stuck match so you can find a new one. On-chain buy-ins settle via the vault refund path.",
-      )
-    ) {
-      return;
-    }
+    const ok = await confirmLeave(
+      wasSeated
+        ? "Your AI finishes the current hand under its locked strategy. Your remaining stack settles back to your Arena Account afterward — you do not forfeit chips just by leaving."
+        : "Any on-chain buy-in will settle back to your Arena Account; you can find a new match after.",
+    );
+    if (!ok) return;
     setSeatedTable(null);
     try {
-      const leaveRes = await api<{ queued?: boolean; ok?: boolean }>(`/v1/tables/${tableId}/leave`, {
-        method: "POST",
-        body: "{}",
-      });
+      const leaveRes = await api<{ queued?: boolean; ok?: boolean; handsPlayed?: number }>(
+        `/v1/tables/${tableId}/leave`,
+        {
+          method: "POST",
+          body: "{}",
+        },
+      );
       if (leaveRes?.queued) {
-        setActionError("Leave queued — you'll exit after this hand finishes.");
+        setActionError("Leaving after this hand — your AI finishes normally, then your stack settles back.");
         if (tableId) setSeatedTable(tableId);
+        return;
+      }
+      const handsPlayed = Math.max(
+        0,
+        Number(leaveRes?.handsPlayed ?? live?.handNumber ?? 0) || 0,
+      );
+      // No hands dealt → lobby. Result page only after real play.
+      if (!wasSeated || handsPlayed < 1) {
+        await refresh();
+        balances.refetch();
+        window.location.href = "/poker";
         return;
       }
       setLive((prev) =>
@@ -142,10 +243,7 @@ export default function TableClient() {
     }
     await refresh();
     balances.refetch();
-    // Never-seated abandon → lobby. Seated leave → result panel.
-    window.location.href = wasSeated
-      ? `/result/${encodeURIComponent(String(tableId))}`
-      : "/poker";
+    window.location.href = `/result/${encodeURIComponent(String(tableId))}`;
   }
 
   async function sendAction(action: string, amount?: number) {
@@ -205,12 +303,12 @@ export default function TableClient() {
     ? {
         id: String(tableId),
         name: meta.name,
-        league: meta.league_name || "Gold",
-        leagueColor: meta.league_color || "#C9A227",
-        game: "6-Max Hold\u2019em",
+        league: meta.league_name,
+        leagueColor: meta.league_color,
+        game: String(meta.display_game || (Number(meta.max_seats) === 2 ? "Heads-Up Hold\u2019em" : "6-Max Hold\u2019em")),
         blinds: `$${Number(meta.small_blind)} / $${Number(meta.big_blind)}`,
         seats: Number(meta.seated || live?.seats?.filter((s) => s.playerId).length || 0),
-        maxSeats: 6,
+        maxSeats: Number(meta.max_seats ?? 6),
         speed: "Standard",
         min: Number(meta.min_buy_in),
         max: Number(meta.max_buy_in),
@@ -221,19 +319,30 @@ export default function TableClient() {
       }
     : null;
 
-  const seatedCount = live?.seats?.filter((s) => s.playerId && !s.sitOut && Number(s.stack) > 0).length ?? 0;
+  const seatedCount =
+    seatMeta.filter((s) => s.status === "occupied" && s.owner_id).length ||
+    live?.seats?.filter((s) => s.playerId && !s.sitOut && Number(s.stack) > 0).length ||
+    0;
   const session = [
-    { k: "TABLE BALANCE", v: myLiveSeat ? money(myLiveSeat.stack) : "—", color: color.text },
+    {
+      k: "TABLE BALANCE",
+      v: amSeated ? money(myStack) : "—",
+      color: color.text,
+    },
     { k: "AT TABLES", v: money(balances.displayLocked), color: color.warn },
-    { k: "SEATED", v: `${seatedCount}/6`, color: color.text },
+    { k: "SEATED", v: `${seatedCount}/${Number(meta?.max_seats ?? 0) || "—"}`, color: color.text },
     { k: "WALLET LEFT", v: money(balances.displayWallet), color: color.textMuted },
   ];
 
   const myStats = [
     { k: "CLOCK", v: remaining != null ? `${remaining}s` : "—", color: remaining != null && remaining <= 5 ? color.danger : color.accent },
-    { k: "TO ACT", v: live?.actingIndex != null ? `SEAT ${live.actingIndex}` : "—", color: color.text },
+    { k: "TO ACT", v: live?.actingIndex != null ? `SEAT ${displaySeat(live.actingIndex)}` : "—", color: color.text },
     { k: "STREET", v: live?.street?.toUpperCase() || "—", color: color.text },
-    { k: "MODE", v: connecting ? "CONNECTING" : "LIVE", color: connecting ? color.warn : color.accent },
+    {
+      k: "MODE",
+      v: connecting && !meta ? "CONNECTING" : meta ? "LIVE" : "CONNECTING",
+      color: connecting && !meta ? color.warn : color.accent,
+    },
   ];
 
   const ownerCog = deriveSeatCognition({
@@ -273,7 +382,7 @@ export default function TableClient() {
     { k: "ENGINE", v: "LIVE TABLE", color: color.text },
     { k: "EQUAL COMPUTE", v: "POLICY ON", color: color.accent },
     { k: "HUMAN INTERVENTION", v: "NONE", color: color.accent },
-    { k: "HAND LOG", v: connecting ? "CONNECTING" : "RECORDING", color: color.warn },
+    { k: "HAND LOG", v: connecting && !meta ? "CONNECTING" : "RECORDING", color: color.warn },
     { k: "SETTLEMENT", v: "PER POT · ON-CHAIN", color: color.accent },
   ];
 
@@ -318,14 +427,23 @@ export default function TableClient() {
           <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
               <div style={{ width: 5, height: 20, borderRadius: 3, background: meta?.league_color || color.warn }} />
+              {/* Never invent league / format / stakes. Before meta loads these
+                  are unknown, and guessing renders a Bronze heads-up table as
+                  "GOLD · POKER (CLASSIC) · 6-MAX · $25/50" — which reads as the
+                  matchmaker putting you in the wrong game. */}
               <div className="mz-mono" style={{ fontSize: 12.5, fontWeight: 500, letterSpacing: ".04em" }}>
-                {(meta?.name || tableId).toUpperCase()} · {(meta?.league_name || "GOLD").toUpperCase()}
+                {(meta?.name || tableId).toUpperCase()}
+                {meta?.league_name ? ` · ${meta.league_name.toUpperCase()}` : ""}
               </div>
             </div>
             <div className="mz-mono mz-table-meta-detail" style={{ fontSize: 11, color: color.textFaint }}>
-              {String(meta?.display_game || (Number(meta?.max_seats) === 2 ? "TEXAS HOLD'EM · HEADS-UP" : "POKER (CLASSIC) · 6-MAX"))} · $
-              {Number(meta?.small_blind ?? 25)}/{Number(meta?.big_blind ?? 50)} ·{" "}
-              {connecting ? "CONNECTING" : "LIVE ENGINE"} · 15s CLOCK
+              {meta
+                ? `${String(
+                    meta.display_game ||
+                      (Number(meta.max_seats) === 2 ? "TEXAS HOLD'EM · HEADS-UP" : "POKER (CLASSIC) · 6-MAX"),
+                  )} · $${Number(meta.small_blind)}/${Number(meta.big_blind)} · `
+                : ""}
+              {feedError ? "TABLE ERROR" : connecting && !meta ? "CONNECTING" : "LIVE ENGINE"} · 15s CLOCK
             </div>
             <SessionTrustBadge sessionId={meta?.onchain_session_id ?? null} />
           </div>
@@ -503,7 +621,9 @@ export default function TableClient() {
               </div>
             ) : mySeated ? (
               <div className="mz-mono" style={{ fontSize: 11, color: color.textFaint }}>
-                {live?.actingIndex != null ? `Waiting on seat ${live.actingIndex}…` : "Waiting for next hand…"}
+                {live?.actingIndex != null
+                  ? `Waiting on seat ${displaySeat(live.actingIndex)}…`
+                  : "Waiting for next hand…"}
               </div>
             ) : null}
             {actionError ? (
@@ -522,6 +642,21 @@ export default function TableClient() {
                   Top up
                 </Button>
               ) : null}
+              {mySeated ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={sitOutBusy}
+                  onClick={() => void toggleSitOut()}
+                  title={
+                    sittingOut
+                      ? "Rejoin the next hand — your seat was held for you"
+                      : "Keep your seat and stack, but sit out the next hands"
+                  }
+                >
+                  {sittingOut ? "Sit back in" : "Sit out"}
+                </Button>
+              ) : null}
               <Button size="sm" variant="danger" onClick={() => void leaveTable()}>
                 Leave table
               </Button>
@@ -531,12 +666,12 @@ export default function TableClient() {
       </div>
 
       <TableSideRail
-        seatedLabel={mySeated ? "● SEATED" : connecting ? "○ CONNECTING" : "○ SPECTATING"}
+        seatedLabel={mySeated ? "● SEATED" : connecting && !meta ? "○ CONNECTING" : "○ SPECTATING"}
         seatedColor={mySeated ? color.accent : color.warn}
         session={session}
         agentName={agentName}
-        mode={connecting ? "CONNECTING" : "LIVE ENGINE"}
-        modeColor={connecting ? color.warn : color.accent}
+        mode={connecting && !meta ? "CONNECTING" : "LIVE ENGINE"}
+        modeColor={connecting && !meta ? color.warn : color.accent}
         cognitionPhase={ownerCog.phase}
         cognitionStatus={cognitionStatus}
         seated={mySeated}

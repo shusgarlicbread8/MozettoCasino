@@ -9,10 +9,14 @@ const nextConfig: NextConfig = {
   ],
   // Existing pages use loose `any` types; don't block production deploys on lint debt.
   eslint: { ignoreDuringBuilds: true },
-  turbopack: {
-    resolveExtensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".json"],
-  },
-  webpack: (config) => {
+  // Turbopack does not honour webpack `extensionAlias`, so `next dev` runs
+  // without `--turbopack`. Workspace packages use TypeScript ESM `.js` import
+  // paths that resolve to `.ts` sources via the alias below.
+  //
+  // Client UI must import cities via `@mozetto/game-rules/cities` — the package
+  // root re-exports `cards.ts` (`node:crypto`), which Webpack cannot load in the
+  // browser graph (UnhandledSchemeError).
+  webpack: (config, { isServer }) => {
     // Wagmi's optional Tempo connector references `accounts`; stub it for Next builds.
     config.resolve = config.resolve ?? {};
     config.resolve.alias = {
@@ -24,6 +28,15 @@ const nextConfig: NextConfig = {
       ".jsx": [".tsx", ".jsx"],
       ...(config.resolve.extensionAlias ?? {}),
     };
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        crypto: false,
+        fs: false,
+        path: false,
+        stream: false,
+      };
+    }
     return config;
   },
 };

@@ -31,22 +31,34 @@ export type AiCognitionStatus = {
   seat: number | null;
   handId: string | null;
   atMs: number;
+  /** Provider model id when known (e.g. openai/gpt-oss-120b). */
+  modelId?: string | null;
+  /** Public intent about to commit — never private CoT. */
+  intentAction?: string | null;
+  intentAmount?: number | null;
+  /** Owner-safe paragraph describing the public cognition step. */
+  publicNarrative?: string | null;
+  /** Progressive owner-safe thinking lines (never private CoT). */
+  publicThinkingLog?: string[] | null;
+  fallbackUsed?: boolean;
 };
 
 export const PHASE_LABELS: Record<PublicAiCognitionPhase, string> = {
   OBSERVING: "OBSERVING",
   ANALYSING: "ANALYSING",
-  UPDATING_OPPONENT_MODEL: "UPDATING OPPONENT MODEL",
+  /** Local public-pattern reads only — never AI-to-AI communication. */
+  UPDATING_OPPONENT_MODEL: "READING TABLE PATTERNS",
   DECISION_READY: "DECISION READY",
   ACTING: "ACTING",
 };
 
 export const PHASE_HINTS: Record<PublicAiCognitionPhase, string> = {
-  OBSERVING: "Watching public table events.",
-  ANALYSING: "Running bounded analysis on the public spot.",
-  UPDATING_OPPONENT_MODEL: "Refreshing structured opponent model slots.",
-  DECISION_READY: "Action chosen — waiting on public cadence.",
-  ACTING: "Committing the public action on the table clock.",
+  OBSERVING: "Tracking the board, pot, effective stacks, and action sequence.",
+  ANALYSING: "Estimating equity, pot odds, range pressure, and legal sizing.",
+  UPDATING_OPPONENT_MODEL:
+    "Updating the opponent range from prior checks, bets, calls, and folds.",
+  DECISION_READY: "Action selected from the current expected-value comparison.",
+  ACTING: "Submitting the selected action.",
 };
 
 export function emptyAiCognitionStatus(partial?: Partial<AiCognitionStatus>): AiCognitionStatus {
@@ -104,6 +116,17 @@ export function parseAiCognitionMessage(msg: unknown): AiCognitionStatus | null 
     seat: Number.isFinite(Number(m.seat)) ? Number(m.seat) : null,
     handId: typeof m.handId === "string" ? m.handId : null,
     atMs: Number.isFinite(Number(m.atMs)) ? Number(m.atMs) : Date.now(),
+    modelId: typeof m.modelId === "string" ? m.modelId : null,
+    intentAction: typeof m.intentAction === "string" ? m.intentAction : null,
+    intentAmount:
+      m.intentAmount == null || !Number.isFinite(Number(m.intentAmount))
+        ? null
+        : Number(m.intentAmount),
+    publicNarrative: typeof m.publicNarrative === "string" ? m.publicNarrative : null,
+    publicThinkingLog: Array.isArray(m.publicThinkingLog)
+      ? m.publicThinkingLog.filter((l): l is string => typeof l === "string" && l.trim().length > 0).slice(-12)
+      : null,
+    fallbackUsed: Boolean(m.fallbackUsed),
   };
 }
 

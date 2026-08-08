@@ -449,10 +449,25 @@ export class ContinuousCognitionScheduler {
     this.proximityToOwnTurn = true;
     const preempt = this.preemptForFinalAction();
 
+    // Event-importance Energy: deeper SPR / larger pots spend more Energy.
+    const potBb = Number(request.observation?.potBb ?? request.observation?.pot ?? 0);
+    const spr = Number(request.observation?.spr ?? request.observation?.effectiveStackBb ?? 0);
+    const important = potBb >= 20 || (spr > 0 && spr <= 8) || request.observation?.street === "river";
     const operationType =
-      options?.operationType ?? EnergyOperationType.STANDARD_FINAL_DECISION;
-    const memory = options?.includeMemoryRetrieval ?? false;
+      options?.operationType ??
+      (important
+        ? EnergyOperationType.DEEP_FINAL_DECISION
+        : EnergyOperationType.STANDARD_FINAL_DECISION);
+    const memory = options?.includeMemoryRetrieval ?? important;
     const energyDebit = combinedFinalDebit(operationType, memory);
+
+    // Wire live AgentState into the final decision (plan + opponent memory).
+    const agentStateSummary = {
+      streetPlan: this.state.streetPlan,
+      opponentModels: this.state.opponentModels,
+      energyRemaining: this.state.energyRemaining,
+      publicEventCursor: this.state.publicEventCursor,
+    };
 
     const decision = await this.provider.decide({
       ...request,
@@ -464,6 +479,7 @@ export class ContinuousCognitionScheduler {
         seat: this.seat,
         handId: this.handId,
         sessionId: this.sessionId,
+        agentState: agentStateSummary,
       },
     });
 

@@ -167,6 +167,9 @@ importers:
       '@mozetto/chain-manifest':
         specifier: workspace:*
         version: link:../chain-manifest
+      viem:
+        specifier: ^2.55.11
+        version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
     devDependencies:
       '@types/node':
         specifier: ^22.13.10
@@ -192,6 +195,9 @@ importers:
 
   packages/database:
     dependencies:
+      '@mozetto/game-rules':
+        specifier: workspace:*
+        version: link:../game-rules
       '@mozetto/ratings':
         specifier: workspace:*
         version: link:../ratings
@@ -559,6 +565,9 @@ importers:
       '@mozetto/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@mozetto/game-rules':
+        specifier: workspace:*
+        version: link:../../packages/game-rules
       '@mozetto/reconciliation':
         specifier: workspace:*
         version: link:../../packages/reconciliation

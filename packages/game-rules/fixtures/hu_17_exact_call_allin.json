@@ -80,7 +80,7 @@
             "maxAmount": 100
           }
         ],
-        "stateHash": "0x330b3e4d6cb554a40f7e09f4010252f777c8030ee743f69ebf42ad498602fbf7",
+        "stateHash": "0x3ac995a7cfd7bebb471849acd3e2382acb8742c4f31657519c8f1b0db0419ca9",
         "legalActionsHash": "0x43acef56802a87f55978ea2d860461172aedf000426a60c970662c20c22ff969"
       }
     },
@@ -93,7 +93,7 @@
       "op": "expect",
       "expect": {
         "pot": 300,
-        "stateHash": "0xaa93c53e24733b83dabdf5f17b95fda95964b3a2f86f94fc7aa4b6c3236488e8",
+        "stateHash": "0xc37a354ba7e808bea1fe155070bdd2f026bdbf8ef1f412bf3758879bf92f4088",
         "legalActionsHash": "0x96cf62709a27d62aa1e681e3c4926ab25b43622135db0b0751f4c0eb281693c4"
       }
     }

@@ -46,6 +46,8 @@ export type SeatTicketMessage = z.infer<typeof SeatTicketMessageSchema>;
 export const SubmitSeatTicketSchema = SeatTicketMessageSchema.extend({
   signature: z.string().regex(/^0x[a-fA-F0-9]+$/),
   leagueId: z.string().min(1).optional(),
+  /** Alias for `leagueId`; `league_id ≡ cityId`. Resolve with `resolveCityId`. */
+  cityId: z.string().min(1).optional(),
 });
 export type SubmitSeatTicket = z.infer<typeof SubmitSeatTicketSchema>;
 
@@ -90,9 +92,20 @@ export const SessionDescriptorV2Schema = z.object({
 });
 export type SessionDescriptorV2 = z.infer<typeof SessionDescriptorV2Schema>;
 
+/**
+ * Either spelling of the city id is accepted — `league_id ≡ cityId`. The
+ * route resolves them with `resolveCityId` and rejects a request carrying
+ * neither, which is why both are optional here.
+ */
 export const TicketParamsQuerySchema = z.object({
-  leagueId: z.string().min(1),
+  leagueId: z.string().min(1).optional(),
+  cityId: z.string().min(1).optional(),
   profileKey: z.enum(["shark", "professor", "fox", "machine"]).optional(),
+  /**
+   * Player-chosen buy-in in USDC, inside the city's 40-100BB band. Query
+   * strings arrive as text, so coerce. Omitted means the 100BB ceiling.
+   */
+  buyIn: z.coerce.number().positive().optional(),
 });
 export type TicketParamsQuery = z.infer<typeof TicketParamsQuerySchema>;
 
@@ -124,6 +137,8 @@ export const TicketParamsResponseSchema = z.object({
   chainId: z.number().int().positive(),
   vault: address,
   leagueId: z.string(),
+  /** Same value as `leagueId`, echoed under the newer name. */
+  cityId: z.string().optional(),
 });
 export type TicketParamsResponse = z.infer<typeof TicketParamsResponseSchema>;
 

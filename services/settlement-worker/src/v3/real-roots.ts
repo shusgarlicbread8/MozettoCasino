@@ -24,8 +24,30 @@ export type ResolveRootsInput = {
   storedBalanceRoot?: string | null;
   /** Seat leaves — used to build real balanceRoot when stored missing. */
   balanceLeaves?: readonly BalanceLeafInput[];
+  /**
+   * Session is being settled without a single hand ever being dealt (abandoned
+   * before play). Its event and hand sets are genuinely empty, so the honest
+   * roots are the empty-set constants below — not a keccak stub standing in for
+   * data that should exist. Callers must only set this after confirming zero
+   * canonical events AND zero hands, with every endBalance equal to startLocked.
+   */
+  noPlay?: boolean;
   env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
 };
+
+/**
+ * Domain-separated roots for a provably empty session.
+ *
+ * Session-bound, not global constants: SettlementHubV3 rejects a repeated root
+ * with RootReuse(), so every no-play session needs its own value. The domain
+ * tag keeps them reproducible and identifiable — a verifier can recompute them
+ * from the session id and tell "no hand was ever dealt" apart from "the data
+ * went missing", which is the distinction the stub gate exists to enforce.
+ */
+export const noPlayEventRoot = (sessionId: string): Hex =>
+  keccakLike(`mozetto:no-play:events:v1:${sessionId}`) as Hex;
+export const noPlayHandRoot = (sessionId: string): Hex =>
+  keccakLike(`mozetto:no-play:hands:v1:${sessionId}`) as Hex;
 
 export type ResolvedRoots = {
   finalEventRoot: Hex;
@@ -51,6 +73,9 @@ export function resolveSettlementRoots(input: ResolveRootsInput): ResolvedRoots 
   let finalEventRoot: Hex;
   if (input.storedEventRoot) {
     finalEventRoot = toBytes32(input.storedEventRoot);
+  } else if (input.noPlay) {
+    // Empty event set is the truth here, not missing data — see `noPlay`.
+    finalEventRoot = noPlayEventRoot(input.sessionId);
   } else if (gated) {
     throw new StubRootError(
       "MISSING_EVENT_ROOT",
@@ -64,6 +89,8 @@ export function resolveSettlementRoots(input: ResolveRootsInput): ResolvedRoots 
   let handRoot: Hex;
   if (input.storedHandRoot) {
     handRoot = toBytes32(input.storedHandRoot);
+  } else if (input.noPlay) {
+    handRoot = noPlayHandRoot(input.sessionId);
   } else if (gated) {
     throw new StubRootError(
       "MISSING_HAND_ROOT",

@@ -1,15 +1,20 @@
 import type { Card, PokerAction } from "@mozetto/shared-types";
 import { commitSeed, shuffleDeck } from "./cards.js";
 import { bestHand, compareScores } from "./hand-rank.js";
-import { allocateSidePotRake, computeRakeFromPct, uncalledBetAmount } from "./rake.js";
+import { asChips, chipsToNumber, type Chips } from "./money.js";
+import {
+  allocateRakeAmongWinners,
+  computeRakeFromPct,
+  uncalledBetAmount,
+} from "./rake.js";
 
 export type SeatState = {
   seatIndex: number;
   playerId: string;
   agentId: string;
-  stack: number;
-  bet: number;
-  totalBet: number;
+  stack: Chips;
+  bet: Chips;
+  totalBet: Chips;
   hole?: Card[];
   folded: boolean;
   allIn: boolean;
@@ -18,21 +23,21 @@ export type SeatState = {
 
 export type LegalAction = {
   action: PokerAction;
-  minAmount?: number;
-  maxAmount?: number;
+  minAmount?: Chips;
+  maxAmount?: Chips;
 };
 
 export type TableConfig = {
   tableId: string;
-  smallBlind: number;
-  bigBlind: number;
+  smallBlind: Chips;
+  bigBlind: Chips;
   rakePct: number;
-  rakeCap: number | null;
+  rakeCap: Chips | null;
 };
 
 export type PotLayer = {
   /** Chips in this layer (pre-rake). */
-  amount: number;
+  amount: Chips;
   /** Seats that contributed to this layer (including folded). */
   contributors: number[];
   /** Non-folded seats eligible to win this layer. */
@@ -47,17 +52,19 @@ export type HoldemState = {
   button: number;
   deck: Card[];
   board: Card[];
-  pot: number;
+  pot: Chips;
   seats: SeatState[];
   actingIndex: number | null;
-  currentBet: number;
-  minRaise: number;
+  currentBet: Chips;
+  minRaise: Chips;
   lastAggressor: number | null;
   firstToAct: number | null;
   serverSeed: string | null;
   seedCommit: string | null;
-  winners: { seatIndex: number; amount: number; label: string }[];
-  rake: number;
+  winners: { seatIndex: number; amount: Chips; label: string }[];
+  rake: Chips;
+  /** Accumulated rake removed from stacks this session. */
+  sessionRake: Chips;
   actedThisStreet: Set<number>;
   /**
    * False when the latest aggression was an incomplete (short) all-in raise.
@@ -68,11 +75,17 @@ export type HoldemState = {
 
 export type EngineEvent =
   | { type: "HAND_STARTED"; handId: string; handNumber: number; seedCommit: string; button: number }
-  | { type: "BLINDS_POSTED"; posts: { seatIndex: number; amount: number; kind: "sb" | "bb" }[] }
+  | { type: "BLINDS_POSTED"; posts: { seatIndex: number; amount: Chips; kind: "sb" | "bb" }[] }
   | { type: "HOLE_CARDS_DEALT"; private: { seatIndex: number; cards: Card[] }[] }
-  | { type: "PLAYER_ACTED"; seatIndex: number; action: PokerAction; amount?: number }
+  | { type: "PLAYER_ACTED"; seatIndex: number; action: PokerAction; amount?: Chips }
   | { type: "STREET_DEALT"; street: string; cards: Card[] }
-  | { type: "POT_UPDATED"; pot: number }
+  | { type: "POT_UPDATED"; pot: Chips }
+  | {
+      type: "UNCALLED_BET_RETURNED";
+      seatIndex: number;
+      amount: Chips;
+      street: string;
+    }
   | { type: "SHOWDOWN_REVEALED"; reveals: { seatIndex: number; cards: Card[]; label: string }[] }
   | {
       type: "RUNOUT_REVEALED";
@@ -84,8 +97,26 @@ export type EngineEvent =
       equity: { seatIndex: number; winPct: number; tiePct: number; equityPct: number }[];
       labels: { seatIndex: number; label: string | null }[];
     }
-  | { type: "HAND_SETTLED"; winners: { seatIndex: number; amount: number; label: string }[]; rake: number; seedReveal: string }
-  | { type: "STACKS_UPDATED"; stacks: { seatIndex: number; stack: number }[] };
+  | {
+      type: "HAND_SETTLED";
+      /** Gross pot entitlement per seat, before rake allocation. */
+      winners: { seatIndex: number; amount: Chips; label: string }[];
+      rake: Chips;
+      /** Net-on-award: stacks already reflect net. */
+      rakeDeferred: false;
+      rakeTabs: { seatIndex: number; amount: Chips }[];
+      /**
+       * Canonical accounting:
+       *   netAwards[i] = grossAwards[i] - rakeTabs[i]
+       *   sum(contributions) = sum(netAwards) + rake
+       * Stacks receive netAwards (+ uncalled returns).
+       */
+      grossAwards?: { seatIndex: number; amount: Chips }[];
+      netAwards?: { seatIndex: number; amount: Chips }[];
+      uncalledReturned?: { seatIndex: number; amount: Chips } | null;
+      seedReveal: string;
+    }
+  | { type: "STACKS_UPDATED"; stacks: { seatIndex: number; stack: Chips }[] };
 
 function nextSeat(state: HoldemState, from: number, pred: (s: SeatState) => boolean): number | null {
   const n = state.seats.length;
@@ -97,45 +128,72 @@ function nextSeat(state: HoldemState, from: number, pred: (s: SeatState) => bool
   return null;
 }
 
-function takeChips(seat: SeatState, amount: number): number {
-  const paid = Math.min(seat.stack, amount);
+function takeChips(seat: SeatState, amount: Chips): Chips {
+  const paid = seat.stack < amount ? seat.stack : amount;
   seat.stack -= paid;
   seat.bet += paid;
   seat.totalBet += paid;
-  if (seat.stack === 0) seat.allIn = true;
+  if (seat.stack === 0n) seat.allIn = true;
   return paid;
 }
 
-export function createTable(config: TableConfig, seatCount = 6): HoldemState {
+export function normalizeTableConfig(config: {
+  tableId: string;
+  smallBlind: number | bigint;
+  bigBlind: number | bigint;
+  rakePct: number;
+  rakeCap: number | bigint | null;
+}): TableConfig {
   return {
-    config,
+    tableId: config.tableId,
+    smallBlind: asChips(config.smallBlind),
+    bigBlind: asChips(config.bigBlind),
+    rakePct: config.rakePct,
+    rakeCap: config.rakeCap == null ? null : asChips(config.rakeCap),
+  };
+}
+
+export function createTable(
+  config: {
+    tableId: string;
+    smallBlind: number | bigint;
+    bigBlind: number | bigint;
+    rakePct: number;
+    rakeCap: number | bigint | null;
+  },
+  seatCount = 6,
+): HoldemState {
+  const normalized = normalizeTableConfig(config);
+  return {
+    config: normalized,
     handId: null,
     handNumber: 0,
     street: "waiting",
     button: seatCount - 1,
     deck: [],
     board: [],
-    pot: 0,
+    pot: 0n,
     seats: Array.from({ length: seatCount }, (_, i) => ({
       seatIndex: i,
       playerId: "",
       agentId: "",
-      stack: 0,
-      bet: 0,
-      totalBet: 0,
+      stack: 0n,
+      bet: 0n,
+      totalBet: 0n,
       folded: true,
       allIn: false,
       sitOut: true,
     })),
     actingIndex: null,
-    currentBet: 0,
-    minRaise: config.bigBlind,
+    currentBet: 0n,
+    minRaise: normalized.bigBlind,
     lastAggressor: null,
     firstToAct: null,
     serverSeed: null,
     seedCommit: null,
     winners: [],
-    rake: 0,
+    rake: 0n,
+    sessionRake: 0n,
     actedThisStreet: new Set(),
     lastRaiseComplete: true,
   };
@@ -146,13 +204,25 @@ export function seatPlayer(
   seatIndex: number,
   playerId: string,
   agentId: string,
-  stack: number,
+  stack: number | bigint,
 ): HoldemState {
+  const chipStack = asChips(stack);
   return {
     ...state,
     seats: state.seats.map((s) =>
       s.seatIndex === seatIndex
-        ? { ...s, playerId, agentId, stack, folded: false, allIn: false, sitOut: false, bet: 0, totalBet: 0, hole: undefined }
+        ? {
+            ...s,
+            playerId,
+            agentId,
+            stack: chipStack,
+            folded: false,
+            allIn: false,
+            sitOut: false,
+            bet: 0n,
+            totalBet: 0n,
+            hole: undefined,
+          }
         : s,
     ),
   };
@@ -167,18 +237,29 @@ export function clearSeat(state: HoldemState, seatIndex: number): HoldemState {
             ...s,
             playerId: "",
             agentId: "",
-            stack: 0,
+            stack: 0n,
             sitOut: true,
             folded: true,
             hole: undefined,
-            // Keep bet/totalBet out of the seat — chips already counted in pot.
-            bet: 0,
-            totalBet: 0,
+            bet: 0n,
+            totalBet: 0n,
             allIn: false,
           }
         : s,
     ),
   };
+}
+
+export type RakeClawbackOpts = {
+  buyInBySeat?: ReadonlyMap<number, number> | Readonly<Record<number, number>>;
+};
+
+/**
+ * @deprecated Net-on-award: rake is already removed from stacks at hand settle.
+ * No-op retained so leave/settle call sites compile during migration.
+ */
+export function applyRakeClawback(state: HoldemState, _opts?: RakeClawbackOpts): HoldemState {
+  return state;
 }
 
 /** Fold a seated player in-place (e.g. leave mid-hand) without clearing their identity yet. */
@@ -217,7 +298,6 @@ export function setSitOut(state: HoldemState, seatIndex: number, sitOut: boolean
 
 /**
  * Fold-first timeout policy for clock expiry / disconnect (Plan 06).
- * Prefer fold, else check, else first legal action.
  */
 export function timeoutFallbackAction(state: HoldemState): LegalAction | null {
   const legal = getLegalActions(state);
@@ -225,22 +305,53 @@ export function timeoutFallbackAction(state: HoldemState): LegalAction | null {
   return legal.find((l) => l.action === "fold") ?? legal.find((l) => l.action === "check") ?? legal[0]!;
 }
 
+/**
+ * Who would post the blinds if a hand were dealt right now.
+ *
+ * Mirrors `startHand`'s button/blind selection exactly, without mutating
+ * anything, so callers enforcing missed-blind rules cannot drift from the code
+ * that actually deals. `extraEligibleSeats` lets a caller ask "…and what if
+ * this sitting-out seat were dealt in?", which is how wait-for-big-blind
+ * re-entry is decided.
+ */
+export function nextBlindSeats(
+  state: HoldemState,
+  opts?: { extraEligibleSeats?: readonly number[] },
+): { button: number; sb: number; bb: number; headsUp: boolean } | null {
+  const extra = new Set(opts?.extraEligibleSeats ?? []);
+  const isEligible = (s: SeatState) =>
+    Boolean(s.playerId) && s.stack > 0n && (!s.sitOut || extra.has(s.seatIndex));
+
+  const eligible = state.seats.filter(isEligible);
+  if (eligible.length < 2) return null;
+
+  // `nextSeat` walks the real seat ring, so ordering matches startHand.
+  const button = nextSeat(state, state.button, isEligible) ?? eligible[0]!.seatIndex;
+  const headsUp = eligible.length === 2;
+  const afterButton = nextSeat({ ...state, button }, button, isEligible)!;
+  const sb = headsUp ? button : afterButton;
+  const bb = headsUp
+    ? afterButton
+    : nextSeat({ ...state, button }, sb, isEligible)!;
+  return { button, sb, bb, headsUp };
+}
+
 export function startHand(state: HoldemState, serverSeed: string, handId: string): { state: HoldemState; events: EngineEvent[] } {
   const events: EngineEvent[] = [];
-  const eligible = state.seats.filter((s) => !s.sitOut && s.playerId && s.stack > 0);
+  const eligible = state.seats.filter((s) => !s.sitOut && s.playerId && s.stack > 0n);
   if (eligible.length < 2) throw new Error("Need at least 2 players");
 
-  const button = nextSeat(state, state.button, (s) => !s.sitOut && s.stack > 0) ?? eligible[0].seatIndex;
+  const button = nextSeat(state, state.button, (s) => !s.sitOut && s.stack > 0n) ?? eligible[0]!.seatIndex;
   const deck = shuffleDeck(serverSeed, handId);
   const seedCommit = commitSeed(serverSeed);
 
   const seats = state.seats.map((s) => ({
     ...s,
-    bet: 0,
-    totalBet: 0,
+    bet: 0n,
+    totalBet: 0n,
     allIn: false,
     hole: undefined as Card[] | undefined,
-    folded: s.sitOut || !s.playerId || s.stack <= 0,
+    folded: s.sitOut || !s.playerId || s.stack <= 0n,
   }));
 
   let next: HoldemState = {
@@ -250,12 +361,12 @@ export function startHand(state: HoldemState, serverSeed: string, handId: string
     button,
     deck,
     board: [],
-    pot: 0,
+    pot: 0n,
     street: "preflop",
     serverSeed,
     seedCommit,
     winners: [],
-    rake: 0,
+    rake: 0n,
     currentBet: state.config.bigBlind,
     minRaise: state.config.bigBlind,
     actedThisStreet: new Set(),
@@ -269,7 +380,7 @@ export function startHand(state: HoldemState, serverSeed: string, handId: string
   const sb = headsUp ? button : nextSeat(next, button, (s) => !s.folded)!;
   const bb = headsUp ? nextSeat(next, button, (s) => !s.folded)! : nextSeat(next, sb, (s) => !s.folded)!;
 
-  const posts: { seatIndex: number; amount: number; kind: "sb" | "bb" }[] = [];
+  const posts: { seatIndex: number; amount: Chips; kind: "sb" | "bb" }[] = [];
   const sbSeat = next.seats.find((s) => s.seatIndex === sb)!;
   const bbSeat = next.seats.find((s) => s.seatIndex === bb)!;
   const sbPaid = takeChips(sbSeat, next.config.smallBlind);
@@ -302,14 +413,14 @@ export function getLegalActions(state: HoldemState): LegalAction[] {
   if (seat.folded || seat.allIn) return [];
   const toCall = state.currentBet - seat.bet;
   const actions: LegalAction[] = [];
-  // Incomplete all-in raise: players who already acted may only fold/call (TDA).
   const capped =
     !state.lastRaiseComplete && state.actedThisStreet.has(seat.seatIndex);
 
-  if (toCall <= 0) {
+  if (toCall <= 0n) {
     actions.push({ action: "check" });
-    if (seat.stack > 0 && !capped) {
-      actions.push({ action: "bet", minAmount: Math.min(state.config.bigBlind, seat.stack), maxAmount: seat.stack });
+    if (seat.stack > 0n && !capped) {
+      const minBet = state.config.bigBlind < seat.stack ? state.config.bigBlind : seat.stack;
+      actions.push({ action: "bet", minAmount: minBet, maxAmount: seat.stack });
       actions.push({ action: "all_in", minAmount: seat.stack, maxAmount: seat.stack });
     }
   } else {
@@ -318,7 +429,8 @@ export function getLegalActions(state: HoldemState): LegalAction[] {
       actions.push({ action: "call", minAmount: toCall, maxAmount: toCall });
       if (!capped) {
         const minRaiseExtra = state.currentBet + state.minRaise - seat.bet;
-        actions.push({ action: "raise", minAmount: Math.min(minRaiseExtra, seat.stack), maxAmount: seat.stack });
+        const minRaiseAmt = minRaiseExtra < seat.stack ? minRaiseExtra : seat.stack;
+        actions.push({ action: "raise", minAmount: minRaiseAmt, maxAmount: seat.stack });
         actions.push({ action: "all_in", minAmount: seat.stack, maxAmount: seat.stack });
       }
     } else {
@@ -332,8 +444,8 @@ export function getLegalActions(state: HoldemState): LegalAction[] {
 function resetStreetBets(state: HoldemState): HoldemState {
   return {
     ...state,
-    seats: state.seats.map((s) => ({ ...s, bet: 0 })),
-    currentBet: 0,
+    seats: state.seats.map((s) => ({ ...s, bet: 0n })),
+    currentBet: 0n,
     minRaise: state.config.bigBlind,
     lastAggressor: null,
     actedThisStreet: new Set(),
@@ -347,44 +459,150 @@ function dealBoard(state: HoldemState, count: number, street: HoldemState["stree
   const cards: Card[] = [];
   for (let i = 0; i < count; i++) cards.push(deck.shift()!);
   let next = resetStreetBets({ ...state, deck, board: [...state.board, ...cards], street });
-  const first = nextSeat(next, next.button, (s) => !s.folded && !s.allIn && s.stack > 0);
+  const first = nextSeat(next, next.button, (s) => !s.folded && !s.allIn && s.stack > 0n);
   next = { ...next, actingIndex: first, firstToAct: first };
   return { state: next, cards };
 }
 
 /**
  * Build main + side pot layers from each seat's totalBet this hand.
- * Standard algorithm: walk ascending contribution levels; each layer's
- * amount is (level − prev) × (# of seats that put in at least `level`);
- * only non-folded seats at that level are eligible to win it.
  */
 export function buildPots(seats: SeatState[]): PotLayer[] {
-  const contributors = seats.filter((s) => s.totalBet > 0);
+  const normalized = seats.map((s) => ({ ...s, totalBet: asChips(s.totalBet) }));
+  const contributors = normalized.filter((s) => s.totalBet > 0n);
   if (!contributors.length) return [];
-  const levels = [...new Set(contributors.map((s) => s.totalBet))].sort((a, b) => a - b);
+  const levels = [...new Set(contributors.map((s) => s.totalBet))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   const pots: PotLayer[] = [];
-  let prev = 0;
+  let prev = 0n;
+  let orphaned = 0n;
   for (const level of levels) {
     const inLayer = contributors.filter((s) => s.totalBet >= level);
-    const amount = (level - prev) * inLayer.length;
-    const eligible = inLayer.filter((s) => !s.folded).map((s) => s.seatIndex);
-    if (amount > 0 && eligible.length > 0) {
-      pots.push({
-        amount,
-        contributors: inLayer.map((s) => s.seatIndex),
-        eligible,
-      });
-    }
+    const amount = (level - prev) * BigInt(inLayer.length);
     prev = level;
+    if (amount <= 0n) continue;
+    const eligible = inLayer.filter((s) => !s.folded).map((s) => s.seatIndex);
+    if (!eligible.length) {
+      orphaned += amount;
+      continue;
+    }
+    pots.push({
+      amount: amount + orphaned,
+      contributors: inLayer.map((s) => s.seatIndex),
+      eligible,
+    });
+    orphaned = 0n;
+  }
+  if (orphaned > 0n && pots.length) {
+    pots[pots.length - 1]!.amount += orphaned;
   }
   return pots;
 }
 
-/** Seat order starting just after the button (TDA odd-chip convention). */
+/** Chip unit is always 1 under integer chip accounting. */
+export function chipUnitOf(_config: TableConfig): Chips {
+  return 1n;
+}
+
+export function quantizeChips(amount: Chips | number, _chipUnit?: Chips | number): Chips {
+  return asChips(amount);
+}
+
+/**
+ * Split `amount` between `winnerCount` winners. Odd chips awarded in caller order.
+ */
+export function splitPotShares(
+  amount: Chips | number,
+  winnerCount: number,
+  _chipUnit?: Chips | number,
+): Chips[] {
+  if (winnerCount <= 0) return [];
+  const total = asChips(amount);
+  const n = BigInt(winnerCount);
+  const share = total / n;
+  let remainder = total - share * n;
+  const out: Chips[] = [];
+  for (let i = 0; i < winnerCount; i++) {
+    const extra = remainder > 0n ? 1n : 0n;
+    if (remainder > 0n) remainder -= 1n;
+    out.push(share + extra);
+  }
+  return out;
+}
+
+export function topContributorSeat(seats: readonly SeatState[]): number | null {
+  const live = seats.filter((s) => s.totalBet > 0n);
+  if (live.length < 2) return live[0]?.seatIndex ?? null;
+  const sorted = [...live].sort((a, b) => (b.totalBet > a.totalBet ? 1 : b.totalBet < a.totalBet ? -1 : 0));
+  if (sorted[0]!.totalBet === sorted[1]!.totalBet) return null;
+  return sorted[0]!.seatIndex;
+}
+
+export function uncalledFromTotals(seats: readonly SeatState[]): Chips {
+  const live = seats.filter((s) => s.totalBet > 0n);
+  if (live.length < 2) return 0n;
+  const sorted = [...live].sort((a, b) => (b.totalBet > a.totalBet ? 1 : b.totalBet < a.totalBet ? -1 : 0));
+  const top = sorted[0]!;
+  const second = sorted[1]!;
+  if (top.folded) return 0n;
+  if (top.totalBet === second.totalBet) return 0n;
+  const excess = top.totalBet - second.totalBet;
+  return excess > 0n ? excess : 0n;
+}
+
 function seatsAfterButton(button: number, seatCount: number): number[] {
   const order: number[] = [];
   for (let i = 1; i <= seatCount; i++) order.push((button + i) % seatCount);
   return order;
+}
+
+/**
+ * Allocate hand rake across winners in proportion to gross awards, clamped so
+ * no seat pays more rake than it was awarded. Remainder (from floor + clamps)
+ * is applied in button order to seats that still have award headroom.
+ */
+function allocateRakeByAwards(
+  grossPays: readonly { seatIndex: number; amount: Chips }[],
+  handRake: Chips,
+  button: number,
+  seatCount: number,
+): { seatIndex: number; amount: Chips }[] {
+  if (handRake <= 0n || grossPays.length === 0) return [];
+  const totalGross = grossPays.reduce((n, p) => n + p.amount, 0n);
+  if (totalGross <= 0n) return [];
+
+  const buttonOrder = seatsAfterButton(button, seatCount);
+  const ordered = [...grossPays].sort(
+    (a, b) => buttonOrder.indexOf(a.seatIndex) - buttonOrder.indexOf(b.seatIndex),
+  );
+
+  const tabs = new Map<number, Chips>();
+  let allocated = 0n;
+  for (let i = 0; i < ordered.length; i++) {
+    const p = ordered[i]!;
+    let share =
+      i === ordered.length - 1
+        ? handRake - allocated
+        : (p.amount * handRake) / totalGross;
+    if (share > p.amount) share = p.amount;
+    if (share < 0n) share = 0n;
+    tabs.set(p.seatIndex, share);
+    allocated += share;
+  }
+
+  let remaining = handRake - allocated;
+  if (remaining > 0n) {
+    for (const p of ordered) {
+      if (remaining <= 0n) break;
+      const have = tabs.get(p.seatIndex) ?? 0n;
+      const room = p.amount - have;
+      if (room <= 0n) continue;
+      const add = remaining < room ? remaining : room;
+      tabs.set(p.seatIndex, have + add);
+      remaining -= add;
+    }
+  }
+
+  return [...tabs.entries()].map(([seatIndex, amount]) => ({ seatIndex, amount }));
 }
 
 export function settleShowdown(state: HoldemState): { state: HoldemState; events: EngineEvent[] } {
@@ -401,70 +619,96 @@ export function settleShowdown(state: HoldemState): { state: HoldemState; events
 
   const scoreOf = new Map(ranked.map((r) => [r.seatIndex, r]));
   const layers = buildPots(state.seats);
-  const totalPot = layers.reduce((n, p) => n + p.amount, 0);
-  // Prefer layered sum; fall back to state.pot for safety.
-  const potPool = totalPot > 0 ? totalPot : state.pot;
-  // Plan 11: floor(eligiblePot × bps / 10_000), then cap. Engine config keeps rakePct for fixtures.
+  const totalPot = layers.reduce((n, p) => n + p.amount, 0n);
+  const potPool = totalPot > 0n ? totalPot : state.pot;
+  const uncalled = uncalledFromTotals(state.seats);
+  const uncalledSeat =
+    uncalled > 0n ? { seatIndex: topContributorSeat(state.seats)!, amount: uncalled } : null;
+  if (uncalledSeat) {
+    events.push({
+      type: "UNCALLED_BET_RETURNED",
+      seatIndex: uncalledSeat.seatIndex,
+      amount: uncalledSeat.amount,
+      street: String(state.street),
+    });
+  }
+
+  const eligibleForRake = potPool - uncalled > 0n ? potPool - uncalled : 0n;
   const rake = computeRakeFromPct({
-    eligiblePot: potPool,
+    eligiblePot: eligibleForRake,
     rakePct: state.config.rakePct,
     rakeCap: state.config.rakeCap,
     liveHands: live.length,
   });
 
-  // Side-pot allocation: proportional floor; remainder on last layer (SEASON1_RAKE_ELIGIBILITY).
-  const layerRakes = allocateSidePotRake(layers, rake);
-  const netLayers = layers.map((layer, i) => ({
-    ...layer,
-    amount: layer.amount - layerRakes[i]!,
-  }));
-
   const seats = state.seats.map((s) => ({ ...s }));
-  const won = new Map<number, { amount: number; label: string }>();
+  const won = new Map<number, { amount: Chips; label: string }>();
   const buttonOrder = seatsAfterButton(state.button, state.seats.length);
 
-  for (const layer of netLayers) {
-    if (layer.amount <= 0 || !layer.eligible.length) continue;
+  for (const layer of layers) {
+    if (layer.amount <= 0n || !layer.eligible.length) continue;
     const contenders = layer.eligible
       .map((idx) => scoreOf.get(idx))
       .filter((x): x is (typeof ranked)[number] => Boolean(x));
     if (!contenders.length) continue;
     contenders.sort((a, b) => compareScores(b.score, a.score));
-    const top = contenders[0].score;
+    const top = contenders[0]!.score;
     const winners = contenders.filter((c) => compareScores(c.score, top) === 0);
-    // Odd chips: first eligible winner after the button.
     winners.sort((a, b) => buttonOrder.indexOf(a.seatIndex) - buttonOrder.indexOf(b.seatIndex));
-    const share = Math.floor(layer.amount / winners.length);
-    let rem = layer.amount - share * winners.length;
-    for (const w of winners) {
-      const amount = share + (rem > 0 ? 1 : 0);
-      if (rem > 0) rem -= 1;
+    const shares = splitPotShares(layer.amount, winners.length, 1n);
+    for (let i = 0; i < winners.length; i++) {
+      const w = winners[i]!;
+      const amount = shares[i]!;
       const seat = seats.find((s) => s.seatIndex === w.seatIndex)!;
       seat.stack += amount;
       const prev = won.get(w.seatIndex);
       won.set(w.seatIndex, {
-        amount: (prev?.amount ?? 0) + amount,
+        amount: (prev?.amount ?? 0n) + amount,
         label: w.label,
       });
     }
   }
 
-  const pays = [...won.entries()].map(([seatIndex, v]) => ({
+  const grossPays = [...won.entries()].map(([seatIndex, v]) => ({
     seatIndex,
     amount: v.amount,
     label: v.label,
+  }));
+  // Equal split can over-charge a short side-pot winner; allocate by award share
+  // and never take more than a seat's gross award.
+  const rakeTabs = allocateRakeByAwards(grossPays, rake, state.button, state.seats.length);
+  const rakeBySeat = new Map(rakeTabs.map((t) => [t.seatIndex, t.amount]));
+
+  for (const tab of rakeTabs) {
+    const seat = seats.find((s) => s.seatIndex === tab.seatIndex);
+    if (seat) seat.stack -= tab.amount;
+  }
+  const pays = grossPays.map((p) => ({
+    ...p,
+    amount: p.amount - (rakeBySeat.get(p.seatIndex) ?? 0n),
   }));
 
   const next: HoldemState = {
     ...state,
     seats,
-    pot: 0,
+    pot: 0n,
     rake,
+    sessionRake: state.sessionRake + rake,
     winners: pays,
     street: "settlement",
     actingIndex: null,
   };
-  events.push({ type: "HAND_SETTLED", winners: pays, rake, seedReveal: state.serverSeed! });
+  events.push({
+    type: "HAND_SETTLED",
+    winners: pays,
+    rake,
+    rakeDeferred: false,
+    rakeTabs,
+    grossAwards: grossPays.map((p) => ({ seatIndex: p.seatIndex, amount: p.amount })),
+    netAwards: pays.map((p) => ({ seatIndex: p.seatIndex, amount: p.amount })),
+    uncalledReturned: uncalledSeat,
+    seedReveal: state.serverSeed!,
+  });
   events.push({ type: "STACKS_UPDATED", stacks: seats.map((s) => ({ seatIndex: s.seatIndex, stack: s.stack })) });
   return { state: next, events };
 }
@@ -474,16 +718,14 @@ export function foldWin(state: HoldemState): { state: HoldemState; events: Engin
   const winner = state.seats.find((s) => !s.folded && s.playerId && !s.sitOut);
   if (!winner) {
     return {
-      state: { ...state, pot: 0, street: "settlement", actingIndex: null, winners: [] },
+      state: { ...state, pot: 0n, street: "settlement", actingIndex: null, winners: [] },
       events: [],
     };
   }
 
-  // Plan 11 / TDA: return uncalled portion before rake + pot award.
   const uncalled = uncalledBetAmount(state.seats, winner.seatIndex);
-  const eligiblePot = Math.max(0, state.pot - uncalled);
+  const eligiblePot = state.pot - uncalled > 0n ? state.pot - uncalled : 0n;
   const endedBeforeFlop = state.board.length === 0;
-  // Postflop fold-win: rake from eligible pot (uncalled excluded). Preflop: noFlopNoDrop.
   const rake = computeRakeFromPct({
     eligiblePot,
     rakePct: state.config.rakePct,
@@ -491,53 +733,77 @@ export function foldWin(state: HoldemState): { state: HoldemState; events: Engin
     liveHands: 1,
     endedBeforeFlop,
   });
-  const award = Math.max(0, eligiblePot - rake);
+  const grossAward = eligiblePot;
+  const netAward = grossAward - rake > 0n ? grossAward - rake : 0n;
+  const rakeTabs = allocateRakeAmongWinners(
+    [winner.seatIndex],
+    rake,
+    state.button,
+    state.seats.length,
+  );
 
   const seats = state.seats.map((s) => {
     if (s.seatIndex === winner.seatIndex) {
-      return { ...s, stack: s.stack + uncalled + award, bet: 0 };
+      return {
+        ...s,
+        stack: s.stack + uncalled + netAward,
+        bet: 0n,
+      };
     }
-    return { ...s, bet: 0 };
+    return { ...s, bet: 0n };
   });
-  const pays = [{ seatIndex: winner.seatIndex, amount: award, label: "Won without showdown" }];
+  const pays = [{ seatIndex: winner.seatIndex, amount: netAward, label: "Won without showdown" }];
   const next: HoldemState = {
     ...state,
     seats,
-    pot: 0,
+    pot: 0n,
     rake,
+    sessionRake: state.sessionRake + rake,
     winners: pays,
     street: "settlement",
     actingIndex: null,
   };
-  return {
-    state: next,
-    events: [
-      { type: "HAND_SETTLED", winners: pays, rake, seedReveal: state.serverSeed! },
-      { type: "STACKS_UPDATED", stacks: seats.map((s) => ({ seatIndex: s.seatIndex, stack: s.stack })) },
-    ],
-  };
+  const events: EngineEvent[] = [];
+  if (uncalled > 0n) {
+    events.push({
+      type: "UNCALLED_BET_RETURNED",
+      seatIndex: winner.seatIndex,
+      amount: uncalled,
+      street: String(state.street),
+    });
+  }
+  events.push(
+    {
+      type: "HAND_SETTLED",
+      winners: pays,
+      rake,
+      rakeDeferred: false,
+      rakeTabs,
+      grossAwards: [{ seatIndex: winner.seatIndex, amount: grossAward }],
+      netAwards: [{ seatIndex: winner.seatIndex, amount: netAward }],
+      uncalledReturned: uncalled > 0n ? { seatIndex: winner.seatIndex, amount: uncalled } : null,
+      seedReveal: state.serverSeed!,
+    },
+    { type: "STACKS_UPDATED", stacks: seats.map((s) => ({ seatIndex: s.seatIndex, stack: s.stack })) },
+  );
+  return { state: next, events };
 }
 
-/** True when betting is over and remaining board must be dealt (all-in runout). */
 export function isAllInRunout(state: HoldemState): boolean {
   if (!state.handId) return false;
   if (state.street === "waiting" || state.street === "settlement" || state.street === "showdown") return false;
   const live = state.seats.filter((s) => !s.folded && s.playerId);
   if (live.length < 2) return false;
-  const canAct = live.filter((s) => !s.allIn && s.stack > 0);
+  const canAct = live.filter((s) => !s.allIn && s.stack > 0n);
   return canAct.length <= 1;
 }
 
-/**
- * Deal the next all-in runout street (or settle if the board is complete).
- * Separated from maybeRunout so applyAction can pause before the first board card.
- */
 export function continueRunout(state: HoldemState): { state: HoldemState; events: EngineEvent[] } {
   const s0 = { ...state, actingIndex: null as number | null };
   const live = s0.seats.filter((x) => !x.folded);
   if (live.length === 1) return foldWin(s0);
   if (live.length < 2) {
-    return { state: { ...s0, street: "settlement", pot: 0 }, events: [] };
+    return { state: { ...s0, street: "settlement", pot: 0n }, events: [] };
   }
 
   if (s0.board.length === 0) {
@@ -552,20 +818,21 @@ export function continueRunout(state: HoldemState): { state: HoldemState; events
     const d = dealBoard(s0, 1, "river");
     return { state: { ...d.state, actingIndex: null }, events: [{ type: "STREET_DEALT", street: "river", cards: d.cards }] };
   }
-  const settled = settleShowdown({ ...s0, street: "showdown" });
-  return settled;
+  return settleShowdown({ ...s0, street: "showdown" });
 }
 
 function maybeRunout(state: HoldemState, events: EngineEvent[]): { state: HoldemState; events: EngineEvent[] } {
   let s = state;
   const ev = [...events];
   const live = s.seats.filter((x) => !x.folded);
-  if (live.length === 1) return foldWin(s);
+  if (live.length === 1) {
+    const settled = foldWin(s);
+    return { state: settled.state, events: [...ev, ...settled.events] };
+  }
 
   const contenders = live.filter((x) => !x.allIn);
   const auto = contenders.length <= 1;
 
-  // Normal street advance: deal one board segment, then return for betting.
   if (!auto) {
     if (s.actingIndex !== null) return { state: s, events: ev };
     if (s.board.length === 0) {
@@ -587,7 +854,6 @@ function maybeRunout(state: HoldemState, events: EngineEvent[]): { state: Holdem
     return { state: s, events: ev };
   }
 
-  // All-in: hand control returns to the server loop, which stages reveal → equity → each street.
   if (s.board.length >= 5) {
     const settled = settleShowdown({ ...s, street: "showdown" });
     return { state: settled.state, events: [...ev, ...settled.events] };
@@ -607,15 +873,16 @@ function streetComplete(state: HoldemState): boolean {
 export function applyAction(
   state: HoldemState,
   action: PokerAction,
-  amount?: number,
+  amount?: number | bigint,
 ): { state: HoldemState; events: EngineEvent[] } {
   if (state.actingIndex === null) throw new Error("Nobody to act");
   const legal = getLegalActions(state);
   const match = legal.find((l) => l.action === action);
   if (!match) throw new Error(`Illegal action ${action}`);
-  if (match.minAmount != null && match.maxAmount != null && amount != null) {
-    if (amount < match.minAmount || amount > match.maxAmount) {
-      throw new Error(`Illegal amount ${amount} for ${action} (allowed ${match.minAmount}–${match.maxAmount})`);
+  const amt = amount == null ? undefined : asChips(amount);
+  if (match.minAmount != null && match.maxAmount != null && amt != null) {
+    if (amt < match.minAmount || amt > match.maxAmount) {
+      throw new Error(`Illegal amount ${amt} for ${action} (allowed ${match.minAmount}–${match.maxAmount})`);
     }
   }
 
@@ -629,14 +896,14 @@ export function applyAction(
   let lastRaiseComplete = state.lastRaiseComplete;
   const acted = new Set(state.actedThisStreet);
 
-  let paid = 0;
+  let paid = 0n;
   if (action === "fold") seat.folded = true;
-  else if (action === "check") paid = 0;
+  else if (action === "check") paid = 0n;
   else if (action === "call") {
     paid = takeChips(seat, currentBet - seat.bet);
     pot += paid;
   } else if (action === "bet") {
-    const betAmt = amount ?? match.minAmount ?? state.config.bigBlind;
+    const betAmt = amt ?? match.minAmount ?? state.config.bigBlind;
     paid = takeChips(seat, betAmt);
     pot += paid;
     minRaise = paid;
@@ -645,7 +912,7 @@ export function applyAction(
     lastRaiseComplete = true;
     acted.clear();
   } else if (action === "raise") {
-    const target = amount ?? match.minAmount ?? currentBet + minRaise - seat.bet;
+    const target = amt ?? match.minAmount ?? currentBet + minRaise - seat.bet;
     paid = takeChips(seat, target);
     pot += paid;
     const raiseSize = seat.bet - currentBet;
@@ -665,7 +932,6 @@ export function applyAction(
         lastRaiseComplete = true;
         acted.clear();
       } else {
-        // Incomplete all-in raise — does not reopen for players who already acted.
         lastRaiseComplete = false;
       }
       currentBet = seat.bet;
@@ -714,23 +980,29 @@ export function publicView(state: HoldemState) {
     street: state.street,
     button: state.button,
     board: state.board,
-    pot: state.pot,
-    currentBet: state.currentBet,
+    pot: chipsToNumber(state.pot),
+    currentBet: chipsToNumber(state.currentBet),
     actingIndex: state.actingIndex,
     seedCommit: state.seedCommit,
     seats: state.seats.map((s) => ({
       seatIndex: s.seatIndex,
       playerId: s.playerId,
       agentId: s.agentId,
-      stack: s.stack,
-      bet: s.bet,
+      stack: chipsToNumber(s.stack),
+      bet: chipsToNumber(s.bet),
       folded: s.folded,
       allIn: s.allIn,
       sitOut: s.sitOut,
       hasCards: Boolean(s.hole && !s.folded),
     })),
-    winners: state.winners,
-    rake: state.rake,
+    winners: state.winners.map((w) => ({
+      seatIndex: w.seatIndex,
+      amount: chipsToNumber(w.amount),
+      label: w.label,
+    })),
+    rake: chipsToNumber(state.rake),
+    sessionRake: chipsToNumber(state.sessionRake),
+    feesOnTab: 0,
   };
 }
 
@@ -739,6 +1011,12 @@ export function privateView(state: HoldemState, seatIndex: number) {
   return {
     ...publicView(state),
     holeCards: seat?.hole ?? [],
-    legalActions: state.actingIndex === seatIndex ? getLegalActions(state) : [],
+    legalActions: state.actingIndex === seatIndex
+      ? getLegalActions(state).map((a) => ({
+          action: a.action,
+          minAmount: a.minAmount != null ? chipsToNumber(a.minAmount) : undefined,
+          maxAmount: a.maxAmount != null ? chipsToNumber(a.maxAmount) : undefined,
+        }))
+      : [],
   };
 }

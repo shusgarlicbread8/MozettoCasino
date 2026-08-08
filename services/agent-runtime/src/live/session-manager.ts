@@ -79,6 +79,11 @@ export interface LiveActRequest {
   seatIndex?: number;
   /** Override cadence wait owner for this call. */
   cadenceWait?: CadenceWaitOwner;
+  /**
+   * Deterministic decision facts from the caller's poker intelligence layer.
+   * Forwarded verbatim into the model observation.
+   */
+  facts?: Record<string, unknown>;
 }
 
 export interface LiveActResponse {
@@ -515,6 +520,10 @@ export class LiveSessionManager {
         handId,
         sessionId,
         energyRemaining: scheduler.getLedger().remainingEnergy,
+        // Grounded analytics from the poker intelligence layer. Absent only
+        // when the caller predates WP-131; the model then falls back to
+        // deriving the spot itself, which is exactly what we are removing.
+        facts: req.facts,
       },
       actionDeadlineMs: Math.min(Math.max(req.computeRemaining, 1_000), 15_000),
     };

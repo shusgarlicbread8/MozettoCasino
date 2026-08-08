@@ -4,7 +4,7 @@ import cookie from "@fastify/cookie";
 import websocket from "@fastify/websocket";
 import { WsClientMessageSchema } from "@mozetto/shared-types";
 import { corsOriginCheck } from "@mozetto/server-env";
-import { getLegalActions } from "@mozetto/game-rules";
+import { chipsToUsd, getLegalActions } from "@mozetto/game-rules";
 import { TableRuntime, TURN_SECONDS } from "./table-runtime.js";
 import { resolvePlayer, resolvePlayerFromToken } from "./auth.js";
 import { defaultLeaseWaitMs, getLeaseManager } from "./lease/index.js";
@@ -27,6 +27,10 @@ app.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body,
     done(err as Error, undefined);
   }
 });
+// Engine money is bigint chips; HTTP JSON cannot serialize bigint.
+app.setReplySerializer((payload) =>
+  JSON.stringify(payload, (_key, value) => (typeof value === "bigint" ? value.toString() : value)),
+);
 await app.register(cookie);
 await app.register(cors, {
   origin: corsOriginCheck,
@@ -71,7 +75,7 @@ async function getRuntime(tableId: string) {
     rt.bindLease(lease.actorInstanceId, lease.leaseVersion);
     tables.set(tableId, rt);
     for (const s of rt.state.seats) {
-      if (s.playerId) rt.stackBaseline.set(s.playerId, s.stack);
+      if (s.playerId) rt.stackBaseline.set(s.playerId, chipsToUsd(s.stack));
     }
     leaseManager.startHeartbeat(tableId, (id) => {
       void unloadTable(id, "lease_lost");
@@ -108,7 +112,7 @@ app.get("/health", async () => ({
       id,
       seated: rt.state.seats.filter((s) => s.playerId && !s.sitOut).length,
       street: rt.state.street,
-      pot: rt.state.pot,
+      pot: chipsToUsd(rt.state.pot),
       sequence: rt.sequence,
       leaseVersion: held?.leaseVersion ?? rt.leaseVersion,
       durableChainOk: rt.durableChainOk,
@@ -128,7 +132,7 @@ app.get("/v1/tables/:id", async (req, reply) => {
       .map((s) => ({
         seatIndex: s.seatIndex,
         playerId: s.playerId,
-        stack: s.stack,
+        stack: chipsToUsd(s.stack),
         folded: s.folded,
         allIn: s.allIn,
       }));
@@ -139,7 +143,7 @@ app.get("/v1/tables/:id", async (req, reply) => {
     return {
       tableId,
       street: rt.state.street,
-      pot: rt.state.pot,
+      pot: chipsToUsd(rt.state.pot),
       handId: rt.state.handId,
       handNumber: rt.state.handNumber,
       actingIndex: rt.state.actingIndex,
@@ -274,10 +278,31 @@ app.post("/v1/tables/:id/top-up", async (req, reply) => {
   }
 });
 
+app.post("/v1/tables/:id/sit-out", async (req, reply) => {
+  const player = await resolvePlayer(req);
+  if (!player) return reply.code(401).send({ error: "unauthenticated", message: "Sign in to sit out." });
+  const tableId = (req.params as { id: string }).id;
+  const sitOut = Boolean((req.body as { sitOut?: boolean }).sitOut ?? true);
+  try {
+    const rt = await getRuntime(tableId);
+    requireLease(tableId);
+    const result = await rt.setPlayerSitOut(player.profileId, sitOut);
+    return { ok: true, ...result };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "sit_out_failed";
+    const code = message.includes("lease") ? 409 : 400;
+    return reply.code(code).send({ error: code === 409 ? "table_lease_conflict" : "sit_out_failed", message });
+  }
+});
+
+/** After the last player WS for a seat drops, cash them out (fold mid-hand). */
+const DISCONNECT_LEAVE_GRACE_MS = Number(process.env.DISCONNECT_LEAVE_GRACE_MS ?? 8_000);
+
 app.get("/ws", { websocket: true }, (socket, req) => {
   let identity: Awaited<ReturnType<typeof resolvePlayerFromToken>> = null;
   let current: { rt: TableRuntime; client: Parameters<TableRuntime["subscribe"]>[0] } | null = null;
   let queue: Promise<void> = Promise.resolve();
+  let disconnectLeaveTimer: ReturnType<typeof setTimeout> | null = null;
 
   const send = createWsSender((data: unknown) => {
     try {
@@ -438,7 +463,38 @@ app.get("/ws", { websocket: true }, (socket, req) => {
   });
 
   socket.on("close", () => {
-    if (current) current.rt.unsubscribe(current.client);
+    if (disconnectLeaveTimer) {
+      clearTimeout(disconnectLeaveTimer);
+      disconnectLeaveTimer = null;
+    }
+    if (!current) return;
+    const { rt, client } = current;
+    current = null;
+    rt.unsubscribe(client);
+
+    // Spectators never hold chips. Players who close/reload the tab must leave
+    // so Find Match cannot resurrect their previous stack — mid-hand leave
+    // folds/queues via TableRuntime.leave (WP-042).
+    const userId = client.userId;
+    const wasPlayer =
+      client.role === "player" &&
+      Boolean(userId) &&
+      userId !== "spectator" &&
+      rt.state.seats.some((s) => s.playerId === userId);
+    if (!wasPlayer || !userId) return;
+
+    disconnectLeaveTimer = setTimeout(() => {
+      disconnectLeaveTimer = null;
+      const reconnected = [...rt.clients].some(
+        (c) => c.role === "player" && c.userId === userId,
+      );
+      if (reconnected) return;
+      // forceImmediate: mid-hand disconnect folds then cashes out so the seat
+      // cannot be resumed with the prior stack after a tab close / reload.
+      void rt.leave(userId, { forceImmediate: true }).catch((err) => {
+        app.log.warn({ err, tableId: rt.tableId, userId }, "disconnect leave failed");
+      });
+    }, DISCONNECT_LEAVE_GRACE_MS);
   });
 });
 

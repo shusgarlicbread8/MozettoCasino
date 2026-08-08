@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { HoldemState } from "@mozetto/game-rules";
-import { getLegalActions } from "@mozetto/game-rules";
+import type { DecisionFacts, HoldemState } from "@mozetto/game-rules";
+import { chipsToUsd, getLegalActions } from "@mozetto/game-rules";
 import type { AgentRequest, AgentResponse, PokerAction } from "@mozetto/shared-types";
 
 const AGENT_RUNTIME_URL = process.env.AGENT_RUNTIME_URL ?? "http://localhost:4002";
@@ -47,6 +47,11 @@ export type SeatControllerContext = {
   computeRemainingMs: number;
   sessionId?: string;
   handId?: string | null;
+  /**
+   * Deterministic decision facts (pot odds, SPR, range, equity-vs-range,
+   * candidate sizings). Supplied so the model never has to derive them.
+   */
+  facts?: DecisionFacts;
 };
 
 export interface SeatController {
@@ -59,7 +64,7 @@ function pickLegalRandom(legal: ReturnType<typeof getLegalActions>): SeatDecisio
   const pick = legal[Math.floor(Math.random() * legal.length)] ?? fold ?? check ?? legal[0];
   return {
     action: pick?.action ?? "fold",
-    amount: pick?.minAmount,
+    amount: pick?.minAmount != null ? chipsToUsd(pick.minAmount) : undefined,
     reasonCode: "legal_random",
     computeUsed: 5,
     fallbackUsed: true,
@@ -71,28 +76,31 @@ function buildAgentRequest(ctx: SeatControllerContext): AgentRequest & {
   handId?: string;
   seatIndex?: number;
   cadenceWait?: "client" | "server" | "off";
+  facts?: DecisionFacts;
 } {
   const seat = ctx.state.seats.find((s) => s.seatIndex === ctx.seatIndex)!;
-  const callAmount = Math.max(0, ctx.state.currentBet - seat.bet);
+  const toCallChips = ctx.state.currentBet > seat.bet ? ctx.state.currentBet - seat.bet : 0n;
+  const callAmount = chipsToUsd(toCallChips);
   return {
     agentVersion: "1",
     profileKey: (ctx.profileKey as AgentRequest["profileKey"]) ?? "machine",
     game: "holdem",
     legalActions: getLegalActions(ctx.state).map((l) => ({
       action: l.action,
-      minAmount: l.minAmount,
-      maxAmount: l.maxAmount,
+      minAmount: l.minAmount != null ? chipsToUsd(l.minAmount) : undefined,
+      maxAmount: l.maxAmount != null ? chipsToUsd(l.maxAmount) : undefined,
     })),
     privateState: { holeCards: seat.hole ?? [] },
     publicState: {
       board: ctx.state.board,
-      pot: ctx.state.pot,
+      pot: chipsToUsd(ctx.state.pot),
       callAmount,
       street: ctx.state.street,
-      stacks: ctx.state.seats.map((s) => s.stack),
+      stacks: ctx.state.seats.map((s) => chipsToUsd(s.stack)),
       toActSeat: ctx.seatIndex,
     },
     computeRemaining: ctx.computeRemainingMs,
+    facts: ctx.facts,
     sessionId: ctx.sessionId,
     handId: ctx.handId ?? undefined,
     seatIndex: ctx.seatIndex,
@@ -122,17 +130,25 @@ export class AgentRuntimeController implements SeatController {
     const legal = getLegalActions(ctx.state);
     if (!legal.length) return { action: "fold", reasonCode: "no_legal", fallbackUsed: true };
 
+    const started = Date.now();
     try {
       const res = await fetch(`${AGENT_RUNTIME_URL.replace(/\/$/, "")}/v1/act`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(buildAgentRequest(ctx)),
-        signal: AbortSignal.timeout(Math.min(ctx.computeRemainingMs, 14_000)),
+        // Preserve room to commit inside the product's 12s maximum visible cadence.
+        signal: AbortSignal.timeout(Math.min(ctx.computeRemainingMs, 10_500)),
       });
-      if (!res.ok) return pickLegalRandom(legal);
+      if (!res.ok) {
+        return { ...pickLegalRandom(legal), providerLatencyMs: Date.now() - started };
+      }
       const body = (await res.json()) as AgentRuntimeActResponse;
       if (!legal.some((l) => l.action === body.action)) {
-        return { ...pickLegalRandom(legal), reasonCode: "illegal_retry_random" };
+        return {
+          ...pickLegalRandom(legal),
+          reasonCode: "illegal_retry_random",
+          providerLatencyMs: Date.now() - started,
+        };
       }
       return {
         action: body.action,
@@ -150,7 +166,7 @@ export class AgentRuntimeController implements SeatController {
         modelId: body.modelId ?? "agent-runtime",
       };
     } catch {
-      return pickLegalRandom(legal);
+      return { ...pickLegalRandom(legal), providerLatencyMs: Date.now() - started };
     }
   }
 }
@@ -174,7 +190,7 @@ export class TimeoutFallbackController implements SeatController {
     const fb = fold ?? check ?? legal[0];
     return {
       action: fb?.action ?? "fold",
-      amount: fb?.minAmount,
+      amount: fb?.minAmount != null ? chipsToUsd(fb.minAmount) : undefined,
       reasonCode: "timeout_fallback",
       computeUsed: 0,
       fallbackUsed: true,
@@ -198,7 +214,7 @@ export class SiliconFlowController implements SeatController {
     const prompt = {
       profile: ctx.profileKey,
       street: ctx.state.street,
-      pot: ctx.state.pot,
+      pot: chipsToUsd(ctx.state.pot),
       board: ctx.state.board,
       hole: seat.hole,
       legal: legal.map((l) => l.action),
@@ -234,7 +250,9 @@ export class SiliconFlowController implements SeatController {
       if (!match) return this.fallback.decide(ctx);
       return {
         action: match.action,
-        amount: parsed.amount ?? match.minAmount,
+        amount:
+          parsed.amount ??
+          (match.minAmount != null ? chipsToUsd(match.minAmount) : undefined),
         reasonCode: "siliconflow",
         computeUsed: Date.now() - started,
         latencyMs: Date.now() - started,

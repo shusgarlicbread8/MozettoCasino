@@ -192,6 +192,7 @@ app.post("/v1/act", async (req, reply) => {
       handId: parsed.data.handId,
       seatIndex: parsed.data.seatIndex,
       cadenceWait: parsed.data.cadenceWait,
+      facts: parsed.data.facts,
     });
 
     // Backward-compatible AgentResponse fields + WP-107 extensions.

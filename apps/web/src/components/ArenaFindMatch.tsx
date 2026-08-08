@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { PlayPermissionsPanel } from "@/components/PlayPermissionsPanel";
 import { SplitFlapNumber } from "@/components/SplitFlapNumber";
 import { Button, LeagueChip } from "@/components/ui";
+import { CITIES, cityDisplay, getCity } from "@mozetto/game-rules/cities";
 import { api, ApiError } from "@/lib/api";
 import {
   color,
@@ -38,12 +39,13 @@ const PRODUCT = {
   texas: {
     title: "Texas Hold'em",
     subtitle:
-      "Heads-up ranked. Pick league and AI profile — Mozetto finds your opponent. Exactly two seats.",
+      "Heads-up. Pick a city — Casual or Ranked — then an AI profile, and Mozetto finds your opponent. Exactly two seats.",
     lobbyPath: "/v1/arena",
     findPath: "/v1/arena/find-match",
-    gameLine: "Texas Hold'em · Heads-Up · Rated",
+    gameLine: "Texas Hold'em · Heads-Up",
+    seatsLabel: "Heads-up",
     rules:
-      "Equal stacks at a fixed buy-in (blinds 10% / 5%). Opponents assigned randomly. Same pair capped at 5 matches/day. Empty tables close after 10 minutes.",
+      "The city sets the blinds; you choose a buy-in between 40 and 100 big blinds. Your bankroll never raises that ceiling. Ranked play runs from Berlin up to Monaco: results move Arena Rating and the same pair is hard-capped at 5 matches/day. Porto is Casual mode — the money is just as real, but no result touches Arena Rating and a rematch is only soft-avoided. Empty tables close after 10 minutes.",
     altHref: "/poker/classic",
     altLabel: "Poker (Classic) · 6-max",
     searching: "Searching for an opponent…",
@@ -51,24 +53,37 @@ const PRODUCT = {
   classic: {
     title: "Poker (Classic)",
     subtitle:
-      "Multiway 6-max. Join the fullest open table in your league, or open a new one — up to six players.",
+      "Multiway 6-max. Join the fullest open table in your city, or open a new one — up to six players.",
     lobbyPath: "/v1/arena/classic",
     findPath: "/v1/arena/classic/find-match",
     gameLine: "Poker (Classic) · 6-Max",
+    seatsLabel: "6-max",
     rules:
-      "Equal buy-ins, up to six seats. Find Match opens a table or fills an open seat. Blinds 10% / 5% of buy-in. Empty tables close after 10 minutes.",
+      "Up to six seats. The city sets the blinds; you choose a buy-in between 40 and 100 big blinds, so stacks at a table may differ. Ranked play runs from Berlin up to Monaco; Porto is Casual mode and never moves Arena Rating. Find Match opens a table or fills an open seat. Empty tables close after 10 minutes.",
     altHref: "/poker",
     altLabel: "Texas Hold'em · Heads-up",
     searching: "Finding an open table…",
   },
 } as const;
 
+/**
+ * A city as the lobby renders it. `cityId` and `id` are the same value the API
+ * persists as `league_id`; the stakes fields are what make a card readable —
+ * a card must never be just a city name.
+ */
 type ArenaLeague = {
   id: string;
+  cityId?: string;
   name: string;
   color: string;
   buyIn: number;
   open: boolean;
+  rated?: boolean;
+  stakesLabel?: string;
+  buyInLabel?: string;
+  buyInBbLabel?: string;
+  modeLabel?: string;
+  variantLabel?: string;
   tables: number;
   seated: number;
 };
@@ -124,7 +139,7 @@ const PROFILES: Array<{
   },
 ];
 
-const JOURNEY = ["Game", "League", "Profile", "Tune", "Find Match"] as const;
+const JOURNEY = ["Game", "City", "Buy-in", "Profile", "Find Match"] as const;
 
 const money = (n: number) =>
   "$" + Number(n).toLocaleString("en-US", { maximumFractionDigits: 0 });
@@ -134,19 +149,57 @@ function shortHash(h: string | null | undefined): string | null {
   return `${h.slice(0, 8)}…${h.slice(-6)}`;
 }
 
+/**
+ * Cities are the canonical stake definitions — see @mozetto/game-rules/cities.
+ * The city fixes the blinds; the player then chooses a buy-in in the 40-100BB
+ * band. A bankroll never raises that ceiling.
+ */
 function fallbackLeagues(): ArenaLeague[] {
-  return [
-    { id: "bronze", name: "Bronze", color: "#B87333", buyIn: 100, open: true, tables: 0, seated: 0 },
-    { id: "silver", name: "Silver", color: "#B8C0C8", buyIn: 500, open: true, tables: 0, seated: 0 },
-    { id: "gold", name: "Gold", color: "#C9A227", buyIn: 1500, open: true, tables: 0, seated: 0 },
-    { id: "platinum", name: "Platinum", color: "#8FE3D2", buyIn: 5000, open: true, tables: 0, seated: 0 },
-  ];
+  return CITIES.map((c) => {
+    const d = cityDisplay(c);
+    return {
+      id: c.id,
+      cityId: c.id,
+      name: d.name,
+      color: d.color,
+      buyIn: d.maxBuyIn,
+      open: true,
+      rated: d.rated,
+      stakesLabel: d.stakesLabel,
+      buyInLabel: d.buyInLabel,
+      buyInBbLabel: d.buyInBbLabel,
+      modeLabel: d.modeLabel,
+      variantLabel: d.variantLabel,
+      tables: 0,
+      seated: 0,
+    };
+  });
 }
 
-function stakesForBuyIn(buyIn: number) {
-  const bb = Math.max(0.01, Math.round(buyIn * 0.1 * 100) / 100);
-  const sb = Math.max(0.01, Math.round(buyIn * 0.05 * 100) / 100);
-  return { sb, bb };
+/** Stakes for a city id, falling back to the server-reported buy-in ceiling. */
+function stakesForLeague(leagueId: string) {
+  const city = getCity(leagueId);
+  if (!city) return { sb: 0, bb: 0, minBuyIn: 0, maxBuyIn: 0 };
+  const d = cityDisplay(city);
+  return { sb: d.smallBlind, bb: d.bigBlind, minBuyIn: d.minBuyIn, maxBuyIn: d.maxBuyIn };
+}
+
+/**
+ * Card copy for a city. Prefers what the API sent, but always has a local
+ * answer, so a card never degrades to a bare name while the lobby loads.
+ */
+function cityCardLines(league: ArenaLeague, seatsLabel: string) {
+  const city = getCity(league.cityId ?? league.id);
+  const d = city ? cityDisplay(city) : null;
+  const rated = league.rated ?? d?.rated ?? true;
+  return {
+    stakes: league.stakesLabel ?? d?.stakesLabel ?? "",
+    buyIn: league.buyInLabel ?? d?.buyInLabel ?? "",
+    buyInBb: league.buyInBbLabel ?? d?.buyInBbLabel ?? "40 – 100 BB",
+    variant: league.variantLabel ?? d?.variantLabel ?? "NLHE",
+    mode: league.modeLabel ?? d?.modeLabel ?? (rated ? "Ranked" : "Casual"),
+    seats: seatsLabel,
+  };
 }
 
 function phaseFromResult(result: FindMatchResult): MatchPhase {
@@ -168,6 +221,8 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
 
   const [leagues, setLeagues] = useState<ArenaLeague[]>([]);
   const [leagueId, setLeagueId] = useState("bronze");
+  /** Player-chosen buy-in in USDC; null means "use the city maximum". */
+  const [selectedBuyIn, setSelectedBuyIn] = useState<number | null>(null);
   const [profile, setProfile] = useState<ProfileId>("fox");
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<MatchPhase>("idle");
@@ -200,12 +255,20 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
       return;
     }
     try {
-      const s = await api<{ enabled: boolean }>("/v1/arena/play-status");
-      setSeamlessEnabled(Boolean(s.enabled));
+      // A seamless-play grant covers one city's table, so ask about the city
+      // the player is actually about to sit in.
+      const s = await api<{ enabled: boolean; permissionUpgradeRequired?: boolean }>(
+        `/v1/arena/play-status?cityId=${encodeURIComponent(leagueId)}`,
+      );
+      const on = Boolean(s.enabled);
+      setSeamlessEnabled(on);
+      if (s.permissionUpgradeRequired && !on) {
+        setShowEnable(true);
+      }
     } catch {
       setSeamlessEnabled(false);
     }
-  }, [isOnchain]);
+  }, [isOnchain, leagueId]);
 
   useEffect(() => setMounted(true), []);
 
@@ -228,10 +291,52 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
   const list = leagues.length ? leagues : fallbackLeagues();
   const league = useMemo(() => list.find((l) => l.id === leagueId) ?? list[0], [list, leagueId]);
   const selectedProfile = PROFILES.find((p) => p.id === profile) ?? PROFILES[0];
-  const { sb, bb } = stakesForBuyIn(league.buyIn);
-  const canAfford = playable >= league.buyIn;
-  const shortBy = Math.max(0, league.buyIn - playable);
+  const selectedCard = cityCardLines(league, cfg.seatsLabel);
+  const { bb, minBuyIn, maxBuyIn } = stakesForLeague(league.id);
+  // A player may bring anywhere in the city's band; default to the 100BB max.
+  // Highest buy-in the balance actually covers, snapped down to a whole big
+  // blind and never below the table minimum (so the floor stays visible even
+  // when it is unaffordable — the error message explains the shortfall).
+  const affordableMax = Math.max(
+    minBuyIn,
+    Math.min(maxBuyIn, bb > 0 ? Math.floor(playable / bb) * bb : playable),
+  );
+  // Default to the deepest stack the player can actually sit down with.
+  const buyIn = Math.min(
+    maxBuyIn || league.buyIn,
+    Math.max(minBuyIn, selectedBuyIn ?? affordableMax),
+  );
+  const buyInBb = bb > 0 ? Math.round(buyIn / bb) : 0;
+  const canAfford = playable >= (minBuyIn || league.buyIn);
+  const shortBy = Math.max(0, (minBuyIn || league.buyIn) - playable);
   const inputsLocked = busy || phase === "searching" || phase === "sealing" || phase === "seating";
+
+  const span = Math.max(1e-6, maxBuyIn - minBuyIn);
+  const sliderPct = Math.max(0, Math.min(100, ((buyIn - minBuyIn) / span) * 100));
+  const affordablePct = Math.max(0, Math.min(100, ((affordableMax - minBuyIn) / span) * 100));
+
+  /** Min / 60BB / 80BB / Max — the depths players actually reach for. */
+  const buyInPresets = useMemo(
+    () =>
+      [40, 60, 80, 100]
+        .map((depth) => ({
+          bb: depth,
+          amount: Number((bb * depth).toFixed(2)),
+          label: depth === 40 ? "MIN" : depth === 100 ? "MAX" : `${depth}BB`,
+        }))
+        .filter((p) => p.amount >= minBuyIn - 0.005 && p.amount <= maxBuyIn + 0.005),
+    [bb, minBuyIn, maxBuyIn],
+  );
+
+  /** Plain-language note on what this depth changes about the poker. */
+  const depthHint =
+    buyInBb >= 90
+      ? "Full depth — the most postflop room, and the most to protect."
+      : buyInBb >= 70
+        ? "Deep enough for multi-street play on every board."
+        : buyInBb >= 55
+          ? "Mid depth — commitment decisions arrive by the turn."
+          : "Short — expect to be all-in earlier, with less postflop play.";
 
   const applyMatchResult = (result: FindMatchResult) => {
     if (result.profileConfigHash) setLockedHash(result.profileConfigHash);
@@ -248,7 +353,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
       return;
     }
     if (isOnchain && !canAfford) {
-      setNeedsTopUp({ needed: league.buyIn, available: playable });
+      setNeedsTopUp({ needed: buyIn, available: playable });
       setError("Fund your Arena Account to cover this league buy-in.");
       setPhase("error");
       return;
@@ -266,13 +371,21 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
     setPhase("searching");
     setStatus(
       isOnchain
-        ? `Locking ${formatMoney(league.buyIn)} buy-in + profile for queue…`
+        ? `Locking ${formatMoney(buyIn)} buy-in + profile for queue…`
         : cfg.searching,
     );
+    // Send both spellings: `cityId` is the current name, `leagueId` the one
+    // the DB column and seat ticket still use. They are the same value.
+    const findBody = JSON.stringify({
+      cityId: league.id,
+      leagueId: league.id,
+      profileKey: profile,
+      buyIn,
+    });
     try {
       const result = await api<FindMatchResult>(cfg.findPath, {
         method: "POST",
-        body: JSON.stringify({ leagueId: league.id, profileKey: profile }),
+        body: findBody,
       });
       applyMatchResult(result);
 
@@ -283,7 +396,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
           try {
             const again = await api<FindMatchResult>(cfg.findPath, {
               method: "POST",
-              body: JSON.stringify({ leagueId: league.id, profileKey: profile }),
+              body: findBody,
             });
             applyMatchResult(again);
             if (again.status === "waiting") {
@@ -325,7 +438,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
           await new Promise((r) => setTimeout(r, 1000));
           const again = await api<FindMatchResult>(cfg.findPath, {
             method: "POST",
-            body: JSON.stringify({ leagueId: league.id, profileKey: profile }),
+            body: findBody,
           });
           applyMatchResult(again);
           if (again.tableId && again.joined) {
@@ -368,9 +481,40 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
     } catch (e) {
       if (e instanceof ApiError && e.data.error === "insufficient_funds") {
         setNeedsTopUp({
-          needed: Number(e.data.needed ?? league.buyIn),
+          needed: Number(e.data.needed ?? buyIn),
           available: Number(e.data.available ?? playable),
         });
+        setStatus(null);
+        setBusy(false);
+        setPhase("error");
+        return;
+      }
+      if (e instanceof ApiError && e.data.error === "already_seated_elsewhere") {
+        const prior = typeof e.data.tableId === "string" ? e.data.tableId : null;
+        setError(
+          prior
+            ? `${e.message} Open that table and leave, or wait a moment after closing the tab.`
+            : e.message,
+        );
+        setStatus(null);
+        setBusy(false);
+        setPhase("error");
+        return;
+      }
+      if (
+        e instanceof ApiError &&
+        (e.data.error === "permission_upgrade_required" ||
+          e.data.error === "seamless_play_required" ||
+          e.data.error === "signer_mismatch" ||
+          e.data.error === "vault_mismatch")
+      ) {
+        setShowEnable(true);
+        setSeamlessEnabled(false);
+        setError(
+          typeof e.data.message === "string"
+            ? e.data.message
+            : "Re-enable Seamless Play once, then Find Match again.",
+        );
         setStatus(null);
         setBusy(false);
         setPhase("error");
@@ -632,11 +776,12 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
               marginBottom: 10,
             }}
           >
-            1 · LEAGUE (Bronze → Platinum)
+            1 · CITY (Casual or Ranked)
           </div>
           <div className="mz-league-grid">
             {list.map((l, i) => {
               const on = leagueId === l.id;
+              const card = cityCardLines(l, cfg.seatsLabel);
               return (
                 <button
                   key={l.id}
@@ -644,6 +789,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
                   disabled={!l.open || inputsLocked}
                   onClick={() => {
                     setLeagueId(l.id);
+                    setSelectedBuyIn(null);
                     setNeedsTopUp(null);
                     setError(null);
                     if (phase === "error") setPhase("idle");
@@ -666,6 +812,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
                   }}
                 >
                   <LeagueChip league={l.name} size="sm" />
+                  {/* Stakes, game and band — never the city name on its own. */}
                   <div
                     style={{
                       marginTop: 8,
@@ -673,7 +820,25 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
                       color: l.color,
                     }}
                   >
-                    {money(l.buyIn)}
+                    {card.stakes}
+                  </div>
+                  <div
+                    style={{
+                      marginTop: 3,
+                      font: `400 10px ${font.mono}`,
+                      color: color.textMuted,
+                    }}
+                  >
+                    {card.variant} · {card.seats} · {card.mode}
+                  </div>
+                  <div
+                    style={{
+                      marginTop: 3,
+                      font: `400 10px ${font.mono}`,
+                      color: color.textMuted,
+                    }}
+                  >
+                    Buy-in {card.buyIn} ({card.buyInBb})
                   </div>
                   <div
                     style={{
@@ -841,10 +1006,13 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
           </div>
 
           <div style={{ marginTop: 14 }}>
-            <LeagueChip league={league.name} size="md" suffix />
+            <LeagueChip league={league.name} size="md" />
           </div>
           <div style={{ marginTop: 10, fontSize: 13, color: color.textMuted }}>
-            {cfg.gameLine} · {selectedProfile.name}
+            {selectedCard.variant} · {cfg.seatsLabel} · {selectedCard.stakes} · {selectedCard.mode}
+          </div>
+          <div style={{ marginTop: 4, fontSize: 12.5, color: color.textFaint }}>
+            Buy-in {selectedCard.buyIn} ({selectedCard.buyInBb}) · {selectedProfile.name}
           </div>
 
           <div
@@ -901,7 +1069,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
                     letterSpacing: "0.08em",
                   }}
                 >
-                  REQUIRED BUY-IN
+                  YOUR BUY-IN
                 </div>
                 <div
                   style={{
@@ -911,10 +1079,95 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
                     marginTop: 3,
                   }}
                 >
-                  {money(league.buyIn)}
+                  {money(buyIn)}
                 </div>
               </div>
-              <span style={{ font: `400 12px ${font.mono}`, color: color.textFaint }}>100 BB</span>
+              <span style={{ font: `400 12px ${font.mono}`, color: color.textFaint }}>
+                {bb > 0 ? Math.round(buyIn / bb) : 0} BB
+              </span>
+            </div>
+
+            {/* The city fixes the blinds; the player picks a depth in the band. */}
+            <div style={{ marginTop: 14 }}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 6,
+                  marginBottom: 10,
+                  flexWrap: "wrap",
+                }}
+              >
+                {buyInPresets.map((preset) => {
+                  const on = Math.abs(buyIn - preset.amount) < 0.005;
+                  const reachable = preset.amount <= affordableMax + 0.005;
+                  return (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      disabled={inputsLocked || !reachable}
+                      onClick={() => setSelectedBuyIn(preset.amount)}
+                      className="mz-touch"
+                      title={
+                        reachable
+                          ? `${money(preset.amount)} · ${preset.bb}BB`
+                          : `Needs ${money(preset.amount)} — you have ${money(playable)}`
+                      }
+                      style={{
+                        flex: "1 1 0",
+                        minWidth: 58,
+                        minHeight: 34,
+                        padding: "6px 8px",
+                        borderRadius: radius.sm,
+                        cursor: inputsLocked || !reachable ? "not-allowed" : "pointer",
+                        border: `1px solid ${on ? `${league.color}99` : color.line}`,
+                        background: on ? `${league.color}1F` : "transparent",
+                        color: on ? color.text : reachable ? color.textMuted : color.textFaint,
+                        opacity: reachable ? 1 : 0.4,
+                        font: `${on ? 600 : 400} 11px ${font.mono}`,
+                        letterSpacing: "0.04em",
+                        transition: "background .15s ease, border-color .15s ease",
+                      }}
+                    >
+                      {preset.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <input
+                type="range"
+                min={minBuyIn}
+                max={maxBuyIn}
+                step={Math.max(0.01, bb)}
+                value={buyIn}
+                disabled={inputsLocked}
+                onChange={(e) => setSelectedBuyIn(Number(e.target.value))}
+                aria-label="Buy-in"
+                aria-valuetext={`${money(buyIn)}, ${buyInBb} big blinds`}
+                className="mz-buyin-range"
+                style={{
+                  width: "100%",
+                  // Fill the track up to the handle, then show the slice the
+                  // balance cannot reach in red so the limit is visible before
+                  // the player drags into it.
+                  ["--mz-fill" as string]: `${sliderPct}%`,
+                  ["--mz-afford" as string]: `${affordablePct}%`,
+                  ["--mz-accent" as string]: league.color,
+                }}
+              />
+
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  font: `400 11px ${font.mono}`,
+                  color: color.textFaint,
+                  marginTop: 6,
+                }}
+              >
+                <span>{money(minBuyIn)} · 40BB min</span>
+                <span>{money(maxBuyIn)} · 100BB max</span>
+              </div>
             </div>
 
             <div
@@ -922,9 +1175,28 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
                 marginTop: 10,
                 font: `400 11px ${font.mono}`,
                 color: color.textFaint,
+                lineHeight: 1.5,
               }}
             >
-              Blinds {money(sb)} / {money(bb)} · equal stacks · fixed
+              Blinds {selectedCard.stakes} · the table caps the buy-in, not your balance.
+              {affordableMax < maxBuyIn - 0.005 && affordableMax >= minBuyIn ? (
+                <>
+                  {" "}
+                  <span style={{ color: color.textMuted }}>
+                    Your balance covers up to {money(affordableMax)}.
+                  </span>
+                </>
+              ) : null}
+            </div>
+
+            <div
+              style={{
+                marginTop: 6,
+                font: `400 11px ${font.mono}`,
+                color: color.textMuted,
+              }}
+            >
+              {depthHint}
             </div>
 
             <ul
@@ -998,7 +1270,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
                   lineHeight: 1.45,
                 }}
               >
-                Buy-in {money(league.buyIn)} from Arena Account · balance {money(playable)}.
+                Buy-in {money(buyIn)} ({bb > 0 ? Math.round(buyIn / bb) : 0}BB) from Arena Account · balance {money(playable)}.
                 {seamlessEnabled ? " Mozetto handles signing — no wallet popup." : ""}
               </div>
             )}
@@ -1007,6 +1279,7 @@ export function ArenaFindMatch({ product }: { product: ArenaProduct }) {
               <div style={{ marginTop: 14 }}>
                 <PlayPermissionsPanel
                   compact
+                  cityId={league.id}
                   autoOpen={showEnable}
                   onUpdated={() => {
                     void refreshPlayStatus();

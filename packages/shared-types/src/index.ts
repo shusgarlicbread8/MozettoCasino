@@ -48,6 +48,15 @@ export const AgentRequestSchema = z.object({
     toActSeat: z.number(),
   }),
   computeRemaining: z.number(),
+  /**
+   * Deterministic decision facts from `@mozetto/game-rules` (pot odds, SPR,
+   * position, opponent range + equity-vs-range, candidate sizings).
+   *
+   * Kept as a passthrough record on the wire so the analytics layer can add
+   * fields without a lockstep schema bump; `DecisionFacts` is the source of
+   * truth for its shape.
+   */
+  facts: z.record(z.unknown()).optional(),
 });
 export type AgentRequest = z.infer<typeof AgentRequestSchema>;
 

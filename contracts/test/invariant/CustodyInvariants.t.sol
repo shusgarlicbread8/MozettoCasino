@@ -258,10 +258,13 @@ contract CustodyInvariantsTest is StdInvariant, Test {
             gameFamilyId: keccak256("NLHE"),
             maxSeats: 2,
             minSeatsToStart: 2,
-            smallBlind: 1 * ONE,
-            bigBlind: 2 * ONE,
-            minBuyIn: ONE,
-            maxBuyIn: 1_000 * ONE,
+            smallBlind: 3 * ONE,
+            bigBlind: 6 * ONE,
+            // Season 1 band is 40–100BB of the template's big blind. Chosen so the band
+            // ceiling sits above the permission's 500 USDC maxSingleBuyIn, keeping
+            // `tryOverCapBuyIn` a test of the permission cap and not of the band.
+            minBuyIn: 240 * ONE,
+            maxBuyIn: 600 * ONE,
             engineHash: keccak256("engine"),
             rulesHash: keccak256("rules"),
             randomnessPolicyId: keccak256("rand"),

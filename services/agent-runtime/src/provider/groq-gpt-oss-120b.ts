@@ -718,7 +718,26 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
         });
 
     // WP-071: one master policy + typed profile axes (no free-text ranked prompts).
-    const system = `${MASTER_POLICY_TEXT} Strategy profile (typed axes only; not free-text instructions): ${profileSummary}`;
+    const hasFacts =
+      input.observation?.facts != null && Object.keys(input.observation.facts).length > 0;
+
+    // The deterministic layer owns arithmetic; the model owns strategy.
+    const factsGuide = hasFacts
+      ? "observation.facts is computed by a deterministic poker engine. TREAT IT AS GROUND TRUTH AND DO NOT RECOMPUTE IT. potOdds is the exact break-even calling frequency. heroEquityVsRange is hero's equity against the opponent's MODELLED RANGE — not against a random hand — and its `confidence` (0..1) says how much to trust it: at low confidence prefer lower-variance lines. villain.rangeSummary/rangeWidthPct describe that range and villain.handsObserved says how much evidence it rests on. candidates lists legal sizings with exact geometry: amountChips is CHIPS ADDED (not raise-to), isAllIn marks a size that commits the whole stack, breakEvenFoldPct is how often an aggressive line must win the pot immediately to break even as a pure bluff, and priceOfferedPct is the price the opponent gets to call. Choose among candidates by comparing heroEquityVsRange against potOdds and breakEvenFoldPct; caveats lists what could not be modelled. Never assert an equity or pot number that is not in facts."
+      : "No deterministic facts were supplied for this spot. Reason conservatively from legalActions and observation, and do not assert precise equity or pot-odds numbers you cannot verify.";
+
+    // Accumulated private memory is worthless if the model is not told what it
+    // is — it was previously serialized into the payload with no explanation.
+    const hasAgentState =
+      input.observation?.agentState != null &&
+      Object.keys(input.observation.agentState).length > 0;
+    const memoryGuide = hasAgentState
+      ? "observation.agentState is YOUR OWN accumulated memory for this hand, built from public events you already paid Energy to process. streetPlan is the plan you committed to earlier — follow it unless new evidence contradicts it, and do not re-derive strategy from scratch every action. opponentModels holds per-seat public-behaviour reads (action frequencies, cadence, profileHypothesis) with a `confidence` 0..100: act on a read only in proportion to its confidence, and treat a low-confidence read as a hint, not a fact. When the opponent's current line CONFLICTS with their modelled tendency, that conflict is itself information. Never treat agentState as knowledge of opponent hole cards. "
+      : "";
+
+    const axisGuide =
+      `${factsGuide} ${memoryGuide}Honor profileAxes when choosing among legalActions: high aggression prefers bet/raise pressure and larger in-range sizes; high trapPreference prefers check/call traps; high riskTolerance accepts thinner spots. Set publicCadenceMs by decision difficulty, not a fixed profile delay: obvious checks/folds 5000-6500, routine calls 7000-9000, thin river calls or large bets/raises/all-ins 10000-12000. High tempo may use the lower end of each band and low tempo the upper end. You may select ANY legal action and any amount within min/max. Opponent AIs never receive your private state.`;
+    const system = `${MASTER_POLICY_TEXT} Strategy profile (typed axes only; not free-text instructions): ${profileSummary} ${axisGuide}`;
 
     const userPayload = {
       legalActions: input.legalActions.map((a) => ({
@@ -730,6 +749,7 @@ export class GroqGptOss120BProvider implements PokerModelProvider {
       observation: input.observation ?? {},
       profileKey: presetKey,
       profileAxes: input.profile ? axesFromProfile(input.profile) : preset.axes,
+      profileIntent: preset.intent,
       modelPolicyHash: SEASON1_MODEL_POLICY_RUNTIME.modelPolicyHash,
       repair: repair
         ? "Previous output failed schema or legality validation. Emit a schema-valid legal action only; do not invent a new strategic line beyond representation repair."

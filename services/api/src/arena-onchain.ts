@@ -25,7 +25,18 @@ import {
   seatTicketV3Domain,
   leagueBit,
   ALL_LEAGUE_MASK,
+  cityTemplateId as cityTemplate,
 } from "@mozetto/blockchain";
+import {
+  atomsToUsdc,
+  buyInBand,
+  cityIdAlias,
+  getCity,
+  requireCity,
+  resolveCityId,
+  validateBuyIn,
+  type CityRef,
+} from "@mozetto/game-rules";
 import { SessionSealCoordinator } from "@mozetto/session-seal";
 import {
   assertLeague,
@@ -33,6 +44,7 @@ import {
   claimOpenOnchainSession,
   claimSingleTicket,
   claimTicketPair,
+  withMatchmakingLock,
   createMatchmakingBatch,
   createOnchainArenaTable,
   createOnchainSessionPending,
@@ -47,7 +59,10 @@ import {
   invalidateQueuedTicketsForProfile,
   reapOrphanOnchainTables,
   isFeatureEnabled,
-  leagueBuyInRaw,
+  leagueIsRated,
+  leaguePairCapMode,
+  resolveBuyIn,
+  seatBuyInRaw,
   linkTicketsToBatch,
   getAvailableBalance,
   markBatchFailed,
@@ -88,7 +103,8 @@ const PERMISSION_DURATION_SEC = 30 * 24 * 60 * 60;
 const DEFAULT_LIFETIME_CAP = 100_000n * 10n ** 6n;
 const DEFAULT_MAX_AT_RISK = 10_000n * 10n ** 6n;
 const DEFAULT_MAX_BUY_IN = 10_000n * 10n ** 6n;
-const DEFAULT_MAX_GAMES = 4;
+/** Ranked V1: one live AI seat at a time (prevents concurrent_games lockouts). */
+const DEFAULT_MAX_GAMES = 1;
 
 const GamePermissionSubmitSchema = z.object({
   account: z.string().regex(/^0x[a-fA-F0-9]{40}$/i),
@@ -167,6 +183,21 @@ function useSealAndFundV3(format: ArenaFormat = "hu"): boolean {
 }
 
 /** Active ranked custody template registered by the current V2 deployment. */
+/**
+ * The template a city plays under. Sealing a Monaco table under Berlin's
+ * template would put the wrong blinds and the wrong rake commitment into the
+ * permanent on-chain record, so each city gets its own.
+ *
+ * Classic still rides the heads-up id, matching the pre-WS-B behaviour: the
+ * six-max ids are registered for Berlin and London but the Classic seating path
+ * has not been moved over yet.
+ */
+function cityTemplateId(cityId: string, format: ArenaFormat = "hu"): Hex {
+  void format;
+  return cityTemplate(cityId, "hu");
+}
+
+/** @deprecated Legacy fixed id; kept for canonical vectors and the golden E2E. */
 function rankedHuTemplateId(format: ArenaFormat = "hu"): Hex {
   void format;
   return NLHE_HU_STANDARD_V2_TEMPLATE_ID as Hex;
@@ -180,10 +211,56 @@ function matchmakingPool(chainId: number, leagueId: string, format: ArenaFormat 
   return keccak256(toBytes(`mozetto:pool:${chainId}:${leagueId}`));
 }
 
+/**
+ * Atoms a queued ticket locks. Seats no longer share one number: each player
+ * picks their own buy-in inside the city band, so read it off their ticket.
+ */
+function ticketBuyInRaw(ticket: { buy_in: string }): bigint {
+  return BigInt(Math.round(Number(ticket.buy_in) * 10 ** USDC_DECIMALS));
+}
+
 function isUnknownSessionError(e: unknown): boolean {
   const msg = e instanceof Error ? e.message : String(e);
   // ArenaVaultV2.UnknownSession() — DB thinks the table is open, chain does not.
   return /0x4fca7936|UnknownSession/i.test(msg);
+}
+
+/** ArenaAccount.LeagueNotAllowed() — permission leagueMask missing this league bit. */
+function isLeagueNotAllowedError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /0xe9364741|LeagueNotAllowed/i.test(msg);
+}
+
+/** ArenaAccount.RatedRequired() — permission ratedOnly blocks Casual (rated=false). */
+function isRatedRequiredError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /0xc03e64a9|RatedRequired/i.test(msg);
+}
+
+/** ArenaAccount.TemplateNotAllowed() — grant is bound to a different city's table. */
+function isTemplateNotAllowedError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /TemplateNotAllowed/i.test(msg);
+}
+
+function permissionCoversLeague(opts: {
+  leagueMask: number;
+  ratedOnly: boolean;
+  leagueBit: number;
+  rated: boolean;
+}): boolean {
+  if (opts.leagueBit === 0) return false;
+  if ((opts.leagueMask & opts.leagueBit) === 0) return false;
+  if (opts.ratedOnly && !opts.rated) return false;
+  return true;
+}
+
+function permissionUpgradeMessage(opts: { leagueId: string; rated: boolean }): string {
+  if (!opts.rated) {
+    return "Casual play needs an updated Seamless Play permission. Re-enable Seamless Play once (adds Casual + unrated tickets), then Find Match again.";
+  }
+  const city = getCity(opts.leagueId);
+  return `Your Seamless Play permission does not cover ${city?.name ?? opts.leagueId}. Re-enable Seamless Play for this city, then Find Match again.`;
 }
 
 async function readVaultSessionOpenedAt(
@@ -269,7 +346,14 @@ async function ensureArenaAccountDeployed(session: SessionUser, chainId: number)
     throw Object.assign(new Error(msg), { code: "predict_arena_failed", cause: e });
   }
 
-  if (!row) {
+  // Always re-bind DB → current factory prediction. Anvil --redeploy changes the
+  // CREATE2 factory; keeping a stale arena_account_address makes the wallet UI
+  // read $0 while fund-test mints to the live account.
+  if (
+    !row ||
+    row.arena_account_address.toLowerCase() !== predicted.toLowerCase() ||
+    (row.factory_address && row.factory_address.toLowerCase() !== factory.toLowerCase())
+  ) {
     row = await upsertArenaAccount({
       profileId: session.profileId,
       chainId,
@@ -277,7 +361,8 @@ async function ensureArenaAccountDeployed(session: SessionUser, chainId: number)
       arenaAccountAddress: predicted,
       factoryAddress: factory,
       implementationAddress: chainCfg.contracts.arenaAccountImplementation,
-      deploymentStatus: "predicted",
+      deploymentStatus: row?.deployment_status === "deployed" ? "deployed" : "predicted",
+      deployTxHash: row?.deploy_tx_hash ?? null,
     });
   }
 
@@ -289,8 +374,21 @@ async function ensureArenaAccountDeployed(session: SessionUser, chainId: number)
   } as never)) as Address;
 
   if (onchain && onchain !== "0x0000000000000000000000000000000000000000") {
-    if (row.deployment_status !== "deployed") {
-      await markArenaAccountDeployed(owner, chainId, "already-deployed");
+    if (
+      row.arena_account_address.toLowerCase() !== onchain.toLowerCase() ||
+      row.deployment_status !== "deployed" ||
+      (row.factory_address && row.factory_address.toLowerCase() !== factory.toLowerCase())
+    ) {
+      await upsertArenaAccount({
+        profileId: session.profileId,
+        chainId,
+        ownerAddress: owner,
+        arenaAccountAddress: onchain,
+        factoryAddress: factory,
+        implementationAddress: chainCfg.contracts.arenaAccountImplementation,
+        deploymentStatus: "deployed",
+        deployTxHash: row.deploy_tx_hash ?? "already-deployed",
+      });
     }
     return onchain.toLowerCase() as Address;
   }
@@ -335,6 +433,14 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "wallet_required" });
     }
 
+    // A GamePermission is bound to one template, and a template belongs to one
+    // city, so the grant a player signs is per city. Default to Berlin, which is
+    // where ranked play starts and what callers predating this parameter meant.
+    const permissionCityId = resolveCityId(req.query as CityRef) ?? "bronze";
+    if (!getCity(permissionCityId)) {
+      return reply.code(400).send({ error: "invalid_query", message: "unknown cityId" });
+    }
+
     const chainId = session.chainId;
     const chainCfg = getChainConfig(resolveChainEnv(chainId));
     const vault = chainCfg.contracts.arenaVault;
@@ -350,37 +456,26 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
     });
 
     const owner = (session.ownerAddress ?? session.walletAddress) as Address;
-    let arenaAccount =
-      (session.arenaAccountAddress as Address | null) ??
-      ((await getArenaAccountByProfile(session.profileId, chainId))?.arena_account_address as
-        | Address
-        | undefined);
-
-    if (!arenaAccount) {
-      try {
-        const factoryCode = await publicClient.getBytecode({ address: factory });
-        if (!factoryCode || factoryCode === "0x") {
-          return reply.code(503).send({
-            error: "contracts_not_deployed",
-            message:
-              "Arena Account factory has no code on this RPC. Run ./scripts/start-local.sh --redeploy.",
-          });
-        }
-        arenaAccount = (await publicClient.readContract({
-          address: factory,
-          abi: arenaAccountFactoryAbi,
-          functionName: "predictAddress",
-          args: [owner],
-        } as never)) as Address;
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : "predictAddress failed";
-        return reply.code(503).send({
-          error: msg.includes("ECONNREFUSED") ? "rpc_unavailable" : "predict_arena_failed",
-          message: msg.includes("ECONNREFUSED")
-            ? "Anvil RPC is down. Start it and redeploy if needed."
-            : msg,
-        });
+    // Always re-bind to the current factory CREATE2 address. After Anvil
+    // --redeploy, session/DB can still point at a prior ArenaAccount whose
+    // activeGames slot never settles — that surfaces as concurrent_games.
+    let arenaAccount: Address;
+    try {
+      const ensured = await ensureArenaAccountDeployed(session, chainId);
+      if (!ensured) {
+        return reply.code(503).send({ error: "arena_account_unavailable" });
       }
+      arenaAccount = ensured;
+      session.arenaAccountAddress = ensured;
+    } catch (e) {
+      const err = e as { code?: string; message?: string };
+      const msg = err.message ?? (e instanceof Error ? e.message : "arena deploy failed");
+      return reply.code(503).send({
+        error: err.code ?? (msg.includes("ECONNREFUSED") ? "rpc_unavailable" : "predict_arena_failed"),
+        message: msg.includes("ECONNREFUSED")
+          ? "Anvil RPC is down. Start it and redeploy if needed."
+          : msg,
+      });
     }
 
     let deployed = false;
@@ -408,6 +503,10 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
       maxConcurrentGames: number;
       lifetimeCommittedCap: string;
       maxTotalAtRisk: string;
+      leagueMask: number;
+      ratedOnly: boolean;
+      /** The one template this grant covers — a city, not the whole ladder. */
+      gameTemplateId: string;
     } | null = null;
 
     let accountBalance = 0n;
@@ -473,6 +572,9 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
         maxConcurrentGames: Number(gameAuth[11]),
         lifetimeCommittedCap: gameAuth[5].toString(),
         maxTotalAtRisk: gameAuth[7].toString(),
+        leagueMask: Number(gameAuth[4]),
+        ratedOnly: Boolean(gameAuth[13]),
+        gameTemplateId: gameAuth[3],
       };
     }
 
@@ -489,24 +591,37 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
       sessionSigner: signer?.address ?? "0x0000000000000000000000000000000000000000",
       usdc: token,
       vault,
-      gameTemplateId: rankedHuTemplateId("hu"),
+      gameTemplateId: cityTemplateId(permissionCityId),
       leagueMask: ALL_LEAGUE_MASK,
       lifetimeCommittedCap: DEFAULT_LIFETIME_CAP.toString(),
       maxTotalAtRisk: DEFAULT_MAX_AT_RISK.toString(),
       maxSingleBuyIn: DEFAULT_MAX_BUY_IN.toString(),
       validUntil: now + PERMISSION_DURATION_SEC,
       maxConcurrentGames: DEFAULT_MAX_GAMES,
-      ratedOnly: true,
+      // Allow Casual (rated=false) tickets under the same seamless permission.
+      ratedOnly: false,
       nonce: authNonce.toString(),
       enabled: true,
     };
 
+    const signerOk = Boolean(
+      auth?.enabled &&
+        signer &&
+        auth.sessionSigner.toLowerCase() === signer.address.toLowerCase(),
+    );
+    // Older grants used mask 15 + ratedOnly=true — Casual (bit 16, unrated) needs a refresh.
+    // A grant for another city's template also needs one: `ArenaAccount.lockBuyIn`
+    // reverts `TemplateNotAllowed()` when the seat ticket names a different table.
+    const permissionUpgradeRequired = Boolean(
+      signerOk &&
+        auth &&
+        ((auth.leagueMask & ALL_LEAGUE_MASK) !== ALL_LEAGUE_MASK ||
+          auth.ratedOnly ||
+          auth.gameTemplateId.toLowerCase() !== defaults.gameTemplateId.toLowerCase()),
+    );
+
     return {
-      enabled: Boolean(
-        auth?.enabled &&
-          signer &&
-          auth.sessionSigner.toLowerCase() === signer.address.toLowerCase(),
-      ),
+      enabled: signerOk && !permissionUpgradeRequired,
       ownerAddress: owner.toLowerCase(),
       arenaAccountAddress: arenaAccount.toLowerCase(),
       deployed,
@@ -519,6 +634,7 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
           signer &&
           auth.sessionSigner.toLowerCase() !== signer.address.toLowerCase(),
       ),
+      permissionUpgradeRequired,
       defaults,
       domain: gamePermissionDomain(chainId, arenaAccount),
       types: GAME_PERMISSION_TYPES,
@@ -848,40 +964,64 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
     }
     const q = TicketParamsQuerySchema.safeParse(req.query);
     if (!q.success) return reply.code(400).send({ error: "invalid_query" });
+    // `cityId` and `leagueId` are the same value; accept either spelling.
+    const cityId = resolveCityId(q.data);
+    if (!cityId) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_query", message: "cityId (or leagueId) required" });
+    }
 
     const chainId = session.chainId;
     const chainCfg = getChainConfig(resolveChainEnv(chainId));
     const vault = chainCfg.contracts.arenaVault;
     if (!vault) return reply.code(503).send({ error: "vault_not_deployed" });
 
-    const league = assertLeague(q.data.leagueId);
+    assertLeague(cityId);
     const arena = await ensureArenaAccountDeployed(session, chainId);
     if (!arena) return reply.code(503).send({ error: "arena_account_unavailable" });
+
+    // The city's blinds decide the band; a bankroll can only pick inside it.
+    let buyInUsdc: number;
+    try {
+      buyInUsdc = resolveBuyIn(cityId, q.data.buyIn ?? null);
+    } catch (e) {
+      return reply.code(400).send({
+        error: "buy_in_out_of_range",
+        message: e instanceof Error ? e.message : "invalid buy-in",
+      });
+    }
+    const band = buyInBand(requireCity(cityId));
 
     const agentKey = q.data.profileKey ?? "fox";
     const agentProfileHash = await getAgentProfileHash(agentKey);
     const nonce = await suggestTicketNonce(arena, chainId);
     const expiresAt = Math.floor(Date.now() / 1000) + TICKET_TTL_SEC;
-    const pool = matchmakingPool(chainId, q.data.leagueId);
-    const bit = leagueBit(q.data.leagueId);
+    const pool = matchmakingPool(chainId, cityId);
+    const bit = leagueBit(cityId);
 
     return {
-      gameTemplateId: rankedHuTemplateId("hu"),
-      buyIn: leagueBuyInRaw(q.data.leagueId).toString(),
-      buyInUsdc: league.buyIn,
+      gameTemplateId: cityTemplateId(cityId),
+      buyIn: seatBuyInRaw(cityId, buyInUsdc).toString(),
+      buyInUsdc,
+      /** The band the vault will enforce, so the client can render a slider. */
+      minBuyInUsdc: atomsToUsdc(band.minAtoms),
+      maxBuyInUsdc: atomsToUsdc(band.maxAtoms),
+      minBuyInBb: band.minBb,
+      maxBuyInBb: band.maxBb,
       nonce: nonce.toString(),
       expiresAt,
       controllerHash: CONTROLLER_HASH,
       agentProfileHash,
       matchmakingPool: pool,
       leagueBit: bit,
-      rated: true,
+      rated: leagueIsRated(cityId),
       domain: seatTicketV2Domain(chainId, vault),
       types: SEAT_TICKET_V2_TYPES,
       chainId,
       vault,
       arenaAccountAddress: arena,
-      leagueId: q.data.leagueId,
+      ...cityIdAlias(cityId),
     };
   });
 
@@ -911,9 +1051,23 @@ export function registerArenaOnchainRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "player_mismatch", message: "SeatTicket.player must be your Arena Account." });
     }
 
-    const leagueId = parsed.data.leagueId ?? "bronze";
+    const leagueId = resolveCityId(parsed.data) ?? "bronze";
     const bit = Number(parsed.data.leagueBit ?? leagueBit(leagueId));
-    const rated = parsed.data.rated ?? true;
+    const rated = parsed.data.rated ?? leagueIsRated(leagueId);
+
+    // Reject an out-of-band buy-in here rather than letting the ticket queue and
+    // fail later as an opaque `BuyInOutOfBand` revert during sealAndFundSession.
+    const bandCheck = validateBuyIn({
+      city: requireCity(leagueId),
+      requestedAtoms: toBigIntField(parsed.data.buyIn),
+    });
+    if (!bandCheck.ok) {
+      return reply.code(400).send({
+        error: "buy_in_out_of_range",
+        message: bandCheck.message ?? "buy-in out of range",
+      });
+    }
+
     const message = {
       player: arena as Address,
       gameTemplateId: parsed.data.gameTemplateId as Hex,
@@ -973,9 +1127,15 @@ export async function handleOnchainFindMatch(
   req: FastifyRequest,
   reply: FastifyReply,
   session: SessionUser,
+  /** City id. The route resolves the `cityId` / `leagueId` alias before this. */
   leagueId: string,
   _profileKey: string | null,
   format: ArenaFormat = "hu",
+  /**
+   * Player-chosen buy-in in USDC. Null means "whatever the table allows at most",
+   * i.e. the 100BB ceiling — the historical behaviour.
+   */
+  requestedBuyInUsdc: number | null = null,
 ) {
   if (!(await isFeatureEnabled("onchain_matchmaking"))) {
     return reply.code(503).send({
@@ -993,6 +1153,20 @@ export async function handleOnchainFindMatch(
     league = assertLeague(leagueId);
   } catch (e) {
     return reply.code(400).send({ error: "invalid_league", message: e instanceof Error ? e.message : "bad league" });
+  }
+
+  // What this player brings to the felt. The city's band is the only ceiling —
+  // a bankroll never raises it — and an omitted request means the 100BB max.
+  let buyInUsdc: number;
+  let buyInRaw: bigint;
+  try {
+    buyInUsdc = resolveBuyIn(leagueId, requestedBuyInUsdc);
+    buyInRaw = seatBuyInRaw(leagueId, buyInUsdc);
+  } catch (e) {
+    return reply.code(400).send({
+      error: "buy_in_out_of_range",
+      message: e instanceof Error ? e.message : "invalid buy-in",
+    });
   }
 
   const chainId = session.chainId;
@@ -1015,7 +1189,14 @@ export async function handleOnchainFindMatch(
     req.log.warn({ err }, "reapOrphanOnchainTables failed"),
   );
 
-  const existing = await getActiveOnchainTableForProfile(session.profileId, chainId, format);
+  // City-scoped sticky resume only. A Porto Find Match must not reopen a
+  // Berlin/Dubai (or any other) table that still holds this player's stack.
+  const existing = await getActiveOnchainTableForProfile(
+    session.profileId,
+    chainId,
+    format,
+    leagueId,
+  );
   if (existing?.table_id) {
     // Attach custody session id when available so clients/E2E can verify sealAndFund.
     const sess = await getOnchainSessionForTable(existing.table_id).catch(() => null);
@@ -1024,8 +1205,9 @@ export async function handleOnchainFindMatch(
       tableName: existing.table_name,
       created: false,
       alreadySeated: Boolean(existing.already_seated),
-      buyIn: league.buyIn,
+      buyIn: buyInUsdc,
       leagueId,
+      cityId: leagueId,
       arenaMode: "onchain" as const,
       chainId,
       format,
@@ -1036,6 +1218,21 @@ export async function handleOnchainFindMatch(
     };
   }
 
+  const seatedElsewhere = await getActiveOnchainTableForProfile(
+    session.profileId,
+    chainId,
+    format,
+  );
+  if (seatedElsewhere?.table_id) {
+    return reply.code(409).send({
+      error: "already_seated_elsewhere",
+      message: `Leave your ${seatedElsewhere.league_id} table before finding a match in ${leagueId}.`,
+      tableId: seatedElsewhere.table_id,
+      leagueId: seatedElsewhere.league_id,
+      cityId: seatedElsewhere.league_id,
+    });
+  }
+
   // Ticket already claimed into a batch — return that table instead of minting another ticket.
   const pendingMatch = await getPendingMatchForProfile(session.profileId, chainId, format);
   if (pendingMatch?.table_id) {
@@ -1044,7 +1241,7 @@ export async function handleOnchainFindMatch(
       tableName: pendingMatch.table_name,
       created: false,
       alreadySeated: false,
-      buyIn: league.buyIn,
+      buyIn: buyInUsdc,
       leagueId,
       arenaMode: "onchain" as const,
       chainId,
@@ -1061,7 +1258,6 @@ export async function handleOnchainFindMatch(
   }
 
   const pool = matchmakingPool(chainId, leagueId, format);
-  const buyInRaw = leagueBuyInRaw(leagueId);
   const bit = leagueBit(leagueId);
 
   // Opponent claimed our ticket moments ago — wait for table/session link, do not re-ticket.
@@ -1073,7 +1269,7 @@ export async function handleOnchainFindMatch(
         tableName: linked.table_name,
         created: false,
         alreadySeated: false,
-        buyIn: league.buyIn,
+        buyIn: buyInUsdc,
         leagueId,
         arenaMode: "onchain" as const,
         chainId,
@@ -1088,7 +1284,7 @@ export async function handleOnchainFindMatch(
     return {
       status: "matching" as const,
       message: "Match found — creating your table…",
-      buyIn: league.buyIn,
+      buyIn: buyInUsdc,
       leagueId,
       arenaMode: "onchain" as const,
       chainId,
@@ -1106,7 +1302,7 @@ export async function handleOnchainFindMatch(
       arena,
       pool,
       buyInRaw,
-      buyInUsdc: league.buyIn,
+      buyInUsdc,
       profileKey: _profileKey,
       leagueBit: bit,
       format,
@@ -1124,7 +1320,7 @@ export async function handleOnchainFindMatch(
           tableName: raced.table_name,
           created: false,
           alreadySeated: false,
-          buyIn: league.buyIn,
+          buyIn: buyInUsdc,
           leagueId,
           arenaMode: "onchain" as const,
           chainId,
@@ -1140,7 +1336,7 @@ export async function handleOnchainFindMatch(
         return {
           status: "matching" as const,
           message: "Match found — creating your table…",
-          buyIn: league.buyIn,
+          buyIn: buyInUsdc,
           leagueId,
           arenaMode: "onchain" as const,
           chainId,
@@ -1165,10 +1361,9 @@ export async function handleOnchainFindMatch(
       selfTicket,
       leagueId,
       leagueName: league.name,
-      buyIn: league.buyIn,
+      buyIn: buyInUsdc,
       chainId,
       vault,
-      buyInRaw,
       leagueBit: bit,
       format,
     });
@@ -1179,14 +1374,15 @@ export async function handleOnchainFindMatch(
     profileId: session.profileId,
     chainId,
     matchmakingPool: pool,
-    buyInUsdc: league.buyIn,
+    buyInUsdc,
+    pairCapMode: leaguePairCapMode(leagueId),
   });
 
   if (!pair) {
     return {
       status: "waiting" as const,
       message: "Waiting for an opponent in your league.",
-      buyIn: league.buyIn,
+      buyIn: buyInUsdc,
       leagueId,
       arenaMode: "onchain" as const,
       chainId,
@@ -1223,7 +1419,7 @@ export async function handleOnchainFindMatch(
     arenaAccount: (t.arena_account_address ?? t.wallet_address).toLowerCase() as Address,
     gameTemplateId: t.game_template_id as Hex,
     matchmakingPool: t.matchmaking_pool as Hex,
-    buyIn: BigInt(Math.round(Number(t.buy_in) * 10 ** USDC_DECIMALS)),
+    buyIn: ticketBuyInRaw(t),
     controllerHash: t.controller_hash as Hex,
     profileConfigHash: t.agent_profile_hash as Hex,
     modelPolicyHash: SEASON1_MODEL_POLICY_HASH as Hex,
@@ -1273,7 +1469,7 @@ export async function handleOnchainFindMatch(
 
       const prepared = coordinator.prepare({
         chainId: BigInt(chainId),
-        gameTemplateId: rankedHuTemplateId(format),
+        gameTemplateId: cityTemplateId(leagueId, format),
         participants,
         seatOrder,
         sessionNonce,
@@ -1289,14 +1485,14 @@ export async function handleOnchainFindMatch(
 
       table = await createOnchainArenaTable({
         leagueId,
-        buyIn: league.buyIn,
+        buyIn: buyInUsdc,
         createdBy: session.profileId,
         chainId,
         format,
       });
       batchId = await createMatchmakingBatch({
         chainId,
-        gameTemplateId: rankedHuTemplateId(format),
+        gameTemplateId: cityTemplateId(leagueId, format),
         sessionId,
       });
       await linkTicketsToBatch([pair.self.id, pair.opponent.id], batchId, sessionId);
@@ -1305,7 +1501,7 @@ export async function handleOnchainFindMatch(
         profileId: pair.self.profile_id,
         chainId,
         arenaAccountAddress: selfArena,
-        buyInRaw: buyInRaw.toString(),
+        buyInRaw: ticketBuyInRaw(pair.self).toString(),
         batchId,
         sessionId,
       });
@@ -1313,7 +1509,7 @@ export async function handleOnchainFindMatch(
         profileId: pair.opponent.profile_id,
         chainId,
         arenaAccountAddress: oppArena,
-        buyInRaw: buyInRaw.toString(),
+        buyInRaw: ticketBuyInRaw(pair.opponent).toString(),
         batchId,
         sessionId,
       });
@@ -1321,7 +1517,7 @@ export async function handleOnchainFindMatch(
       await createOnchainSessionPending({
         sessionId,
         chainId,
-        gameTemplateId: rankedHuTemplateId(format),
+        gameTemplateId: cityTemplateId(leagueId, format),
         tableId: table.id,
         dealerRoot: dealerSecretRoot,
         engineHash: POKER_ENGINE_HASH,
@@ -1337,7 +1533,7 @@ export async function handleOnchainFindMatch(
           walletAddress: ticket.arenaAccount,
           arenaAccountAddress: ticket.arenaAccount,
           ownerAddress: owner,
-          buyInRaw,
+          buyInRaw: ticket.buyIn,
           seat: i,
           controllerHash: ticket.controllerHash,
           agentProfileHash: ticket.profileConfigHash,
@@ -1348,7 +1544,7 @@ export async function handleOnchainFindMatch(
       const sealResult = await coordinator.seal(
         {
           chainId: BigInt(chainId),
-          gameTemplateId: rankedHuTemplateId(format),
+          gameTemplateId: cityTemplateId(leagueId, format),
           participants,
           seatOrder,
           sessionNonce,
@@ -1372,14 +1568,14 @@ export async function handleOnchainFindMatch(
       const dealerRoot = keccak256(toBytes(`dealer:${sessionId}`));
       table = await createOnchainArenaTable({
         leagueId,
-        buyIn: league.buyIn,
+        buyIn: buyInUsdc,
         createdBy: session.profileId,
         chainId,
         format,
       });
       batchId = await createMatchmakingBatch({
         chainId,
-        gameTemplateId: rankedHuTemplateId(format),
+        gameTemplateId: cityTemplateId(leagueId, format),
         sessionId,
       });
       await linkTicketsToBatch([pair.self.id, pair.opponent.id], batchId, sessionId);
@@ -1388,7 +1584,7 @@ export async function handleOnchainFindMatch(
         profileId: pair.self.profile_id,
         chainId,
         arenaAccountAddress: selfArena,
-        buyInRaw: buyInRaw.toString(),
+        buyInRaw: ticketBuyInRaw(pair.self).toString(),
         batchId,
         sessionId,
       });
@@ -1396,7 +1592,7 @@ export async function handleOnchainFindMatch(
         profileId: pair.opponent.profile_id,
         chainId,
         arenaAccountAddress: oppArena,
-        buyInRaw: buyInRaw.toString(),
+        buyInRaw: ticketBuyInRaw(pair.opponent).toString(),
         batchId,
         sessionId,
       });
@@ -1404,7 +1600,7 @@ export async function handleOnchainFindMatch(
       await createOnchainSessionPending({
         sessionId,
         chainId,
-        gameTemplateId: rankedHuTemplateId(format),
+        gameTemplateId: cityTemplateId(leagueId, format),
         tableId: table.id,
         dealerRoot,
         engineHash: POKER_ENGINE_HASH,
@@ -1416,7 +1612,7 @@ export async function handleOnchainFindMatch(
           walletAddress: selfArena,
           arenaAccountAddress: selfArena,
           ownerAddress: selfOwner,
-          buyInRaw,
+          buyInRaw: ticketBuyInRaw(pair.self),
           seat: 0,
           controllerHash: pair.self.controller_hash,
           agentProfileHash: pair.self.agent_profile_hash,
@@ -1426,7 +1622,7 @@ export async function handleOnchainFindMatch(
           walletAddress: oppArena,
           arenaAccountAddress: oppArena,
           ownerAddress: oppOwner,
-          buyInRaw,
+          buyInRaw: ticketBuyInRaw(pair.opponent),
           seat: 1,
           controllerHash: pair.opponent.controller_hash,
           agentProfileHash: pair.opponent.agent_profile_hash,
@@ -1436,7 +1632,7 @@ export async function handleOnchainFindMatch(
       const tickets = [pair.self, pair.opponent].map((t) => ({
         player: (t.arena_account_address ?? t.wallet_address) as Address,
         gameTemplateId: t.game_template_id as Hex,
-        buyIn: BigInt(Math.round(Number(t.buy_in) * 10 ** USDC_DECIMALS)),
+        buyIn: ticketBuyInRaw(t),
         controllerHash: t.controller_hash as Hex,
         agentProfileHash: t.agent_profile_hash as Hex,
         expiresAt: BigInt(Math.floor(new Date(t.expires_at).getTime() / 1000)),
@@ -1452,7 +1648,7 @@ export async function handleOnchainFindMatch(
         args: [
           {
             sessionId,
-            gameTemplateId: rankedHuTemplateId(format),
+            gameTemplateId: cityTemplateId(leagueId, format),
             dealerRoot,
             engineHash: POKER_ENGINE_HASH,
             profileSetHash: PROFILE_SET_HASH,
@@ -1477,6 +1673,15 @@ export async function handleOnchainFindMatch(
     if (selfResId) await releaseExposure(selfResId);
     if (oppResId) await releaseExposure(oppResId);
     if (batchId) await markBatchFailed(batchId, msg);
+    if (isLeagueNotAllowedError(e) || isRatedRequiredError(e) || isTemplateNotAllowedError(e)) {
+      return reply.code(400).send({
+        error: "permission_upgrade_required",
+        message: permissionUpgradeMessage({
+          leagueId,
+          rated: leagueIsRated(leagueId),
+        }),
+      });
+    }
     return reply.code(502).send({
       error: useSealAndFundV3(format) ? "seal_and_fund_failed" : "open_session_failed",
       message: msg,
@@ -1485,7 +1690,7 @@ export async function handleOnchainFindMatch(
 
   const mirrorReady = await waitForBuyInMirrors(
     [pair.self.profile_id, pair.opponent.profile_id],
-    league.buyIn,
+    buyInUsdc,
     20_000,
   );
 
@@ -1494,7 +1699,7 @@ export async function handleOnchainFindMatch(
     tableName: table!.name,
     created: true,
     alreadySeated: false,
-    buyIn: league.buyIn,
+    buyIn: buyInUsdc,
     leagueId,
     arenaMode: "onchain" as const,
     chainId,
@@ -1514,10 +1719,10 @@ async function openOrJoinImmediateTable(opts: {
   selfTicket: NonNullable<Awaited<ReturnType<typeof getQueuedTicketForProfile>>>;
   leagueId: string;
   leagueName: string;
+  /** This player's chosen buy-in; other seats may bring a different stack. */
   buyIn: number;
   chainId: number;
   vault: Address;
-  buyInRaw: bigint;
   leagueBit: number;
   format?: ArenaFormat;
 }) {
@@ -1548,7 +1753,7 @@ async function openOrJoinImmediateTable(opts: {
   }) => ({
     player: (ticket.arena_account_address ?? ticket.wallet_address) as Address,
     gameTemplateId: ticket.game_template_id as Hex,
-    buyIn: BigInt(Math.round(Number(ticket.buy_in) * 10 ** USDC_DECIMALS)),
+    buyIn: ticketBuyInRaw(ticket),
     controllerHash: ticket.controller_hash as Hex,
     agentProfileHash: ticket.agent_profile_hash as Hex,
     expiresAt: BigInt(Math.floor(new Date(ticket.expires_at).getTime() / 1000)),
@@ -1557,6 +1762,47 @@ async function openOrJoinImmediateTable(opts: {
     leagueBit: Number(ticket.league_bit ?? opts.leagueBit),
     rated: ticket.rated !== false,
   });
+
+  // Serialize join-or-create so two concurrent Find Match calls share one table
+  // instead of each opening a solo table.
+  return withMatchmakingLock(
+    `hu-mm:${opts.chainId}:${opts.leagueId}:${format}`,
+    async () =>
+      openOrJoinImmediateTableLocked(opts, {
+        wallet,
+        // viem Client generic variance across versions — runtime shape is correct.
+        publicClient: publicClient as never,
+        chain,
+        account,
+        makeTicket,
+      }),
+  );
+}
+
+async function openOrJoinImmediateTableLocked(
+  opts: Parameters<typeof openOrJoinImmediateTable>[0],
+  ctx: {
+    wallet: ReturnType<typeof createWalletClient>;
+    publicClient: ReturnType<typeof createPublicClient>;
+    chain: ReturnType<typeof chainFromId>;
+    account: ReturnType<typeof privateKeyToAccount>;
+    makeTicket: (ticket: {
+      wallet_address: string;
+      arena_account_address?: string | null;
+      game_template_id: string;
+      buy_in: string;
+      controller_hash: string;
+      agent_profile_hash: string;
+      expires_at: Date;
+      nonce: string;
+      matchmaking_pool: string;
+      league_bit?: number | null;
+      rated?: boolean | null;
+    }) => Record<string, unknown>;
+  },
+) {
+  const format = opts.format ?? "hu";
+  const { wallet, publicClient, chain, account, makeTicket } = ctx;
 
   // Prefer the fullest compatible table that still has a seat.
   // Skip DB "opened" sessions that vanished on-chain (common after Anvil reset).
@@ -1597,7 +1843,7 @@ async function openOrJoinImmediateTable(opts: {
       profileId: open.ticket.profile_id,
       chainId: opts.chainId,
       arenaAccountAddress: arena,
-      buyInRaw: opts.buyInRaw.toString(),
+      buyInRaw: ticketBuyInRaw(open.ticket).toString(),
       sessionId: open.sessionId,
     });
     try {
@@ -1648,6 +1894,15 @@ async function openOrJoinImmediateTable(opts: {
         });
         continue;
       }
+      if (isLeagueNotAllowedError(e) || isRatedRequiredError(e) || isTemplateNotAllowedError(e)) {
+        return opts.reply.code(400).send({
+          error: "permission_upgrade_required",
+          message: permissionUpgradeMessage({
+            leagueId: opts.leagueId,
+            rated: leagueIsRated(opts.leagueId),
+          }),
+        });
+      }
       opts.req.log.error({ err: e, sessionId: open.sessionId }, "topUpSession failed");
       return opts.reply.code(502).send({
         error: "join_session_failed",
@@ -1676,7 +1931,7 @@ async function openOrJoinImmediateTable(opts: {
   });
   const batchId = await createMatchmakingBatch({
     chainId: opts.chainId,
-    gameTemplateId: rankedHuTemplateId(format),
+    gameTemplateId: cityTemplateId(opts.leagueId, format),
     sessionId,
   });
   await linkTicketsToBatch([ticket.id], batchId, sessionId);
@@ -1686,14 +1941,14 @@ async function openOrJoinImmediateTable(opts: {
     profileId: ticket.profile_id,
     chainId: opts.chainId,
     arenaAccountAddress: arena,
-    buyInRaw: opts.buyInRaw.toString(),
+    buyInRaw: ticketBuyInRaw(ticket).toString(),
     batchId,
     sessionId,
   });
   await createOnchainSessionPending({
     sessionId,
     chainId: opts.chainId,
-    gameTemplateId: rankedHuTemplateId(format),
+    gameTemplateId: cityTemplateId(opts.leagueId, format),
     tableId: table.id,
     dealerRoot,
     engineHash: POKER_ENGINE_HASH,
@@ -1705,7 +1960,7 @@ async function openOrJoinImmediateTable(opts: {
       walletAddress: arena,
       arenaAccountAddress: arena,
       ownerAddress: ticket.owner_address ?? ticket.wallet_address,
-      buyInRaw: opts.buyInRaw,
+      buyInRaw: ticketBuyInRaw(ticket),
       seat: 0,
       controllerHash: ticket.controller_hash,
       agentProfileHash: ticket.agent_profile_hash,
@@ -1720,7 +1975,7 @@ async function openOrJoinImmediateTable(opts: {
       args: [
         {
           sessionId,
-          gameTemplateId: rankedHuTemplateId(format),
+          gameTemplateId: cityTemplateId(opts.leagueId, format),
           dealerRoot,
           engineHash: POKER_ENGINE_HASH,
           profileSetHash: PROFILE_SET_HASH,
@@ -1757,6 +2012,15 @@ async function openOrJoinImmediateTable(opts: {
     await markBatchFailed(batchId, e instanceof Error ? e.message : "open_session_failed");
     await blockFailedOnchainSession(sessionId);
     opts.req.log.error({ err: e, sessionId }, "single-player openSession failed");
+    if (isLeagueNotAllowedError(e) || isRatedRequiredError(e) || isTemplateNotAllowedError(e)) {
+      return opts.reply.code(400).send({
+        error: "permission_upgrade_required",
+        message: permissionUpgradeMessage({
+          leagueId: opts.leagueId,
+          rated: leagueIsRated(opts.leagueId),
+        }),
+      });
+    }
     return opts.reply.code(502).send({
       error: "open_session_failed",
       message: e instanceof Error ? e.message : "Could not create table",
@@ -1789,6 +2053,7 @@ async function createAutomaticSeamlessTicket(opts: {
 }): Promise<{ ok: true } | { ok: false; status: number; error: string; message: string }> {
   const { session, chainId, vault, arena, pool, buyInRaw, buyInUsdc, leagueBit: bit } = opts;
   const format = opts.format ?? "hu";
+  const rated = leagueIsRated(opts.leagueId);
   const owner = (session.ownerAddress ?? session.walletAddress)!.toLowerCase() as Address;
   const signer = sessionSignerAccount();
   if (!signer) {
@@ -1882,6 +2147,35 @@ async function createAutomaticSeamlessTicket(opts: {
       message: "Re-enable seamless play for the current vault.",
     };
   }
+  {
+    const leagueMask = Number(gameAuth[4]);
+    const ratedOnly = Boolean(gameAuth[13]);
+    if (
+      !permissionCoversLeague({
+        leagueMask,
+        ratedOnly,
+        leagueBit: bit,
+        rated,
+      })
+    ) {
+      return {
+        ok: false,
+        status: 400,
+        error: "permission_upgrade_required",
+        message: permissionUpgradeMessage({ leagueId: opts.leagueId, rated }),
+      };
+    }
+  }
+  // A grant covers exactly one template, and a template is one city's table.
+  // Catch the mismatch here instead of spending gas on `TemplateNotAllowed()`.
+  if ((gameAuth[3] as string).toLowerCase() !== cityTemplateId(opts.leagueId, format).toLowerCase()) {
+    return {
+      ok: false,
+      status: 400,
+      error: "permission_upgrade_required",
+      message: permissionUpgradeMessage({ leagueId: opts.leagueId, rated: true }),
+    };
+  }
   if (buyInRaw > gameAuth[9]) {
     return {
       ok: false,
@@ -1903,7 +2197,8 @@ async function createAutomaticSeamlessTicket(opts: {
       ok: false,
       status: 400,
       error: "concurrent_games",
-      message: "You already have the maximum concurrent games under your permission.",
+      message:
+        "A previous match is still settling on-chain and holds your game slot. Wait a moment for settlement, then try Find Match again.",
     };
   }
   if (balance < buyInRaw) {
@@ -1948,14 +2243,14 @@ async function createAutomaticSeamlessTicket(opts: {
   if (v3) {
     const message = {
       arenaAccount: arena,
-      gameTemplateId: rankedHuTemplateId(format),
+      gameTemplateId: cityTemplateId(opts.leagueId, format),
       matchmakingPool: pool,
       buyIn: buyInRaw,
       controllerHash: CONTROLLER_HASH as Hex,
       profileConfigHash: agentProfileHash,
       modelPolicyHash: SEASON1_MODEL_POLICY_HASH as Hex,
       leagueBit: bit,
-      rated: true,
+      rated,
       expiresAt,
       nonce,
     };
@@ -1968,7 +2263,7 @@ async function createAutomaticSeamlessTicket(opts: {
   } else {
     const message = {
       player: arena,
-      gameTemplateId: rankedHuTemplateId(format),
+      gameTemplateId: cityTemplateId(opts.leagueId, format),
       buyIn: buyInRaw,
       controllerHash: CONTROLLER_HASH as Hex,
       agentProfileHash,
@@ -1976,7 +2271,7 @@ async function createAutomaticSeamlessTicket(opts: {
       nonce,
       matchmakingPool: pool,
       leagueBit: bit,
-      rated: true,
+      rated,
     };
     signature = await signer.signTypedData({
       domain: seatTicketV2Domain(chainId, vault),
@@ -1993,7 +2288,7 @@ async function createAutomaticSeamlessTicket(opts: {
       arenaAccountAddress: arena,
       ownerAddress: owner,
       chainId,
-      gameTemplateId: rankedHuTemplateId(format),
+      gameTemplateId: cityTemplateId(opts.leagueId, format),
       buyInUsdc,
       controllerHash: CONTROLLER_HASH,
       agentProfileHash,
@@ -2002,7 +2297,7 @@ async function createAutomaticSeamlessTicket(opts: {
       matchmakingPool: pool,
       signature,
       leagueBit: bit,
-      rated: true,
+      rated,
     });
     return { ok: true };
   } catch (e) {

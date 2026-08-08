@@ -74,7 +74,7 @@ export const SEASON1_PRESETS: Record<PresetKey, PresetDefinition> = {
     presetId: PRESET_IDS.fox,
     displayName: "Fox",
     intent:
-      "High opponent adaptation; deceptive timing and line variation; heavier opponent-model updates; moderate risk.",
+      "High adaptation to public betting patterns; deceptive timing and line variation; moderate risk. Never shares private state with opponents.",
     // Season 1 hypothesis — not a golden vector fixture
     axes: {
       aggression: 55,

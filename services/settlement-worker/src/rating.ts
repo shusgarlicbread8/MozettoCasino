@@ -1,18 +1,25 @@
-import { query, settleRatedMatch } from "@mozetto/database";
+import { isRankedLeague, query, settleRatedMatch } from "@mozetto/database";
 import type { Hex } from "viem";
 import { keccakLike } from "./chain.js";
 
 /**
  * Post-settlement Glicko for on-chain HU sessions.
  * `eventLogRoot` should be the FinalSettlementV3 EIP-712 digest when settling via Hub V3.
+ * Casual / unranked leagues skip Glicko entirely (no rated_matches row).
  */
 export async function maybeRateOnchainSession(
   sessionId: string,
   _balances: Record<string, number>,
   eventLogRoot?: Hex | string,
 ) {
-  const meta = await query<{ table_id: string; variant_id: string; max_seats: number }>(
-    `select os.table_id, t.variant_id::text as variant_id, t.max_seats::int as max_seats
+  const meta = await query<{
+    table_id: string;
+    variant_id: string;
+    max_seats: number;
+    league_id: string;
+  }>(
+    `select os.table_id, t.variant_id::text as variant_id, t.max_seats::int as max_seats,
+            t.league_id::text as league_id
      from onchain_sessions os
      join tables t on t.id = os.table_id
      where os.session_id = $1 limit 1`,
@@ -21,6 +28,8 @@ export async function maybeRateOnchainSession(
   const tableId = meta.rows[0]?.table_id ?? null;
   const variantId = meta.rows[0]?.variant_id ?? "";
   const maxSeats = Number(meta.rows[0]?.max_seats ?? 0);
+  const leagueId = meta.rows[0]?.league_id ?? "bronze";
+  if (!isRankedLeague(leagueId)) return;
 
   const rows = await query<{ owner_id: string; agent_id: string; buy_in: string; stack: string }>(
     `select distinct on (owner_id)

@@ -11,9 +11,11 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
 import {ArenaAccount} from "./ArenaAccount.sol";
 import {ArenaAccountFactory} from "./ArenaAccountFactory.sol";
 
-/// @dev Optional GameRegistryV2 gate (WP-023).
+/// @dev Optional GameRegistryV2 gate (WP-023) + sealed buy-in band (WS-B).
 interface IGameRegistryNewSessions {
     function isActiveForNewSessions(bytes32 templateId) external view returns (bool);
+
+    function buyInBand(bytes32 templateId) external view returns (uint256 minBuyIn, uint256 maxBuyIn);
 }
 
 /// @dev Optional SessionLifecycleV2 coordination (WP-023).
@@ -231,6 +233,7 @@ contract ArenaVaultV2 is Ownable, Pausable, ReentrancyGuard, EIP712 {
     error WrongUsdc();
     error BadLeagueBit();
     error TemplateNotActive();
+    error BuyInOutOfBand();
     error SessionSealedImmutable();
     error EmergencyExitAlreadyClaimed();
     error CheckpointSequenceMismatch();
@@ -619,6 +622,23 @@ contract ArenaVaultV2 is Ownable, Pausable, ReentrancyGuard, EIP712 {
         }
     }
 
+    /// @dev The template's blind level fixes how much money may enter the game (40–100BB),
+    ///      so a seat ticket outside the sealed band never locks — a deep bankroll cannot
+    ///      buy a deeper stack than the table allows, and a short buy cannot dodge the floor.
+    ///      A registry that predates `buyInBand`, or a template it has never seen, leaves the
+    ///      lock ungated rather than bricking custody.
+    function _requireBuyInWithinBand(bytes32 templateId, uint256 buyIn) internal view {
+        if (gameRegistry == address(0)) return;
+        try IGameRegistryNewSessions(gameRegistry).buyInBand(templateId) returns (
+            uint256 minBuyIn, uint256 maxBuyIn
+        ) {
+            if (maxBuyIn == 0) return;
+            if (buyIn < minBuyIn || buyIn > maxBuyIn) revert BuyInOutOfBand();
+        } catch {
+            return;
+        }
+    }
+
     function _sessionDescriptorHash(SessionDescriptor calldata d) internal pure returns (bytes32) {
         return keccak256(
             abi.encode(
@@ -679,6 +699,7 @@ contract ArenaVaultV2 is Ownable, Pausable, ReentrancyGuard, EIP712 {
         if (ticket.gameTemplateId != expectedTemplateId) revert TemplateMismatch();
         if (block.timestamp > ticket.expiresAt) revert TicketExpired();
         if (ticket.leagueBit == 0) revert BadLeagueBit();
+        _requireBuyInWithinBand(ticket.gameTemplateId, ticket.buyIn);
         if (usedNonces[ticket.arenaAccount][ticket.nonce]) revert NonceUsed();
         if (sessionParticipants[sessionId][ticket.arenaAccount]) revert DuplicateParticipant();
 
@@ -785,6 +806,7 @@ contract ArenaVaultV2 is Ownable, Pausable, ReentrancyGuard, EIP712 {
         if (ticket.buyIn == 0) revert ZeroAmount();
         if (ticket.gameTemplateId != expectedTemplateId) revert TemplateMismatch();
         if (block.timestamp > ticket.expiresAt) revert TicketExpired();
+        _requireBuyInWithinBand(ticket.gameTemplateId, ticket.buyIn);
         if (usedNonces[ticket.player][ticket.nonce]) revert NonceUsed();
         if (sessionParticipants[sessionId][ticket.player]) revert DuplicateParticipant();
 

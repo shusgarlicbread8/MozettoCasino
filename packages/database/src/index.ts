@@ -13,3 +13,4 @@ export * from "./admin-audit.js";
 export * from "./proof-batch-inclusion.js";
 export * from "./identity-clusters.js";
 export * from "./linked-accounts.js";
+export * from "./rat-hole.js";

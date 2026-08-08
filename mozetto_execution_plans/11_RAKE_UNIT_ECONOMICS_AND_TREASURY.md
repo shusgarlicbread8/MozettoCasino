@@ -34,9 +34,10 @@ Recommended Season 1 policy:
 - `noFlopNoDrop = true` for cash poker;
 - no rake if the hand ends before the flop;
 - no rake from returned uncalled bets;
-- rake deducted only from settled eligible pots;
+- rake assessed only from settled eligible pots;
 - total hand rake cannot exceed cap;
-- side-pot allocation of rake follows one frozen method.
+- side-pot allocation of rake follows one frozen method;
+- Season 1 UX: assess per hand, keep gross awards on stacks, collect (claw back winner tabs) at session leave / settle.
 
 The engine must emit exact rake events; settlement does not invent rake afterward.
 
@@ -60,10 +61,16 @@ Infrastructure cost does not rise linearly with a huge pot. Uncapped percentage 
 
 ## Conservation
 
-Per hand:
+Per hand (table chips, deferred collect):
 
 ```text
-sum(stacks before hand) == sum(stacks after hand) + handRake
+sum(stacks before hand) == sum(stacks after hand)   # gross awards; handRake on winner tabs
+```
+
+After session clawback / leave:
+
+```text
+sum(stacks before hand) == sum(stacks after clawback) + handRake
 ```
 
 Per session:

@@ -90,7 +90,7 @@
             ]
           }
         ],
-        "stateHash": "0x378467bf37bc033cb04458f424eb222b8127549eb5ab646c2ff644eabafe198c"
+        "stateHash": "0xfbf9d6dbbefbbbfe3bbee3e34b11aeef5438c2ccbe0b23f82f88942a48e59a1b"
       }
     },
     {
@@ -105,7 +105,7 @@
           60
         ],
         "rake": 0,
-        "stateHash": "0xedc64b8dca17dad645bb4c15bfc100c82712c6b50528eebbc8e19163029ecfbf"
+        "stateHash": "0xfda4eafcaeb60334973e30847de35bcc1216f9765f236144acc6332c54d427c7"
       }
     }
   ]

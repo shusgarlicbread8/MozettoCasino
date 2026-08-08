@@ -7,12 +7,17 @@
  *   node --import tsx tools/engine-diff/dump-ts.mjs dump-stream STREAM.json
  *   node --import tsx tools/engine-diff/dump-ts.mjs generate-streams --seed 1 --count 20
  */
+BigInt.prototype.toJSON = function () {
+  return Number(this);
+};
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   applyAction,
+  asChips,
   buildPots,
+  chipsToNumber,
   continueRunout,
   createTable,
   getLegalActions,
@@ -32,17 +37,17 @@ function snapshotOf(state, stepIndex, op) {
   const legalActions = legal
     .map((a) => ({
       action: a.action,
-      ...(a.minAmount != null ? { minAmount: a.minAmount } : {}),
-      ...(a.maxAmount != null ? { maxAmount: a.maxAmount } : {}),
+      ...(a.minAmount != null ? { minAmount: chipsToNumber(a.minAmount) } : {}),
+      ...(a.maxAmount != null ? { maxAmount: chipsToNumber(a.maxAmount) } : {}),
     }))
     .sort((a, b) => a.action.localeCompare(b.action));
 
   const winners = [...state.winners]
-    .map((w) => ({ seatIndex: w.seatIndex, amount: w.amount }))
+    .map((w) => ({ seatIndex: w.seatIndex, amount: chipsToNumber(w.amount) }))
     .sort((a, b) => a.seatIndex - b.seatIndex);
 
   const potLayers = buildPots(state.seats).map((p) => ({
-    amount: p.amount,
+    amount: chipsToNumber(p.amount),
     eligible: p.eligible,
   }));
 
@@ -52,16 +57,16 @@ function snapshotOf(state, stepIndex, op) {
     street: state.street,
     button: state.button,
     actingIndex: state.actingIndex,
-    pot: state.pot,
-    currentBet: state.currentBet,
-    minRaise: state.minRaise,
+    pot: chipsToNumber(state.pot),
+    currentBet: chipsToNumber(state.currentBet),
+    minRaise: chipsToNumber(state.minRaise),
     lastRaiseComplete: state.lastRaiseComplete,
     stacks: snapshotStacks(state),
     stateHash: hashEngineState(state),
     legalActionsHash: legal.length ? hashLegalActions(legal) : null,
     legalActions,
     winners,
-    rake: state.rake,
+    rake: chipsToNumber(state.rake),
     potLayers,
   };
 }
@@ -71,15 +76,15 @@ function forceBetting(state, step) {
   const seats = state.seats.map((s) => {
     const o = seatMap.get(s.seatIndex);
     if (!o) {
-      return { ...s, sitOut: true, folded: true, stack: 0, bet: 0, totalBet: 0, hole: undefined };
+      return { ...s, sitOut: true, folded: true, stack: 0n, bet: 0n, totalBet: 0n, hole: undefined };
     }
     return {
       ...s,
       playerId: s.playerId || `p${s.seatIndex}`,
       agentId: s.agentId || `a${s.seatIndex}`,
-      stack: o.stack,
-      bet: o.bet,
-      totalBet: o.totalBet,
+      stack: asChips(o.stack),
+      bet: asChips(o.bet),
+      totalBet: asChips(o.totalBet),
       folded: Boolean(o.folded),
       allIn: o.allIn ?? o.stack === 0,
       sitOut: false,
@@ -90,9 +95,9 @@ function forceBetting(state, step) {
     ...state,
     street: step.street,
     board: step.board.map(parseCard),
-    pot: step.pot,
-    currentBet: step.currentBet,
-    minRaise: step.minRaise,
+    pot: asChips(step.pot),
+    currentBet: asChips(step.currentBet),
+    minRaise: asChips(step.minRaise),
     button: step.button,
     actingIndex: step.actingIndex,
     lastRaiseComplete: step.lastRaiseComplete ?? true,
@@ -109,26 +114,31 @@ function injectShowdown(state, step) {
   const seats = state.seats.map((s) => {
     const o = seatMap.get(s.seatIndex);
     if (!o) {
-      return { ...s, sitOut: true, folded: true, stack: 0, bet: 0, totalBet: 0, hole: undefined };
+      return { ...s, sitOut: true, folded: true, stack: 0n, bet: 0n, totalBet: 0n, hole: undefined };
     }
     return {
       ...s,
       playerId: s.playerId || `p${s.seatIndex}`,
       agentId: s.agentId || `a${s.seatIndex}`,
-      stack: o.stack,
-      bet: 0,
-      totalBet: o.totalBet,
+      stack: asChips(o.stack),
+      bet: 0n,
+      totalBet: asChips(o.totalBet),
       folded: Boolean(o.folded),
       allIn: o.stack === 0,
       sitOut: false,
       hole: o.hole.map(parseCard),
     };
   });
-  const pot = seats.reduce((n, s) => n + s.totalBet, 0);
+  const pot = seats.reduce((n, s) => n + s.totalBet, 0n);
   const config = {
     ...state.config,
     rakePct: step.rakePct ?? state.config.rakePct,
-    rakeCap: step.rakeCap !== undefined ? step.rakeCap : state.config.rakeCap,
+    rakeCap:
+      step.rakeCap !== undefined
+        ? step.rakeCap == null
+          ? null
+          : asChips(step.rakeCap)
+        : state.config.rakeCap,
   };
   return {
     ...state,
@@ -338,13 +348,18 @@ function generateStreams({ seed, count, maxActions }) {
       const legal = getLegalActions(state);
       if (!legal.length) break;
       const choice = pick(rng, legal);
-      let amount = choice.minAmount;
+      let amount = choice.minAmount != null ? chipsToNumber(choice.minAmount) : undefined;
       if (choice.action === "bet" || choice.action === "raise") {
-        const min = choice.minAmount ?? bb;
-        const max = choice.maxAmount ?? min;
+        const min = choice.minAmount != null ? chipsToNumber(choice.minAmount) : bb;
+        const max = choice.maxAmount != null ? chipsToNumber(choice.maxAmount) : min;
         amount = min + Math.floor(rng() * (max - min + 1));
       } else if (choice.action === "call" || choice.action === "all_in") {
-        amount = choice.minAmount ?? choice.maxAmount;
+        amount =
+          choice.minAmount != null
+            ? chipsToNumber(choice.minAmount)
+            : choice.maxAmount != null
+              ? chipsToNumber(choice.maxAmount)
+              : undefined;
       }
       try {
         state = applyAction(state, choice.action, amount).state;

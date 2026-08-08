@@ -38,7 +38,6 @@ import { privateKeyToAccount } from "viem/accounts";
 import { anvil } from "viem/chains";
 import { SessionSealCoordinator } from "@mozetto/session-seal";
 import {
-  NLHE_HU_STANDARD_V2_TEMPLATE_ID,
   CONTROLLER_HASH,
   SEASON1_MODEL_POLICY_HASH,
   RANDOMNESS_POLICY_ID_V2,
@@ -102,7 +101,13 @@ const AGENT = (env.AGENT_RUNTIME_URL || "http://localhost:4002").replace(/\/$/, 
 const PK_RELAYER = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 const PK_ATTESTOR2 = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 const PK_SESSION = "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a";
-const TEMPLATE = NLHE_HU_STANDARD_V2_TEMPLATE_ID;
+/**
+ * The golden path plays Berlin (`bronze`), and a GamePermission names exactly
+ * one template, so it must be Berlin's — not the legacy fixed id. Berlin is
+ * $0.50/$1, which is the 40-100 USDC band the vault enforces below.
+ */
+const CITY = "bronze";
+const TEMPLATE = keccak256(toBytes(`NLHE_HU_${CITY.toUpperCase()}_V1`));
 const BUY_IN = parseUnits("100", 6);
 const RAKE = parseUnits("2", 6);
 const RUN_ID = `wp106-${Date.now()}`;
@@ -770,7 +775,7 @@ async function main() {
       }
 
       const enableSeamless = async (cookie, wallet) => {
-        const { json: status, res } = await api("/v1/arena/play-status", { cookie });
+        const { json: status, res } = await api(`/v1/arena/play-status?cityId=${CITY}`, { cookie });
         if (!res.ok) throw new Error(`play-status: ${JSON.stringify(status)}`);
         if (status.enabled) return;
         const d = status.defaults;
@@ -819,7 +824,7 @@ async function main() {
       const find = async (cookie) => api("/v1/arena/find-match", {
         method: "POST",
         cookie,
-        body: { leagueId: "bronze", profileKey: "fox" },
+        body: { leagueId: CITY, profileKey: "fox" },
       });
 
       let rA = await find(a.cookie);

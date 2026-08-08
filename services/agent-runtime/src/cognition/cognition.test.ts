@@ -432,9 +432,39 @@ describe("ContinuousCognitionScheduler", () => {
     assert.equal(provider.decideCalls, 1);
     assert.ok(result.preempt.cancelledJobs.length >= 1);
     assert.equal(result.decision.actionType, ACTION_TYPE.CHECK);
-    assert.equal(result.energyDebited, 8); // STANDARD_FINAL
+    // River is a high-importance event, so the scheduler escalates to a DEEP
+    // final decision (16) and pulls memory (3) rather than spending the
+    // STANDARD 8. Energy is a strategic budget, not a flat per-action fee.
+    assert.equal(result.energyDebited, 19);
     assert.ok(result.ledger.remainingEnergy >= 0);
-    assert.ok(result.ledger.remainingEnergy <= ENERGY_PER_HAND - 8);
+    assert.ok(result.ledger.remainingEnergy <= ENERGY_PER_HAND - 19);
+  });
+
+  it("spends STANDARD energy on a low-importance spot", async () => {
+    const provider = new MockBackgroundProvider();
+    const store = new InMemoryAgentStateStore();
+    let clock = 2_000_000;
+    const sched = new ContinuousCognitionScheduler({
+      provider,
+      store,
+      sessionId: "s5",
+      handId: "h5",
+      seat: 0,
+      profileHash: "0xprofile",
+      axes: SEASON1_PRESETS.shark.axes,
+      profileKey: "shark",
+      now: () => clock,
+      autoDrain: false,
+    });
+
+    // Small preflop pot, deep stack, not the river — nothing worth deep analysis.
+    const result = await sched.runFinalAction({
+      legalActions: [{ action: "check", actionType: ACTION_TYPE.CHECK }],
+      actionDeadlineMs: 15_000,
+      observation: { street: "preflop", pot: "3", potBb: 3, spr: 40 },
+    });
+
+    assert.equal(result.energyDebited, 8); // STANDARD_FINAL, no memory pull
   });
 
   it("does not store CoT in applied patches", () => {

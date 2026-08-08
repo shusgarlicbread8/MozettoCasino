@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import { randomUUID } from "node:crypto";
+import { CITIES, cityDisplay, resolveCityId, usdcToAtoms } from "@mozetto/game-rules";
 import {
   query,
   getActiveTableStackBalance,
@@ -17,11 +18,13 @@ import {
   arenaLobbyStats,
   closeIdleArenaTables,
   ARENA_LEAGUES,
+  resolveBuyIn,
   InsufficientFundsError,
   getUserArenaMode,
   ensureModeAccounts,
   getProfileKind,
   getAgentProfileHash,
+  assertBuyInClearsRatHole,
   type ArenaFormat,
 } from "@mozetto/database";
 import { getChainConfig } from "@mozetto/blockchain";
@@ -350,6 +353,8 @@ app.post("/v1/tables", async (req, reply) => {
     minBuyIn: number;
     maxBuyIn: number;
     leagueId?: string;
+    /** Alias for `leagueId` — same value, newer name. */
+    cityId?: string;
     privacy?: string;
   };
   if (!body.name?.trim()) return reply.code(400).send({ error: "name_required" });
@@ -366,7 +371,7 @@ app.post("/v1/tables", async (req, reply) => {
     [
       id,
       body.name.trim(),
-      body.leagueId ?? "gold",
+      resolveCityId(body) ?? "gold",
       sb,
       bb,
       body.minBuyIn ?? sb * 40,
@@ -461,6 +466,34 @@ app.post("/v1/tables/:id/top-up", async (req, reply) => {
   const cookie = req.headers.cookie;
   try {
     const res = await fetch(`${GAME_HTTP}/v1/tables/${id}/top-up`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(auth ? { authorization: auth } : {}),
+        ...(cookie ? { cookie } : {}),
+      },
+      body: JSON.stringify(req.body ?? {}),
+    });
+    const data = await res.json().catch(() => ({}));
+    return reply.code(res.status).send(data);
+  } catch (e) {
+    return reply.code(502).send({ error: "game_server_unreachable", message: e instanceof Error ? e.message : "error" });
+  }
+});
+
+/**
+ * Sit out / sit back in. Distinct from Leave: the seat and its stack are kept,
+ * the player is simply dealt out until they return. Proxied to the game server
+ * the same way as top-up so the client only ever talks to one origin.
+ */
+app.post("/v1/tables/:id/sit-out", async (req, reply) => {
+  const session = await requireUser(req, reply);
+  if (!session) return;
+  const id = (req.params as { id: string }).id;
+  const auth = req.headers.authorization;
+  const cookie = req.headers.cookie;
+  try {
+    const res = await fetch(`${GAME_HTTP}/v1/tables/${id}/sit-out`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -746,7 +779,31 @@ app.get("/v1/agents/:handle", async (req, reply) => {
 app.get("/v1/replays", async () => {
   const hands = await query(
     `select h.*, t.name as table_name,
-       (select count(*)::int from agent_decisions d where d.hand_id = h.id) as decisions
+       (select count(*)::int from agent_decisions d where d.hand_id = h.id) as decisions,
+       coalesce(
+         nullif(h.pot, 0),
+         (
+           select coalesce(
+             (select sum((w->>'amount')::numeric) from jsonb_array_elements(he.payload->'winners') w),
+             0
+           )
+           from hand_events he
+           where he.hand_id = h.id and he.event_type = 'HAND_SETTLED'
+           order by he.sequence desc
+           limit 1
+         ),
+         h.pot
+       ) as pot,
+       coalesce(
+         (
+           select coalesce((he.payload->>'rake')::numeric, 0)
+           from hand_events he
+           where he.hand_id = h.id and he.event_type = 'HAND_SETTLED'
+           order by he.sequence desc
+           limit 1
+         ),
+         0
+       ) as rake
      from hands h
      join tables t on t.id = h.table_id
      where h.status = 'settled'
@@ -798,17 +855,26 @@ function arenaLobbyPayload(
   stats: { league_id: string; tables: number; seated: number }[],
 ) {
   const byLeague = Object.fromEntries(stats.map((s) => [s.league_id, s]));
+  // Cities carry their own stakes and 40-100BB buy-in band; the lobby shows
+  // both explicitly so a player never has to memorise what a city means.
+  const cities = CITIES.map((c) => ({
+    ...cityDisplay(c),
+    open: true,
+    buyIn: cityDisplay(c).maxBuyIn,
+    variantId: format === "classic" ? "nlhe_6max" : "nlhe_hu",
+    seatsLabel: format === "classic" ? "6-max" : "Heads-up",
+    tables: byLeague[c.id]?.tables ?? 0,
+    seated: byLeague[c.id]?.seated ?? 0,
+  }));
   return {
     arenaMode: mode,
     format,
     product: format === "classic" ? "poker_classic" : "texas_holdem",
     profileKind: profileKind ?? null,
     chainId,
-    leagues: ARENA_LEAGUES.map((l) => ({
-      ...l,
-      tables: byLeague[l.id]?.tables ?? 0,
-      seated: byLeague[l.id]?.seated ?? 0,
-    })),
+    cities,
+    /** Legacy key for clients that still say "leagues" — same array. */
+    leagues: cities,
   };
 }
 
@@ -879,12 +945,42 @@ async function executeArenaFindMatch(
   if (!session) return;
   const body = req.body as {
     leagueId?: string;
+    /** Alias for `leagueId` — same value, newer name. */
+    cityId?: string;
     profileKey?: string;
     risk?: string;
+    buyIn?: number;
   };
-  const leagueId = String(body.leagueId ?? "").toLowerCase();
+  const leagueId = resolveCityId(body) ?? "";
   if (!leagueId) {
-    return reply.code(400).send({ error: "invalid_request", message: "leagueId required" });
+    return reply.code(400).send({ error: "invalid_request", message: "cityId (or leagueId) required" });
+  }
+
+  // Player-chosen buy-in inside the city's 40-100BB band. Validated server-side
+  // so a client cannot request a stack the table does not allow.
+  let buyIn: number | null = null;
+  try {
+    buyIn = resolveBuyIn(leagueId, body.buyIn ?? null);
+  } catch (err) {
+    return reply.code(400).send({
+      error: "buy_in_out_of_range",
+      message: err instanceof Error ? err.message : "invalid buy-in",
+    });
+  }
+
+  const ratHoleFormat = format === "classic" ? "sixmax" : "hu";
+  const ratHole = await assertBuyInClearsRatHole({
+    ownerId: session.profileId,
+    cityId: leagueId,
+    format: ratHoleFormat,
+    buyInAtoms: usdcToAtoms(buyIn),
+  });
+  if (ratHole.ok === false) {
+    return reply.code(400).send({
+      error: "rat_hole_blocked",
+      message: ratHole.message,
+      minBuyInAtoms: ratHole.minAtoms.toString(),
+    });
   }
 
   const allowed = ["shark", "professor", "fox", "machine"];
@@ -904,10 +1000,19 @@ async function executeArenaFindMatch(
   const arenaMode = session.profileKind === "onchain" ? "onchain" : "demo";
 
   if (arenaMode === "onchain") {
-    const onchain = await handleOnchainFindMatch(req, reply, session, leagueId, profileKey, format);
+    const onchain = await handleOnchainFindMatch(
+      req,
+      reply,
+      session,
+      leagueId,
+      profileKey,
+      format,
+      buyIn,
+    );
     if (!onchain || reply.sent) return;
     const withHash = {
       ...onchain,
+      cityId: leagueId,
       profileKey: (onchain as { profileKey?: string | null }).profileKey ?? profileKey,
       profileConfigHash:
         (onchain as { profileConfigHash?: string }).profileConfigHash ?? profileConfigHash,
@@ -933,15 +1038,29 @@ async function executeArenaFindMatch(
       try {
         const { res, data } = await joinGameTable(req, withHash.tableId, withHash.buyIn);
         if (res.ok) {
-          return {
-            ...withHash,
-            waitingForChain: false,
-            sessionStatus: withHash.sessionStatus === "pending" ? "opened" : withHash.sessionStatus,
-            joined: true,
-            seatIndex: data.seatIndex,
-            sessionId: data.sessionId,
-            alreadySeated: Boolean(data.alreadySeated),
+          // Mid-hand JOIN_QUEUED returns 200 with seatIndex:null — that is NOT seated.
+          const seatOk =
+            data.alreadySeated === true ||
+            (data.queued !== true && data.seatIndex != null && Number.isFinite(Number(data.seatIndex)));
+          if (seatOk) {
+            return {
+              ...withHash,
+              waitingForChain: false,
+              sessionStatus: withHash.sessionStatus === "pending" ? "opened" : withHash.sessionStatus,
+              joined: true,
+              seatIndex: data.seatIndex,
+              sessionId: data.sessionId,
+              alreadySeated: Boolean(data.alreadySeated),
+            };
+          }
+          lastErr = {
+            ...data,
+            message:
+              (data.message as string) ||
+              "Seat change queued for next hand — not seated yet.",
           };
+          await new Promise((r) => setTimeout(r, 800));
+          continue;
         }
         lastErr = data;
         const msg = String(data.message || data.error || "");
@@ -985,6 +1104,7 @@ async function executeArenaFindMatch(
       arenaMode,
       chainId: session.chainId,
       format,
+      buyIn,
     });
   } catch (e) {
     if (e instanceof InsufficientFundsError) {
@@ -994,6 +1114,14 @@ async function executeArenaFindMatch(
         needed: e.needed,
         available: e.available,
         leagueId: e.leagueId,
+      });
+    }
+    const code = (e as Error & { code?: string }).code;
+    if (code === "already_seated_elsewhere") {
+      return reply.code(409).send({
+        error: "already_seated_elsewhere",
+        message: e instanceof Error ? e.message : "already_seated_elsewhere",
+        tableId: (e as Error & { tableId?: string }).tableId,
       });
     }
     const message = e instanceof Error ? e.message : "matchmaking_failed";
@@ -1012,6 +1140,20 @@ async function executeArenaFindMatch(
         message: (data.message as string) || (data.error as string) || "Could not seat at table",
         match,
       });
+    }
+    const seatOk =
+      data.alreadySeated === true ||
+      (data.queued !== true && data.seatIndex != null && Number.isFinite(Number(data.seatIndex)));
+    if (!seatOk) {
+      return {
+        ...match,
+        joined: false,
+        waitingForChain: false,
+        status: "matching" as const,
+        message: "Seat change queued for next hand — not seated yet.",
+        profileKey,
+        profileConfigHash,
+      };
     }
     return {
       ...match,
@@ -1043,13 +1185,44 @@ app.get("/v1/sessions", async (req, reply) => {
   const session = await requireUser(req, reply);
   if (!session) return;
   const rows = await query(
-    `select s.*, t.name as table_name from table_sessions s
+    `select s.*, t.name as table_name,
+       coalesce((
+         select sum(coalesce((tab->>'amount')::numeric, 0))
+         from hand_events he
+         join hands h on h.id = he.hand_id
+         cross join lateral jsonb_array_elements(
+           case
+             when jsonb_typeof(he.payload->'rakeTabs') = 'array' then he.payload->'rakeTabs'
+             else '[]'::jsonb
+           end
+         ) tab
+         where h.table_id = s.table_id
+           and he.event_type = 'HAND_SETTLED'
+           and (tab->>'seatIndex')::int = s.seat_index
+       ), 0) as assessed_rake
+     from table_sessions s
      join tables t on t.id = s.table_id
      where s.owner_id = $1
      order by s.started_at desc limit 40`,
     [session.profileId],
   );
-  return { sessions: rows.rows };
+  // Platform fees are winner/profit-only: session losers see $0 even if they
+  // briefly owed hand-winner tabs that were waived at leave.
+  const sessions = rows.rows.map((row) => {
+    const buyIn = Number(row.buy_in ?? 0);
+    const cashOut = Number(row.stack ?? 0);
+    const assessed = Number(row.assessed_rake ?? 0);
+    const platformFees =
+      Number.isFinite(assessed) &&
+      Number.isFinite(buyIn) &&
+      Number.isFinite(cashOut) &&
+      cashOut > buyIn &&
+      assessed > 0
+        ? assessed
+        : 0;
+    return { ...row, platform_fees: platformFees };
+  });
+  return { sessions };
 });
 
 // Settle rated HU matches from pre-existing session history so Arena Rating

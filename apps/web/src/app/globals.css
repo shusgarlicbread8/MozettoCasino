@@ -450,6 +450,90 @@ a[role="button"],
   gap: 10px;
 }
 
+/* Buy-in slider.
+   The track is drawn in three zones: filled up to the handle, neutral up to
+   the highest buy-in the balance covers, and dimmed beyond that so the limit
+   is visible before the player drags into it. */
+.mz-buyin-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 22px;
+  background: transparent;
+  cursor: pointer;
+  display: block;
+}
+.mz-buyin-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.mz-buyin-range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--mz-accent, #3ddc8a) 0%,
+    var(--mz-accent, #3ddc8a) var(--mz-fill, 0%),
+    rgba(232, 238, 233, 0.16) var(--mz-fill, 0%),
+    rgba(232, 238, 233, 0.16) var(--mz-afford, 100%),
+    rgba(255, 107, 107, 0.22) var(--mz-afford, 100%),
+    rgba(255, 107, 107, 0.22) 100%
+  );
+}
+.mz-buyin-range::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--mz-accent, #3ddc8a) 0%,
+    var(--mz-accent, #3ddc8a) var(--mz-fill, 0%),
+    rgba(232, 238, 233, 0.16) var(--mz-fill, 0%),
+    rgba(232, 238, 233, 0.16) var(--mz-afford, 100%),
+    rgba(255, 107, 107, 0.22) var(--mz-afford, 100%),
+    rgba(255, 107, 107, 0.22) 100%
+  );
+}
+.mz-buyin-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: #e8eee9;
+  border: 3px solid var(--mz-accent, #3ddc8a);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+  transition: transform 0.15s ease;
+}
+.mz-buyin-range::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #e8eee9;
+  border: 3px solid var(--mz-accent, #3ddc8a);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+  transition: transform 0.15s ease;
+}
+.mz-buyin-range:not(:disabled):hover::-webkit-slider-thumb,
+.mz-buyin-range:not(:disabled):active::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+.mz-buyin-range:focus-visible {
+  outline: none;
+}
+.mz-buyin-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px rgba(61, 220, 138, 0.28);
+}
+.mz-buyin-range:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 4px rgba(61, 220, 138, 0.28);
+}
+@media (prefers-reduced-motion: reduce) {
+  .mz-buyin-range::-webkit-slider-thumb,
+  .mz-buyin-range::-moz-range-thumb {
+    transition: none;
+  }
+}
+
 .mz-profile-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

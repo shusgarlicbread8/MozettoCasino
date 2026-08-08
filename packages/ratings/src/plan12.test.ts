@@ -81,6 +81,10 @@ test("rating update gate rejects private / custom / six-max / voids", () => {
   assert.equal(priv.allow, false);
   if (!priv.allow) assert.equal(priv.reason, "private_or_custom_unranked");
 
+  const casual = evaluateRatingUpdateGate({ ...base, matchClass: "casual_unranked" });
+  assert.equal(casual.allow, false);
+  if (!casual.allow) assert.equal(casual.reason, "private_or_custom_unranked");
+
   const six = evaluateRatingUpdateGate({ ...base, format: "sixmax", poolId: "nlhe_6max_standard" });
   assert.equal(six.allow, false);
 

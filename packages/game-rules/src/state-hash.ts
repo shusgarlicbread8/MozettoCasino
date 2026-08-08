@@ -7,24 +7,28 @@
 import { concat, keccak256, toBytes, toHex, type Hex } from "viem";
 import { cardKey } from "./cards.js";
 import type { HoldemState, LegalAction, SeatState } from "./holdem.js";
+import { chipsToNumber, type Chips } from "./money.js";
 
 /** Domain string for the TS freeze-oracle state digest. */
 export const TS_ENGINE_STATE_DOMAIN = "MOZETTO_TS_ENGINE_STATE_V1" as const;
 
 /**
- * Build identity for the TypeScript NLHE engine (WP-109 hardening supersedes WP-030 freeze id).
- * Distinct from Protocol V3 placeholder `mozetto-nlhe-engine-v3-draft`.
+ * Build identity for the TypeScript NLHE engine (NLHE_ENGINE_RC1).
  */
-export const TS_ENGINE_BUILD_ID = "mozetto-nlhe-ts-wp109" as const;
+export const TS_ENGINE_BUILD_ID = "mozetto-nlhe-ts-rc1" as const;
 
 /** Protocol V3 Season 1 draft placeholder (specs/MOZETTO_POKER_EVENT_V1.md §9 — frozen). */
 export const PROTOCOL_V3_ENGINE_HASH_PLACEHOLDER_ID = "mozetto-nlhe-engine-v3-draft" as const;
 
 /**
- * GameTemplate.engineHash promotion target (WP-109): Rust canonical core build id.
- * Event-hash chains may still use the Protocol V3 draft placeholder until a protocol freeze.
+ * GameTemplate.engineHash promotion target (NLHE_ENGINE_RC1).
  */
-export const GAME_TEMPLATE_ENGINE_BUILD_ID = "mozetto-nlhe-rust-wp109" as const;
+export const GAME_TEMPLATE_ENGINE_BUILD_ID = "mozetto-nlhe-engine-rc1" as const;
+
+function chipNum(v: Chips | number | null | undefined): number | null {
+  if (v == null) return null;
+  return chipsToNumber(typeof v === "bigint" ? v : BigInt(Math.trunc(v)));
+}
 
 export function tsEngineBuildHash(): Hex {
   return keccak256(toBytes(TS_ENGINE_BUILD_ID));
@@ -89,9 +93,9 @@ export type ConsensusSnapshot = {
 function seatSnapshot(s: SeatState): ConsensusSeat {
   return {
     seatIndex: s.seatIndex,
-    stack: s.stack,
-    bet: s.bet,
-    totalBet: s.totalBet,
+    stack: chipsToNumber(s.stack),
+    bet: chipsToNumber(s.bet),
+    totalBet: chipsToNumber(s.totalBet),
     hole: s.hole ? s.hole.map(cardKey) : null,
     folded: s.folded,
     allIn: s.allIn,
@@ -119,10 +123,10 @@ export function toConsensusSnapshot(state: HoldemState): ConsensusSnapshot {
     buildId: TS_ENGINE_BUILD_ID,
     config: {
       tableId: state.config.tableId,
-      smallBlind: state.config.smallBlind,
-      bigBlind: state.config.bigBlind,
+      smallBlind: chipsToNumber(state.config.smallBlind),
+      bigBlind: chipsToNumber(state.config.bigBlind),
       rakePct: state.config.rakePct,
-      rakeCap: state.config.rakeCap,
+      rakeCap: chipNum(state.config.rakeCap),
     },
     handId: state.handId,
     handNumber: state.handNumber,
@@ -130,16 +134,16 @@ export function toConsensusSnapshot(state: HoldemState): ConsensusSnapshot {
     button: state.button,
     deck: state.deck.map(cardKey),
     board: state.board.map(cardKey),
-    pot: state.pot,
+    pot: chipsToNumber(state.pot),
     seats: [...state.seats].sort((a, b) => a.seatIndex - b.seatIndex).map(seatSnapshot),
     actingIndex: state.actingIndex,
-    currentBet: state.currentBet,
-    minRaise: state.minRaise,
+    currentBet: chipsToNumber(state.currentBet),
+    minRaise: chipsToNumber(state.minRaise),
     lastAggressor: state.lastAggressor,
     firstToAct: state.firstToAct,
     seedCommit: state.seedCommit,
-    winners: state.winners.map((w) => ({ seatIndex: w.seatIndex, amount: w.amount })),
-    rake: state.rake,
+    winners: state.winners.map((w) => ({ seatIndex: w.seatIndex, amount: chipsToNumber(w.amount) })),
+    rake: chipsToNumber(state.rake),
     actedThisStreet: [...state.actedThisStreet].sort((a, b) => a - b),
     lastRaiseComplete: state.lastRaiseComplete,
   };
@@ -164,8 +168,8 @@ export function hashLegalActions(actions: LegalAction[]): Hex {
   const normalized = actions
     .map((a) => ({
       action: a.action,
-      minAmount: a.minAmount ?? null,
-      maxAmount: a.maxAmount ?? null,
+      minAmount: a.minAmount != null ? chipsToNumber(a.minAmount) : null,
+      maxAmount: a.maxAmount != null ? chipsToNumber(a.maxAmount) : null,
     }))
     .sort((a, b) => a.action.localeCompare(b.action));
   const domainTag = keccak256(toBytes(`${TS_ENGINE_STATE_DOMAIN}:legal`));
@@ -186,7 +190,7 @@ export function assertHexEqual(actual: Hex, expected: string, label: string): vo
 }
 
 export function snapshotStacks(state: HoldemState): number[] {
-  return [...state.seats].sort((a, b) => a.seatIndex - b.seatIndex).map((s) => s.stack);
+  return [...state.seats].sort((a, b) => a.seatIndex - b.seatIndex).map((s) => chipsToNumber(s.stack));
 }
 
 export function formatHash(h: Hex): string {

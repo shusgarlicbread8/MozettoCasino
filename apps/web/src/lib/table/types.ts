@@ -10,10 +10,13 @@ export type LiveSeat = {
   allIn: boolean;
   sitOut: boolean;
   hasCards: boolean;
+  /** Assessed rake owed by this seat until leave/settle. */
+  rakeOwed?: number;
 };
 
 export type LiveTableState = {
   handId: string | null;
+  handNumber?: number;
   street: string;
   pot: number;
   board: EngineCard[];
@@ -30,6 +33,8 @@ export type LiveTableState = {
   allInRunout: boolean;
   myHand: string | null;
   myEquity: number | null;
+  /** Session platform fees assessed but not yet collected from stacks. */
+  feesOnTab: number;
 };
 
 export type SeatActionFx = {

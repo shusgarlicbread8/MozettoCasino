@@ -34,7 +34,7 @@
       "op": "expect",
       "expect": {
         "button": 0,
-        "stateHash": "0x1ace4f2fd27acb4b0c4885cb4fb663460beb77f2a3e54afe8defd81ad647977a",
+        "stateHash": "0xb4079d73e6eb9b9c7318934df2da39a7c42d7aae5cf7149fb8456c903910e513",
         "legalActionsHash": "0xe23059d7c82b33890c649386b32e5cdec0af40f361addf0c6580521b8377dc11"
       }
     },
@@ -46,7 +46,7 @@
       "op": "expect",
       "expect": {
         "street": "settlement",
-        "stateHash": "0x2bee2fa58a115da1ddd713f9b6596e71b39c1087efde885ace7c399c0b098800"
+        "stateHash": "0x4792064832ade2af224c9b2864e40db51089319bc89cebcefba09c89d41bc34d"
       }
     },
     {
@@ -59,7 +59,7 @@
       "expect": {
         "button": 1,
         "actingIndex": 1,
-        "stateHash": "0xc790a6524a17497ccf177db7dba492427fc6fb0e21a7aa548851c3768168307d",
+        "stateHash": "0x15a986aa49c0be25f64f2a1800d4d1ee897798a3b4f4d6802a66cb0330f168cf",
         "legalActionsHash": "0x1943660b21690a0181550591635f619982b8911e66a4e5a4f7306bd0e81765bb"
       }
     }

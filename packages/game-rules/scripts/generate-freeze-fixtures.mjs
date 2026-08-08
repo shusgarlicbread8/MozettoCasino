@@ -31,7 +31,7 @@ const manifest = {
   tsEngineBuildHash: tsEngineBuildHash(),
   protocolV3EngineHashPlaceholder: protocolV3EngineHashPlaceholder(),
   note:
-    "WP-109: uncalled-bet return + sit-out/timeout. GameTemplate.engineHash → mozetto-nlhe-rust-wp109; Protocol V3 event vectors keep draft placeholder (no /specs mutation).",
+    "NLHE_ENGINE_RC1: bigint chips + net-on-award rake. GameTemplate.engineHash → mozetto-nlhe-engine-rc1; Protocol V3 event vectors keep draft placeholder (no /specs mutation).",
   fixtureCount: fixtures.length,
   fixtures: fixtures.map((f) => ({
     id: f.id,

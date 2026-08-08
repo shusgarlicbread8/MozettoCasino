@@ -1,11 +1,12 @@
 "use client";
 
 import { api } from "@/lib/api";
+import { requireCityId, type CityRef } from "@mozetto/game-rules/cities";
 import type { TicketParamsResponse } from "@mozetto/shared-types";
 import type { Hex } from "viem";
 
-export async function signAndSubmitSeatTicket(opts: {
-  leagueId: string;
+/** Takes the city as `cityId` or the equivalent legacy `leagueId`. */
+export async function signAndSubmitSeatTicket(opts: CityRef & {
   profileKey: string;
   signTypedDataAsync: (args: {
     domain: {
@@ -19,8 +20,9 @@ export async function signAndSubmitSeatTicket(opts: {
     message: Record<string, unknown>;
   }) => Promise<Hex>;
 }) {
+  const cityId = requireCityId(opts);
   const params = await api<TicketParamsResponse & { player: string }>(
-    `/v1/arena/ticket-params?leagueId=${encodeURIComponent(opts.leagueId)}&profileKey=${encodeURIComponent(opts.profileKey)}`,
+    `/v1/arena/ticket-params?cityId=${encodeURIComponent(cityId)}&leagueId=${encodeURIComponent(cityId)}&profileKey=${encodeURIComponent(opts.profileKey)}`,
   );
 
   const message = {
@@ -52,7 +54,8 @@ export async function signAndSubmitSeatTicket(opts: {
       expiresAt: params.expiresAt,
       nonce: params.nonce,
       signature,
-      leagueId: opts.leagueId,
+      cityId,
+      leagueId: cityId,
     }),
   });
 

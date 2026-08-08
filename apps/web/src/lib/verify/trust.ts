@@ -49,16 +49,20 @@ function statusFromComponents(
 /** Compact in-play pills: Funds secured / Players sealed / Cards committed */
 export function deriveTrustPills(payload?: Pick<VerifySessionPayload, "components" | "players" | "sessionStatus"> | null): TrustPill[] {
   const funds = statusFromComponents(payload?.components, ["session", "baseAnchor"]);
+  // Sealed participant list is authoritative — a bust mid-match must not flip
+  // "Players sealed" back to pending for one viewer while the other still sees ok.
   const players: ComponentStatus =
     payload?.players && payload.players.length >= 2
       ? "ok"
-      : payload?.sessionStatus === "opened" || payload?.sessionStatus === "playing"
+      : payload?.sessionStatus === "opened" ||
+          payload?.sessionStatus === "playing" ||
+          payload?.sessionStatus === "settling"
         ? "pending"
         : statusFromComponents(payload?.components, ["session"]);
   const cards = statusFromComponents(payload?.components, ["dealerCommitment", "vrf"]);
 
   return [
-    { id: "funds", label: "Funds secured", status: funds === "ok" ? "ok" : funds },
+    { id: "funds", label: "Funds secured", status: funds === "ok" ? "ok" : funds === "missing" ? "pending" : funds },
     { id: "players", label: "Players sealed", status: players },
     { id: "cards", label: "Cards committed", status: cards },
   ];

@@ -80,7 +80,7 @@
         "street": "flop",
         "pot": 650,
         "actingIndex": 2,
-        "stateHash": "0x320245f84a12b27d92e40a5dd248f7261e58d613780b068bb929c00dba0562d2",
+        "stateHash": "0x464be2d75851ae521e5a0b79f3aaba60836b7121ab1fde7407f6df383284a922",
         "legalActionsHash": "0x1ac6d89f4cba58b9804579bf7bc0d1f85a4720753cca49a12482d56a447054ca"
       }
     },
@@ -109,7 +109,7 @@
             "amount": 650
           }
         ],
-        "stateHash": "0x07fb58345edf7dec2a7245592a09c62d325eb1a5cd0aab70b64b79c66845b8c2"
+        "stateHash": "0x361f447fd025df2aa49897a478cca1f1ae1b886d2ba68def97cc9784153d8baf"
       }
     }
   ]

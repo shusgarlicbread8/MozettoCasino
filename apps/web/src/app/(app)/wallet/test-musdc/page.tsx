@@ -86,7 +86,7 @@ export default function TestMusdcPage() {
             fontVariantNumeric: "tabular-nums",
           }}
         >
-          {balances.loading ? "…" : money(balances.wallet)}
+          {money(balances.wallet)}
         </div>
         {balances.arenaAccountAddress ? (
           <div

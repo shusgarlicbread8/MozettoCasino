@@ -1,6 +1,7 @@
 import type { Card } from "@mozetto/shared-types";
 import { cardKey, fullDeck, rankValue } from "./cards.js";
 import { bestHand, compareScores } from "./hand-rank.js";
+import { expandRange, type RangeDistribution } from "./range.js";
 
 export type EquitySeat = {
   seatIndex: number;
@@ -178,9 +179,126 @@ export function personalHandLabel(hole: Card[], board: Card[]): string {
   return madeHandLabel(hole, board) ?? describeHole(hole);
 }
 
+export type RangeEquityResult = {
+  /** Wins + tie share, 0–100. */
+  equityPct: number;
+  winPct: number;
+  tiePct: number;
+  /** Villain combos left after card removal — 0 means the range was impossible. */
+  combosConsidered: number;
+  /** Trials actually run; when `exact` the result is enumerated, not sampled. */
+  trials: number;
+  exact: boolean;
+};
+
+/**
+ * Hero equity against an explicit weighted opponent range (heads-up).
+ *
+ * This is the number that belongs in a decision. `computeHeroEquity` below
+ * answers a different and much weaker question — equity against a *random*
+ * hand — which systematically overstates hero's edge once the opponent has
+ * shown aggression. Prefer this function wherever a range is available.
+ */
+export function computeEquityVsRange(
+  heroHole: Card[],
+  board: Card[],
+  range: RangeDistribution,
+  opts?: { samples?: number; seed?: number },
+): RangeEquityResult {
+  const empty: RangeEquityResult = {
+    equityPct: 0,
+    winPct: 0,
+    tiePct: 0,
+    combosConsidered: 0,
+    trials: 0,
+    exact: false,
+  };
+  if (heroHole.length < 2) return empty;
+
+  const combos = expandRange(range, [...heroHole, ...board]);
+  if (!combos.length) return empty;
+
+  // Cumulative weights for O(log n) weighted sampling.
+  const cum: number[] = new Array(combos.length);
+  let total = 0;
+  for (let i = 0; i < combos.length; i++) {
+    total += combos[i]!.weight;
+    cum[i] = total;
+  }
+  if (total <= 0) return { ...empty, combosConsidered: combos.length };
+
+  const pickCombo = (r: number) => {
+    const target = r * total;
+    let lo = 0;
+    let hi = combos.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (cum[mid]! < target) lo = mid + 1;
+      else hi = mid;
+    }
+    return combos[lo]!;
+  };
+
+  const need = Math.max(0, 5 - board.length);
+  const rnd = mulberry32(opts?.seed ?? (Date.now() ^ (combos.length * 7919)));
+
+  let winUnits = 0;
+  let tieUnits = 0;
+  let weightUnits = 0;
+  let trials = 0;
+
+  // River: no runout to sample, so enumerate the range exactly.
+  const exact = need === 0;
+  if (exact) {
+    const heroScore = bestHand(heroHole, board).score;
+    for (const c of combos) {
+      const oppScore = bestHand(c.hole, board).score;
+      const cmp = compareScores(oppScore, heroScore);
+      if (cmp < 0) winUnits += c.weight;
+      else if (cmp === 0) tieUnits += c.weight;
+      weightUnits += c.weight;
+      trials += 1;
+    }
+  } else {
+    const samples = opts?.samples ?? 2_000;
+    for (let i = 0; i < samples; i++) {
+      const villain = pickCombo(rnd());
+      const used = [...board, ...heroHole, ...villain.hole];
+      const deck = remainingDeck(used);
+      if (deck.length < need) continue;
+      const fullBoard = [...board, ...sampleCards(deck, need, rnd)];
+      const heroScore = bestHand(heroHole, fullBoard).score;
+      const oppScore = bestHand(villain.hole, fullBoard).score;
+      const cmp = compareScores(oppScore, heroScore);
+      // Combos are drawn proportional to weight, so each trial counts once.
+      if (cmp < 0) winUnits += 1;
+      else if (cmp === 0) tieUnits += 1;
+      weightUnits += 1;
+      trials += 1;
+    }
+  }
+
+  if (weightUnits <= 0) return { ...empty, combosConsidered: combos.length };
+  const winPct = (100 * winUnits) / weightUnits;
+  const tiePct = (100 * tieUnits) / weightUnits;
+  return {
+    equityPct: Math.round((winPct + tiePct / 2) * 100) / 100,
+    winPct: Math.round(winPct * 100) / 100,
+    tiePct: Math.round(tiePct * 100) / 100,
+    combosConsidered: combos.length,
+    trials,
+    exact,
+  };
+}
+
 /**
  * Hero win chance vs unknown opponent hands (Monte Carlo).
- * Used for private "your odds" while opponents' cards are hidden.
+ *
+ * NOTE: opponents are dealt *uniformly random* hole cards. This is the correct
+ * model only when the opponent has taken no action that narrows their range
+ * (and for the "your odds" display where no range is assumed). Do not use it
+ * as a decision input against an opponent who has bet or raised — use
+ * `computeEquityVsRange` instead.
  */
 export function computeHeroEquity(
   heroHole: Card[],

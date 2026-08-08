@@ -31,7 +31,7 @@ describe("WP-109 sit-out", () => {
     state = startHand(state, "wp109-sitout", "h1").state;
     assert.equal(state.seats[3]!.folded, true);
     assert.equal(state.seats[3]!.hole, undefined);
-    assert.equal(state.pot, 150);
+    assert.equal(state.pot, 150n);
     // button 0 → SB 1, BB 2; first active after BB skips sit-out 3 → 4
     assert.equal(state.actingIndex, 4);
   });
@@ -75,7 +75,6 @@ describe("WP-109 timeout fallback", () => {
     state = seatPlayer(state, 1, "p1", "a1", 1000);
     state = startHand(state, "seed", "h1").state;
     state = applyAction(state, "call", 50).state;
-    // BB can check
     const fb = timeoutFallbackAction(state);
     assert.equal(fb?.action, "check");
   });
@@ -91,12 +90,29 @@ describe("WP-109 uncalled + foldWin", () => {
     state = seatPlayer(state, 1, "p1", "a1", 10_000);
     const before = state.seats.map((s) => s.stack);
     state = startHand(state, "seed", "h1").state;
-    assert.equal(uncalledBetAmount(state.seats, 1), 50);
+    assert.equal(uncalledBetAmount(state.seats, 1), 50n);
     state = applyAction(state, "fold").state;
-    assert.equal(state.winners[0]?.amount, 100);
+    assert.equal(state.winners[0]?.amount, 100n);
     const after = [...state.seats].sort((a, b) => a.seatIndex - b.seatIndex).map((s) => s.stack);
-    assert.deepEqual(after, [9950, 10050]);
+    assert.deepEqual(after, [9950n, 10050n]);
     assert.equal(checkHandConservation(before, after, 0), true);
+  });
+
+  it("fold that ends the hand keeps PLAYER_ACTED in the event stream", () => {
+    let state = createTable(
+      { tableId: "t", smallBlind: 50, bigBlind: 100, rakePct: 0, rakeCap: null },
+      2,
+    );
+    state = seatPlayer(state, 0, "p0", "a0", 10_000);
+    state = seatPlayer(state, 1, "p1", "a1", 10_000);
+    state = startHand(state, "seed", "h-fold-ev").state;
+    const folded = applyAction(state, "fold");
+    assert.equal(folded.state.street, "settlement");
+    const types = folded.events.map((e) => e.type);
+    assert.ok(types.includes("PLAYER_ACTED"), `missing PLAYER_ACTED in ${types.join(",")}`);
+    assert.ok(types.includes("HAND_SETTLED"), `missing HAND_SETTLED in ${types.join(",")}`);
+    const acted = folded.events.find((e) => e.type === "PLAYER_ACTED");
+    assert.equal(acted && "action" in acted ? acted.action : null, "fold");
   });
 
   it("postflop fold-win applies rake on eligible pot only", () => {
@@ -113,21 +129,22 @@ describe("WP-109 uncalled + foldWin", () => {
     state = applyAction(state, "check").state; // BB
     state = applyAction(state, "bet", 200).state; // SB/button
     const potBefore = state.pot;
-    const aggressor = state.seats.find((s) => s.bet === 200)!;
-    assert.equal(uncalledBetAmount(state.seats, aggressor.seatIndex), 200);
+    const aggressor = state.seats.find((s) => s.bet === 200n)!;
+    assert.equal(uncalledBetAmount(state.seats, aggressor.seatIndex), 200n);
     state = applyAction(state, "fold").state;
     assert.equal(state.street, "settlement");
-    const eligible = potBefore - 200;
-    const expectedRake = Math.floor((eligible * 500) / 10_000);
+    const eligible = potBefore - 200n;
+    const expectedRake = (eligible * 500n) / 10_000n;
     assert.equal(state.rake, expectedRake);
     assert.equal(state.winners[0]?.amount, eligible - expectedRake);
+    assert.equal(state.sessionRake, expectedRake);
   });
 });
 
-describe("WP-109 GameTemplate engine hash promotion", () => {
-  it("exposes Rust WP-109 build id distinct from Protocol draft placeholder", () => {
-    assert.equal(TS_ENGINE_BUILD_ID, "mozetto-nlhe-ts-wp109");
-    assert.equal(GAME_TEMPLATE_ENGINE_BUILD_ID, "mozetto-nlhe-rust-wp109");
+describe("NLHE_ENGINE_RC1 GameTemplate engine hash promotion", () => {
+  it("exposes RC1 build ids distinct from Protocol draft placeholder", () => {
+    assert.equal(TS_ENGINE_BUILD_ID, "mozetto-nlhe-ts-rc1");
+    assert.equal(GAME_TEMPLATE_ENGINE_BUILD_ID, "mozetto-nlhe-engine-rc1");
     assert.notEqual(gameTemplateEngineHash(), protocolV3EngineHashPlaceholder());
   });
 });

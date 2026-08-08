@@ -40,12 +40,13 @@ export function Nav() {
     me?.agent?.handle ||
     me?.session?.handle ||
     "—";
-  const agentLabel =
-    typeof rawLabel === "string" && /^0x[a-fA-F0-9]{40}$/i.test(rawLabel)
-      ? `${rawLabel.slice(0, 6)}…${rawLabel.slice(-4)}`
-      : rawLabel.startsWith("Wallet 0x")
-        ? rawLabel.replace(/^Wallet\s+/i, "")
-        : rawLabel;
+  const shortenAddr = (v: string) =>
+    /^0x[a-fA-F0-9]{40}$/i.test(v) ? `${v.slice(0, 6)}…${v.slice(-4)}` : v;
+  const stripped =
+    typeof rawLabel === "string" && rawLabel.startsWith("Wallet 0x")
+      ? rawLabel.replace(/^Wallet\s+/i, "")
+      : String(rawLabel);
+  const agentLabel = shortenAddr(stripped);
   const agentHandle = me?.agent?.handle ?? "—";
   const league = me?.profile?.league ?? "bronze";
   const walletTag = me ? money(balances.displayWallet).replace(/\.00$/, "") : "";

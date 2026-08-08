@@ -7,7 +7,13 @@
 
 import { GLICKO_DEFAULTS } from "./glicko2.js";
 
-export type RatingMatchClass = "ranked_public" | "private" | "open_custom" | "demo_unranked";
+export type RatingMatchClass =
+  | "ranked_public"
+  | "private"
+  | "open_custom"
+  | "demo_unranked"
+  /** Public Casual league — real money, no Arena Rating. */
+  | "casual_unranked";
 
 export type RatingFormat = "hu" | "sixmax" | "other";
 
@@ -74,7 +80,12 @@ const RANKED_HU_POOLS = new Set<string>([
 ]);
 
 export function evaluateRatingUpdateGate(input: RatingUpdateGateInput): RatingUpdateGateResult {
-  if (input.matchClass === "private" || input.matchClass === "open_custom" || input.matchClass === "demo_unranked") {
+  if (
+    input.matchClass === "private" ||
+    input.matchClass === "open_custom" ||
+    input.matchClass === "demo_unranked" ||
+    input.matchClass === "casual_unranked"
+  ) {
     return { allow: false, reason: "private_or_custom_unranked", detail: `matchClass=${input.matchClass}` };
   }
   if (input.format === "sixmax" || input.poolId === SIXMAX_STATS_POOL_SEASON1) {

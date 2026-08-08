@@ -23,12 +23,24 @@ type Props = {
   compact?: boolean;
 };
 
+function displayModelName(modelId?: string | null): string | null {
+  if (!modelId) return null;
+  const normalized = modelId.toLowerCase().replace(/[_/.-]+/g, " ");
+  if (normalized.includes("gpt oss 120b")) return "GPT OSS 120B";
+  if (normalized.includes("gpt oss")) return "GPT OSS";
+  const last = modelId.split("/").pop() ?? modelId;
+  return last
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 /**
  * WP-126 — public cognition state machine (no CoT / private reasoning).
  */
 export function CognitionStateDisplay({ status, compact = false }: Props) {
   const active = status.phase;
   const accent = PHASE_COLOR[active];
+  const modelName = displayModelName(status.modelId);
 
   return (
     <div
@@ -46,7 +58,7 @@ export function CognitionStateDisplay({ status, compact = false }: Props) {
             fontWeight: 500,
           }}
         >
-          AI STATE
+          AI STATE{modelName ? ` · ${modelName}` : ""}
         </span>
         <span
           style={{
@@ -115,6 +127,100 @@ export function CognitionStateDisplay({ status, compact = false }: Props) {
           ) : null}
         </div>
       </div>
+
+      {status.publicNarrative ||
+      status.modelId ||
+      status.intentAction ||
+      (status.publicThinkingLog && status.publicThinkingLog.length > 0) ? (
+        <div
+          style={{
+            padding: compact ? "8px 10px" : "10px 12px",
+            borderRadius: radius.md,
+            background: "rgba(232,238,233,0.03)",
+            border: `1px solid ${color.line}`,
+          }}
+        >
+          {status.modelId ? (
+            <div
+              style={{
+                fontFamily: font.mono,
+                fontSize: 9,
+                letterSpacing: "0.08em",
+                color: color.accent,
+                marginBottom: 6,
+              }}
+            >
+              {status.fallbackUsed ? "FALLBACK" : "DECISION"}
+              {status.intentAction
+                ? ` · ${status.intentAction.toUpperCase()}${
+                    status.intentAmount != null && status.intentAmount > 0
+                      ? ` ${status.intentAmount}`
+                      : ""
+                  }`
+                : ""}
+              {status.publicCadenceMs != null && status.publicCadenceMs > 0
+                ? ` · ${(status.publicCadenceMs / 1000).toFixed(1)}s clock`
+                : ""}
+            </div>
+          ) : null}
+          {status.publicThinkingLog && status.publicThinkingLog.length > 0 ? (
+            <ol
+              aria-label="Public thinking log"
+              style={{
+                listStyle: "none",
+                margin: 0,
+                padding: 0,
+                display: "flex",
+                flexDirection: "column",
+                gap: 7,
+                maxHeight: compact ? 120 : 180,
+                overflowY: "auto",
+              }}
+            >
+              {status.publicThinkingLog.map((line, i) => {
+                const latest = i === status.publicThinkingLog!.length - 1;
+                return (
+                  <li
+                    key={`${i}-${line.slice(0, 24)}`}
+                    style={{
+                      fontFamily: font.sans,
+                      fontSize: compact ? 11.5 : 12.5,
+                      lineHeight: 1.5,
+                      color: latest ? color.text : color.textMuted,
+                      opacity: latest ? 1 : 0.72,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontFamily: font.mono,
+                        fontSize: 9,
+                        letterSpacing: "0.06em",
+                        color: color.textFaint,
+                        marginRight: 6,
+                      }}
+                    >
+                      {String(i + 1).padStart(2, "0")}
+                    </span>
+                    {line}
+                  </li>
+                );
+              })}
+            </ol>
+          ) : (
+            <p
+              style={{
+                margin: 0,
+                fontFamily: font.sans,
+                fontSize: compact ? 12 : 13,
+                lineHeight: 1.55,
+                color: color.textMuted,
+              }}
+            >
+              {status.publicNarrative ?? PHASE_HINTS[active]}
+            </p>
+          )}
+        </div>
+      ) : null}
 
       <ol
         style={{

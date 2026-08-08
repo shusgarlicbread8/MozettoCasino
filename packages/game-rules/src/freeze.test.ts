@@ -33,7 +33,7 @@ describe("WP-030 state hash", () => {
     assert.match(ts, /^0x[0-9a-f]{64}$/);
     assert.match(proto, /^0x[0-9a-f]{64}$/);
     assert.notEqual(ts, proto);
-    assert.equal(TS_ENGINE_BUILD_ID, "mozetto-nlhe-ts-wp109");
+    assert.equal(TS_ENGINE_BUILD_ID, "mozetto-nlhe-ts-rc1");
     assert.equal(TS_ENGINE_STATE_DOMAIN, "MOZETTO_TS_ENGINE_STATE_V1");
   });
 

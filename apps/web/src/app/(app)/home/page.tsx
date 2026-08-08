@@ -8,6 +8,7 @@
 
 import Link from "next/link";
 import { useEffect, useState, type CSSProperties } from "react";
+import { SplitFlapNumber } from "@/components/SplitFlapNumber";
 import { Button, LeagueChip } from "@/components/ui";
 import { api } from "@/lib/api";
 import {
@@ -23,12 +24,17 @@ import {
 import { money, useSession } from "@/lib/session";
 import { useMozettoBalances } from "@/lib/use-mozetto-balances";
 
+/** A city as `/v1/arena` reports it. `id` is the persisted `league_id`. */
 type ArenaLeague = {
   id: string;
   name: string;
   color?: string;
   buyIn: number;
   open?: boolean;
+  stakesLabel?: string;
+  buyInLabel?: string;
+  modeLabel?: string;
+  variantLabel?: string;
   tables: number;
   seated: number;
 };
@@ -110,7 +116,7 @@ export default function HomePage() {
         });
     };
     load();
-    const id = setInterval(load, 5000);
+    const id = setInterval(load, 2000);
     return () => clearInterval(id);
   }, []);
 
@@ -165,8 +171,6 @@ export default function HomePage() {
   const agentVersion = agent?.current_version || "v1";
   const userLeague = me?.profile?.league || "bronze";
   const greeting = me?.profile?.display_name || me?.session?.displayName || me?.session?.handle || "Player";
-
-  const balancesLoading = sessionLoading || balances.loading;
 
   return (
     <main
@@ -263,13 +267,13 @@ export default function HomePage() {
               <div
                 style={{
                   marginTop: 4,
-                  font: `600 28px ${font.mono}`,
+                  fontWeight: 600,
                   letterSpacing: "-0.03em",
-                  color: color.accent,
-                  fontVariantNumeric: "tabular-nums",
+                  lineHeight: 1.1,
+                  minHeight: 34,
                 }}
               >
-                {balancesLoading ? "…" : money(playable)}
+                <SplitFlapNumber value={playable} fontSize={28} color={color.accent} />
               </div>
             </div>
             <div>
@@ -277,12 +281,17 @@ export default function HomePage() {
               <div
                 style={{
                   marginTop: 4,
-                  font: `600 20px ${font.mono}`,
-                  color: atTables > 0 ? color.warn : color.textMuted,
-                  fontVariantNumeric: "tabular-nums",
+                  fontWeight: 600,
+                  letterSpacing: "-0.03em",
+                  lineHeight: 1.1,
+                  minHeight: 34,
                 }}
               >
-                {balancesLoading ? "…" : money(atTables)}
+                <SplitFlapNumber
+                  value={atTables}
+                  fontSize={28}
+                  color={atTables > 0 ? color.warn : color.textMuted}
+                />
               </div>
             </div>
             {balances.pendingSettlement > 0.000001 ? (
@@ -291,12 +300,17 @@ export default function HomePage() {
                 <div
                   style={{
                     marginTop: 4,
-                    font: `600 16px ${font.mono}`,
-                    color: color.warn,
-                    fontVariantNumeric: "tabular-nums",
+                    fontWeight: 600,
+                    letterSpacing: "-0.03em",
+                    lineHeight: 1.1,
+                    minHeight: 28,
                   }}
                 >
-                  {money(balances.pendingSettlement)}
+                  <SplitFlapNumber
+                    value={balances.pendingSettlement}
+                    fontSize={28}
+                    color={color.warn}
+                  />
                 </div>
               </div>
             ) : null}
@@ -334,7 +348,7 @@ export default function HomePage() {
             marginBottom: space[3],
           }}
         >
-          <div style={labelStyle()}>Leagues · Texas Hold&apos;em</div>
+          <div style={labelStyle()}>Cities · Texas Hold&apos;em · NLHE</div>
           <Link
             href="/poker"
             style={{ font: `500 12px ${font.sans}`, color: color.accent, textDecoration: "none" }}
@@ -352,11 +366,11 @@ export default function HomePage() {
         >
           {arenaLoading ? (
             <div style={{ ...panelStyle({ padding: "16px 18px", flex: 1 }), color: color.textFaint, fontSize: 13 }}>
-              Loading leagues…
+              Loading cities…
             </div>
           ) : leagues.length === 0 ? (
             <div style={{ ...panelStyle({ padding: "16px 18px", flex: 1 }), color: color.textMuted, fontSize: 13 }}>
-              League lobby unavailable. Open Play to retry matchmaking.
+              City lobby unavailable. Open Play to retry matchmaking.
             </div>
           ) : (
             leagues.map((l) => {
@@ -381,6 +395,7 @@ export default function HomePage() {
                   }}
                 >
                   <LeagueChip league={l.name || l.id} size="sm" />
+                  {/* Stakes first: a city name alone says nothing about cost. */}
                   <div
                     style={{
                       marginTop: 12,
@@ -389,13 +404,19 @@ export default function HomePage() {
                       fontVariantNumeric: "tabular-nums",
                     }}
                   >
-                    {money(l.buyIn)}
+                    {l.stakesLabel ?? money(l.buyIn)}
                   </div>
-                  <div style={{ marginTop: 4, font: `400 11px ${font.mono}`, color: color.textFaint }}>
-                    BUY-IN · {l.tables} LIVE · {l.seated} SEATED
+                  <div style={{ marginTop: 4, font: `400 11px ${font.mono}`, color: color.textMuted }}>
+                    {(l.variantLabel ?? "NLHE").toUpperCase()} · {(l.modeLabel ?? "RANKED").toUpperCase()}
+                  </div>
+                  <div style={{ marginTop: 3, font: `400 11px ${font.mono}`, color: color.textFaint }}>
+                    BUY-IN {l.buyInLabel ?? money(l.buyIn)}
+                  </div>
+                  <div style={{ marginTop: 3, font: `400 11px ${font.mono}`, color: color.textFaint }}>
+                    {l.tables} LIVE · {l.seated} SEATED
                   </div>
                   {isCurrent ? (
-                    <div style={{ marginTop: 8, ...labelStyle(lc), fontSize: 9 }}>Your league</div>
+                    <div style={{ marginTop: 8, ...labelStyle(lc), fontSize: 9 }}>Your city</div>
                   ) : null}
                 </Link>
               );

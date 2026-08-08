@@ -1,15 +1,18 @@
 import { randomUUID } from "node:crypto";
+import { buyInBand, requireCity, usdcToAtoms, validateBuyIn } from "@mozetto/game-rules";
 import { getPool, query } from "./client.js";
 import {
   ARENA_LEAGUES,
   arenaFormatConfig,
+  arenaRakeForLeague,
   evaluateOpponentIntegrity,
   getLinkedAccountLookup,
+  leaguePairCapMode,
   pairCappedToday,
   rankedPoolKey,
   randomSeatOrder,
   recordAllocationDecision,
-  stakesForBuyIn,
+  stakesForCity,
   type ArenaFormat,
   type ArenaLeagueId,
 } from "./matchmaking.js";
@@ -22,12 +25,22 @@ const USDC_DECIMALS = 6;
  * treated as stranded rather than merely waiting. Matches the lobby's idle
  * table window so a table and its seats age out together.
  */
-const STRANDED_MINUTES = 10;
+const STRANDED_MINUTES = 2;
 
+/**
+ * Maximum custody lock for a city, in USDC atoms — the 100BB ceiling.
+ * A bankroll can never raise this; it is a property of the table.
+ */
 export function leagueBuyInRaw(leagueId: string): bigint {
-  const league = ARENA_LEAGUES.find((l) => l.id === leagueId);
-  if (!league) throw new Error("League not available");
-  return BigInt(league.buyIn) * BigInt(10 ** USDC_DECIMALS);
+  return buyInBand(requireCity(leagueId)).maxAtoms;
+}
+
+/** Atoms a specific seat locks, validated against the city's 40-100BB band. */
+export function seatBuyInRaw(leagueId: string, buyInUsdc: number): bigint {
+  const city = requireCity(leagueId);
+  const check = validateBuyIn({ city, requestedAtoms: usdcToAtoms(buyInUsdc) });
+  if (!check.ok) throw new Error(check.message ?? "buy-in out of range");
+  return check.atoms;
 }
 
 export function profileKeyToVersion(profileKey: string): string {
@@ -178,7 +191,10 @@ export async function claimTicketPair(opts: {
   chainId: number;
   matchmakingPool: string;
   buyInUsdc: number;
+  /** Ranked: hard. Casual: soft. Default hard. */
+  pairCapMode?: "hard" | "soft";
 }): Promise<{ self: SeatTicketRow; opponent: SeatTicketRow } | null> {
+  const pairCapMode = opts.pairCapMode ?? "hard";
   const client = await getPool().connect();
   try {
     await client.query("begin");
@@ -221,24 +237,27 @@ export async function claimTicketPair(opts: {
       getLinkedAccountLookup().getExcludedPeers(opts.profileId),
     );
     const pairCache = new Map<string, boolean>();
-    let opponent: SeatTicketRow | undefined;
-    for (const cand of candidates) {
-      const oppId = cand.profile_id;
-      if (!pairCache.has(oppId)) {
-        pairCache.set(oppId, await pairCappedToday(opts.profileId, oppId));
+    const pickOpponent = async (ignorePairCap: boolean): Promise<SeatTicketRow | undefined> => {
+      for (const cand of candidates) {
+        const oppId = cand.profile_id;
+        if (!ignorePairCap && !pairCache.has(oppId)) {
+          pairCache.set(oppId, await pairCappedToday(opts.profileId, oppId));
+        }
+        const integrity = evaluateOpponentIntegrity({
+          userId: opts.profileId,
+          opponentId: oppId,
+          format: "hu",
+          pairCapped: ignorePairCap ? () => false : (id) => pairCache.get(id) === true,
+          linkedToUser: (id) => excludedPeers.has(id),
+        });
+        if (integrity.ok) return cand;
       }
-      const integrity = evaluateOpponentIntegrity({
-        userId: opts.profileId,
-        opponentId: oppId,
-        format: "hu",
-        pairCapped: (id) => pairCache.get(id) === true,
-        linkedToUser: (id) => excludedPeers.has(id),
-      });
-      if (integrity.ok) {
-        opponent = cand;
-        break;
-      }
-    }
+      return undefined;
+    };
+    // Ranked: hard cap. Casual: soft-avoid (prefer uncapped, else still pair).
+    const opponent =
+      (await pickOpponent(false)) ??
+      (pairCapMode === "soft" ? await pickOpponent(true) : undefined);
     if (!opponent) {
       await client.query("rollback");
       return null;
@@ -259,6 +278,37 @@ export async function claimTicketPair(opts: {
 }
 
 /**
+ * Serialize HU find-match create/join for one league pool so two concurrent
+ * Find Match clicks cannot both open empty solo tables.
+ *
+ * In-process only. Do NOT use Postgres session advisory locks here — Supabase
+ * transaction poolers (port 6543) hand out different backends per query, so
+ * `pg_advisory_lock` is acquired on one connection and never unlocked, which
+ * wedges every later Find Match until statement_timeout.
+ */
+const matchmakingChains = new Map<string, Promise<unknown>>();
+
+export async function withMatchmakingLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = matchmakingChains.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  // Chain waiters; ignore prior failures so one bad match doesn't poison the queue.
+  matchmakingChains.set(
+    key,
+    prev.catch(() => undefined).then(() => gate),
+  );
+  await prev.catch(() => undefined);
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (matchmakingChains.get(key) === gate) matchmakingChains.delete(key);
+  }
+}
+
+/**
  * Atomically reserve a compatible open on-chain table for one queued ticket.
  * Fullest tables are preferred (ties randomized), then the player row is
  * inserted in the same transaction so concurrent find-match cannot overfill.
@@ -270,6 +320,8 @@ export async function claimOpenOnchainSession(opts: {
   leagueId: string;
   buyInUsdc: number;
   format?: ArenaFormat;
+  /** Override; defaults from league (ranked=hard, casual=soft). */
+  pairCapMode?: "hard" | "soft";
 }): Promise<
   | {
       ticket: SeatTicketRow;
@@ -282,6 +334,7 @@ export async function claimOpenOnchainSession(opts: {
 > {
   const format = opts.format ?? "hu";
   const cfg = arenaFormatConfig(format);
+  const pairCapMode = opts.pairCapMode ?? leaguePairCapMode(opts.leagueId);
   const client = await getPool().connect();
   try {
     await client.query("begin");
@@ -313,7 +366,10 @@ export async function claimOpenOnchainSession(opts: {
        from onchain_sessions os
        join tables t on t.id = os.table_id
        where os.chain_id = $1
-         and os.status = 'opened'
+         -- Include pending: creator may still be finishing openSession while the
+         -- opponent's Find Match runs; skipLocked + vault UnknownSession filter
+         -- in the API drops phantoms safely.
+         and os.status in ('opened', 'pending')
          and t.is_active = true
          and t.privacy = 'public'
          and t.arena_mode = 'onchain'
@@ -330,10 +386,12 @@ export async function claimOpenOnchainSession(opts: {
            where done.table_id = os.table_id and done.status = 'completed'
          )
          and (select count(*) from onchain_session_players osp where osp.session_id = os.session_id) < $5
+         -- Prefer tables that already have someone waiting (queue sync).
+         and (select count(*) from onchain_session_players osp where osp.session_id = os.session_id) >= 1
        order by (
          select count(*) from onchain_session_players occupied
          where occupied.session_id = os.session_id
-       ) desc, random()
+       ) desc, os.created_at asc, random()
        limit 12
        for update of os skip locked`,
       [opts.chainId, opts.leagueId, opts.buyInUsdc, opts.profileId, cfg.maxSeats, cfg.variantId],
@@ -351,40 +409,34 @@ export async function claimOpenOnchainSession(opts: {
       getLinkedAccountLookup().getExcludedPeers(opts.profileId),
     );
     const pairCache = new Map<string, boolean>();
-    let candidate:
-      | {
-          session_id: string;
-          table_id: string;
-          table_name: string;
-          max_seats: number;
-          used_seats: number[];
-          seated_profiles: string[];
+    type OpenCandidate = (typeof candidates)[number];
+    const pickOpenCandidate = async (ignorePairCap: boolean): Promise<OpenCandidate | undefined> => {
+      for (const row of candidates) {
+        let blocked = false;
+        for (const oppId of row.seated_profiles ?? []) {
+          if (format === "hu" && !ignorePairCap && !pairCache.has(oppId)) {
+            pairCache.set(oppId, await pairCappedToday(opts.profileId, oppId));
+          }
+          const integrity = evaluateOpponentIntegrity({
+            userId: opts.profileId,
+            opponentId: oppId,
+            format,
+            pairCapped: ignorePairCap ? () => false : (id) => pairCache.get(id) === true,
+            linkedToUser: (id) => excludedPeers.has(id),
+          });
+          if (!integrity.ok) {
+            blocked = true;
+            break;
+          }
         }
-      | undefined;
-
-    for (const row of candidates) {
-      let blocked = false;
-      for (const oppId of row.seated_profiles ?? []) {
-        if (format === "hu" && !pairCache.has(oppId)) {
-          pairCache.set(oppId, await pairCappedToday(opts.profileId, oppId));
-        }
-        const integrity = evaluateOpponentIntegrity({
-          userId: opts.profileId,
-          opponentId: oppId,
-          format,
-          pairCapped: (id) => pairCache.get(id) === true,
-          linkedToUser: (id) => excludedPeers.has(id),
-        });
-        if (!integrity.ok) {
-          blocked = true;
-          break;
-        }
+        if (!blocked) return row;
       }
-      if (!blocked) {
-        candidate = row;
-        break;
-      }
-    }
+      return undefined;
+    };
+    // Ranked: hard cap → create solo if only rematch seats. Casual: soft-avoid join.
+    const candidate =
+      (await pickOpenCandidate(false)) ??
+      (pairCapMode === "soft" ? await pickOpenCandidate(true) : undefined);
     if (!candidate) {
       await client.query("rollback");
       return null;
@@ -711,17 +763,19 @@ export async function createOnchainArenaTable(opts: {
   format?: ArenaFormat;
 }) {
   const cfg = arenaFormatConfig(opts.format ?? "hu");
-  const { smallBlind, bigBlind, minBuyIn, maxBuyIn } = stakesForBuyIn(opts.buyIn);
+  // City fixes the stakes and the 40-100BB band; opts.buyIn is this seat only.
+  const { smallBlind, bigBlind, minBuyIn, maxBuyIn } = stakesForCity(opts.leagueId);
   const short = randomUUID().replace(/-/g, "").slice(0, 6).toUpperCase();
   const league = ARENA_LEAGUES.find((l) => l.id === opts.leagueId);
   const id = `arena_${randomUUID().slice(0, 8)}`;
   const name = `On-chain ${league?.name ?? "Arena"} #${short}`;
+  const { rakePct, rakeCap } = arenaRakeForLeague(opts.leagueId, bigBlind);
 
   await query(
     `insert into tables
        (id, name, variant_id, league_id, small_blind, big_blind, min_buy_in, max_buy_in,
         max_seats, rake_pct, rake_cap, privacy, pace, is_active, created_by, arena_mode, chain_id)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,0.025,null,'public','normal',true,$10,'onchain',$11)`,
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'public','normal',true,$12,'onchain',$13)`,
     [
       id,
       name,
@@ -732,6 +786,8 @@ export async function createOnchainArenaTable(opts: {
       minBuyIn,
       maxBuyIn,
       cfg.maxSeats,
+      rakePct,
+      rakeCap,
       opts.createdBy,
       opts.chainId,
     ],
@@ -764,6 +820,12 @@ export async function getActiveOnchainTableForProfile(
   profileId: string,
   chainId: number,
   format: ArenaFormat = "hu",
+  /**
+   * When set, only resume a seat in this city. Find Match for Porto must never
+   * hand back a Berlin/Dubai table (or any other city) that still has an open
+   * custody session — that was seating players into old stacks/blinds.
+   */
+  cityId?: string,
 ) {
   const cfg = arenaFormatConfig(format);
   // Return a live custody match this player still owes a join (or is seated at).
@@ -773,10 +835,12 @@ export async function getActiveOnchainTableForProfile(
     table_name: string;
     session_status: string;
     already_seated: boolean;
+    league_id: string;
   }>(
     `select os.table_id,
             t.name as table_name,
             os.status as session_status,
+            t.league_id,
             exists (
               select 1 from table_sessions ts
               where ts.table_id = os.table_id
@@ -791,6 +855,7 @@ export async function getActiveOnchainTableForProfile(
        and t.is_active = true
        and t.max_seats = $3
        and t.variant_id = $4
+       and ($6::text is null or t.league_id = $6)
        and not exists (
          select 1 from table_sessions done
          where done.table_id = os.table_id
@@ -809,15 +874,17 @@ export async function getActiveOnchainTableForProfile(
        )
      order by os.created_at desc
      limit 1`,
-    [profileId, chainId, cfg.maxSeats, cfg.variantId, STRANDED_MINUTES],
+    [profileId, chainId, cfg.maxSeats, cfg.variantId, STRANDED_MINUTES, cityId ?? null],
   );
   return res.rows[0] ?? null;
 }
 
 /**
  * Leave/abandon when custody exists but the player never got a live seat.
- * Clears sticky matchmaking + exposure reservations. Vault refund still goes
- * through settlement / emergency-exit for on-chain locks.
+ *
+ * Keeps `onchain_session_players` (needed for vault refund) and marks the
+ * session `settling` so the settlement worker can release the on-chain lock.
+ * Sticky matchmaking clears because getActive only returns pending/opened/playing.
  */
 export async function abandonUnseatedOnchainPlayer(opts: {
   profileId: string;
@@ -828,7 +895,7 @@ export async function abandonUnseatedOnchainPlayer(opts: {
     await client.query("begin");
     const sess = await client.query(
       `select session_id, status from onchain_sessions
-       where table_id = $1 and status in ('pending', 'opened', 'playing')
+       where table_id = $1 and status in ('pending', 'opened', 'playing', 'blocked')
        order by created_at desc limit 1`,
       [opts.tableId],
     );
@@ -839,9 +906,8 @@ export async function abandonUnseatedOnchainPlayer(opts: {
     }
 
     const player = await client.query(
-      `delete from onchain_session_players
-       where session_id = $1 and profile_id = $2
-       returning profile_id`,
+      `select 1 from onchain_session_players
+       where session_id = $1 and profile_id = $2`,
       [sessionId, opts.profileId],
     );
     if (!player.rows[0]) {
@@ -849,12 +915,9 @@ export async function abandonUnseatedOnchainPlayer(opts: {
       return { abandoned: false as const };
     }
 
-    await client.query(
-      `update arena_exposure_reservations
-       set status = 'released', updated_at = now()
-       where session_id = $1 and profile_id = $2 and status in ('reserved', 'confirmed')`,
-      [sessionId, opts.profileId],
-    );
+    // Do NOT release confirmed exposures here — settleSession must free the
+    // vault lock and decrement ArenaAccount.activeGames. Premature DB release
+    // hides the debt while the concurrent-games slot stays burned on-chain.
     await client.query(
       `update seat_tickets
        set status = 'failed'
@@ -867,18 +930,18 @@ export async function abandonUnseatedOnchainPlayer(opts: {
        where table_id = $1 and owner_id = $2 and status = 'active'`,
       [opts.tableId, opts.profileId],
     );
-
-    const remaining = await client.query(
-      `select count(*)::text as n from onchain_session_players where session_id = $1`,
+    await client.query(
+      `update table_seats set status = 'empty', agent_id = null, owner_id = null, stack = 0, updated_at = now()
+       where table_id = $1 and owner_id = $2`,
+      [opts.tableId, opts.profileId],
+    );
+    await client.query(`update tables set is_active = false where id = $1`, [opts.tableId]);
+    await client.query(
+      `update onchain_sessions
+       set status = 'settling'
+       where session_id = $1 and status in ('pending', 'opened', 'playing', 'blocked')`,
       [sessionId],
     );
-    if (Number((remaining.rows[0] as { n?: string } | undefined)?.n ?? 0) === 0) {
-      await client.query(
-        `update onchain_sessions set status = 'blocked' where session_id = $1 and status in ('pending','opened','playing')`,
-        [sessionId],
-      );
-      await client.query(`update tables set is_active = false where id = $1`, [opts.tableId]);
-    }
 
     await client.query("commit");
     return { abandoned: true as const, sessionId };
@@ -967,6 +1030,20 @@ export async function markOnchainSessionReadyForSettlement(sessionId: string) {
   );
 }
 
+/**
+ * Force a sealed session into settlement after elimination (e.g. HU bust).
+ * Unlike {@link markOnchainSessionReadyForSettlement}, this runs even while the
+ * winner still has an active table_session — new joins must not refill the seat.
+ */
+export async function closeOnchainSessionForSettlement(sessionId: string) {
+  await query(
+    `update onchain_sessions
+     set status = 'settling', updated_at = now()
+     where session_id = $1 and status in ('pending', 'opened', 'playing')`,
+    [sessionId],
+  );
+}
+
 export type OrphanOnchainTable = {
   sessionId: string;
   tableId: string;
@@ -1042,15 +1119,41 @@ export async function reapOrphanOnchainTables(opts: {
 }): Promise<OrphanOnchainTable[]> {
   const orphans = await findOrphanOnchainTables(opts);
   for (const orphan of orphans) {
-    const players = await query<{ profile_id: string }>(
-      `select profile_id::text from onchain_session_players where session_id = $1`,
+    // Free the player from the table so matchmaking stops returning them here,
+    // but never touch onchain_session_players: those rows are the record of who
+    // is owed a refund, and the vault still holds their buy-in. Deleting them
+    // (as abandonUnseatedOnchainPlayer does) makes the session unsettleable and
+    // strands the funds plus a maxConcurrentGames slot forever.
+    await query(
+      `update table_sessions
+       set status = 'completed', ended_at = coalesce(ended_at, now())
+       where table_id = $1 and status = 'active'`,
+      [orphan.tableId],
+    );
+    await query(
+      `update table_seats set status = 'empty', agent_id = null, owner_id = null, stack = 0, updated_at = now()
+       where table_id = $1`,
+      [orphan.tableId],
+    );
+    await query(`update tables set is_active = false where id = $1`, [orphan.tableId]);
+    await query(
+      `update seat_tickets set status = 'failed'
+       where session_id = $1 and status in ('queued', 'matched')`,
       [orphan.sessionId],
     );
-    for (const p of players.rows) {
-      await abandonUnseatedOnchainPlayer({ profileId: p.profile_id, tableId: orphan.tableId });
+
+    if (orphan.players > 0) {
+      // Hand it to the settlement worker, which refunds the untouched buy-ins
+      // and releases the on-chain exposure.
+      await query(
+        `update onchain_sessions set status = 'settling'
+         where session_id = $1 and status in ('pending', 'opened', 'playing', 'blocked')`,
+        [orphan.sessionId],
+      );
+    } else {
+      // Nothing was ever locked on-chain for this session — safe to retire.
+      await blockFailedOnchainSession(orphan.sessionId);
     }
-    // No players to abandon (or abandon left the row): block it directly.
-    await blockFailedOnchainSession(orphan.sessionId);
   }
   return orphans;
 }

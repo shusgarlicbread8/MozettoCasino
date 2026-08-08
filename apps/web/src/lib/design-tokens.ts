@@ -26,24 +26,44 @@ export const color = {
   live: "#FF5A5A",
 } as const;
 
-/** League ladder — presentation only; buy-in gates remain protocol/API. */
+/**
+ * City ladder — presentation only; buy-in gates remain protocol/API.
+ *
+ * Keyed by both the persisted id (`tables.league_id`, e.g. `bronze`) and the
+ * city name, because components are handed whichever one their caller has.
+ * Users only ever see the city name; the metal words are storage detail.
+ */
 export const leagueColors = {
+  casual: "#9AA88A",
+  porto: "#9AA88A",
   bronze: "#B87333",
+  berlin: "#B87333",
   silver: "#B8C0C8",
+  london: "#B8C0C8",
   gold: "#C9A227",
+  singapore: "#C9A227",
   platinum: "#8FE3D2",
+  dubai: "#8FE3D2",
   diamond: "#8FB8FF",
+  monaco: "#8FB8FF",
   sovereign: "#D4A574",
 } as const;
 
 export type LeagueId = keyof typeof leagueColors;
 
 export const leagueLabels: Record<LeagueId, string> = {
-  bronze: "Bronze",
-  silver: "Silver",
-  gold: "Gold",
-  platinum: "Platinum",
-  diamond: "Diamond",
+  casual: "Porto",
+  porto: "Porto",
+  bronze: "Berlin",
+  berlin: "Berlin",
+  silver: "London",
+  london: "London",
+  gold: "Singapore",
+  singapore: "Singapore",
+  platinum: "Dubai",
+  dubai: "Dubai",
+  diamond: "Monaco",
+  monaco: "Monaco",
   sovereign: "Sovereign",
 };
 

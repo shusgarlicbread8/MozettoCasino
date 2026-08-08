@@ -1,4 +1,16 @@
 import { randomUUID } from "node:crypto";
+import {
+  atomsToUsdc,
+  buyInBand,
+  CHIP_UNIT_USDC,
+  CITIES,
+  isRatedCity,
+  requireCity,
+  requireCityId,
+  usdcToAtoms,
+  validateBuyIn,
+  type CityRef,
+} from "@mozetto/game-rules";
 import { query } from "./client.js";
 import type { ArenaMode } from "./arena-mode.js";
 import { getAvailableBalance, getUserArenaMode } from "./ledger.js";
@@ -57,43 +69,87 @@ export function getLinkedAccountLookup(): LinkedAccountLookup {
 }
 
 /**
- * Ranked Arena leagues. Each league has one fixed buy-in — there is no
- * range for the player to type. Blinds are engraved as a fixed fraction of
- * that buy-in (big blind = 10%, small blind = 5%) so stakes always feel
- * meaningful, even in Bronze, instead of drifting toward sub-dollar bets.
+ * Plan 11 provisional rake by city (hypothesis). Rated cities update Arena
+ * Rating and enforce a hard HU pair-cap; Porto (casual) uses the same custody
+ * and find-match flow but never moves ratings, with soft-avoid pair-capping.
+ *
+ * Stakes are a property of the CITY (see `stakesForCity`), never derived from
+ * a player's buy-in or bankroll.
  */
-export const ARENA_LEAGUES = [
-  {
-    id: "bronze",
-    name: "Bronze",
-    color: "#B87333",
-    buyIn: 100,
-    open: true,
-  },
-  {
-    id: "silver",
-    name: "Silver",
-    color: "#B8C0C8",
-    buyIn: 500,
-    open: true,
-  },
-  {
-    id: "gold",
-    name: "Gold",
-    color: "#C9A227",
-    buyIn: 1500,
-    open: true,
-  },
-  {
-    id: "platinum",
-    name: "Platinum",
-    color: "#8FE3D2",
-    buyIn: 5000,
-    open: true,
-  },
-] as const;
+export function arenaRakeForLeague(
+  cityId: string,
+  bigBlind: number,
+): { rakePct: number; rakeCap: number } {
+  const schedule: Record<string, { pct: number; capBb: number }> = {
+    casual: { pct: 0.025, capBb: 1.5 },
+    bronze: { pct: 0.03, capBb: 2 },
+    silver: { pct: 0.0275, capBb: 2 },
+    gold: { pct: 0.025, capBb: 1.5 },
+    platinum: { pct: 0.0225, capBb: 1.25 },
+    diamond: { pct: 0.02, capBb: 1 },
+  };
+  const row = schedule[cityId] ?? schedule.casual!;
+  const bb = Number.isFinite(Number(bigBlind)) ? Number(bigBlind) : 0;
+  // Floor the cap to the CHIP grid, not to whole dollars. Flooring to dollars
+  // silently produced a zero cap — and therefore zero rake — at any city whose
+  // big blind times its cap multiplier landed under $1 (e.g. $0.50 × 1.5).
+  const raw = bb * row.capBb;
+  const capped = Math.floor(raw / CHIP_UNIT_USDC) * CHIP_UNIT_USDC;
+  return {
+    rakePct: row.pct,
+    rakeCap: Math.max(CHIP_UNIT_USDC, Number(capped.toFixed(2))),
+  };
+}
 
-export type ArenaLeagueId = (typeof ARENA_LEAGUES)[number]["id"];
+/**
+ * Compatibility view over CITIES.
+ *
+ * `league_id` remains the persisted column and the seat-ticket field, so the
+ * ids are stable; the concept is now a city. `buyIn` reports the city MAXIMUM
+ * (100BB) because callers that predate variable buy-ins expect a single
+ * number — new code should use `stakesForCity` / `buyInBand` instead.
+ */
+export const arenaRakeForCity = arenaRakeForLeague;
+
+export const ARENA_LEAGUES = CITIES.map((c) => ({
+  id: c.id,
+  cityId: c.id,
+  name: c.name,
+  color: c.color,
+  buyIn: atomsToUsdc(buyInBand(c).maxAtoms),
+  open: true,
+  rated: c.rated,
+}));
+
+export type ArenaLeagueId = string;
+
+/**
+ * Every `leagueId` positional argument below is also a valid `cityId` — the
+ * two names denote the same value (see @mozetto/game-rules/cities). Only
+ * options-object APIs need a real adapter, which they get via `CityRef`.
+ */
+
+/** True when the city updates Arena Rating (hard HU pair-cap). */
+export function isRankedLeague(cityId: string): boolean {
+  return isRatedCity(cityId);
+}
+
+/** Seat tickets / custody: ranked cities mint rated tickets; Casual does not. */
+export function leagueIsRated(cityId: string): boolean {
+  return isRankedLeague(cityId);
+}
+
+/**
+ * HU pair-frequency policy:
+ * - ranked (Berlin → Monaco) → hard block at daily cap (fairness)
+ * - Casual (Porto) → soft-avoid (prefer other opponents, still join if alone)
+ */
+export function leaguePairCapMode(cityId: string): "hard" | "soft" {
+  return isRankedLeague(cityId) ? "hard" : "soft";
+}
+
+export const cityPairCapMode = leaguePairCapMode;
+export const isRankedCity = isRankedLeague;
 
 /** Texas Hold'em — heads-up only. */
 export const VARIANT_TEXAS_HU = "nlhe_hu";
@@ -125,14 +181,59 @@ export function arenaFormatConfig(format: ArenaFormat) {
 
 const IDLE_MINUTES = 10;
 
-/** Big blind is engraved as 10% of buy-in, small blind as 5% — never a range. */
-const BIG_BLIND_PCT = 0.1;
-const SMALL_BLIND_PCT = 0.05;
+/**
+ * Stakes come from the CITY, not from the player's wallet.
+ *
+ * The table's blind level determines how much money may enter the game; a
+ * bankroll never raises that ceiling. A player with $1,000,000 sitting in the
+ * $0.50/$1 city may still bring only $100 (100BB) to the felt. Stacks can grow
+ * deeper than 100BB, but only by being won at the table.
+ *
+ * `stakesForCity` is therefore the canonical direction of derivation:
+ *   city → blinds → buy-in band (40–100BB)
+ * and never buy-in → blinds.
+ */
+export function stakesForCity(cityId: string) {
+  const city = requireCity(cityId);
+  const band = buyInBand(city);
+  return {
+    smallBlind: atomsToUsdc(city.smallBlindAtoms),
+    bigBlind: atomsToUsdc(city.bigBlindAtoms),
+    minBuyIn: atomsToUsdc(band.minAtoms),
+    maxBuyIn: atomsToUsdc(band.maxAtoms),
+  };
+}
 
-export function stakesForBuyIn(buyIn: number) {
-  const bb = Math.max(0.01, Math.round(buyIn * BIG_BLIND_PCT * 100) / 100);
-  const sb = Math.max(0.01, Math.round(buyIn * SMALL_BLIND_PCT * 100) / 100);
-  return { smallBlind: sb, bigBlind: bb, minBuyIn: buyIn, maxBuyIn: buyIn };
+/** Effective stack depth in big blinds — the regime a strategy must match. */
+export function stackDepthBb(stack: number, bigBlind: number): number {
+  return bigBlind > 0 ? Math.round((stack / bigBlind) * 10) / 10 : 0;
+}
+
+/**
+ * Resolve the buy-in a player is actually seated with.
+ *
+ * Defaults to the city maximum (100BB) when the caller does not specify one,
+ * which preserves the previous "everyone starts full" behaviour for callers
+ * that have not yet been taught to pass a player-chosen amount.
+ */
+export function resolveBuyIn(cityId: string, requestedUsdc?: number | null): number {
+  const city = requireCity(cityId);
+  const band = buyInBand(city);
+  if (requestedUsdc == null || !Number.isFinite(requestedUsdc)) {
+    return atomsToUsdc(band.maxAtoms);
+  }
+  const check = validateBuyIn({ city, requestedAtoms: usdcToAtoms(requestedUsdc) });
+  if (!check.ok) throw new BuyInOutOfRangeError(check.message ?? "buy-in out of range", cityId);
+  return requestedUsdc;
+}
+
+export class BuyInOutOfRangeError extends Error {
+  cityId: string;
+  constructor(message: string, cityId: string) {
+    super(message);
+    this.name = "BuyInOutOfRangeError";
+    this.cityId = cityId;
+  }
 }
 
 export class InsufficientFundsError extends Error {
@@ -199,11 +300,17 @@ async function seatedOwners(tableId: string): Promise<string[]> {
   return res.rows.map((r) => r.owner_id);
 }
 
-/** True if this pair already has MAX_PAIR_MATCHES_PER_DAY rated/session overlaps today. */
+/**
+ * True if this pair already has MAX_PAIR_MATCHES_PER_DAY ranked overlaps today.
+ * Counts only weight>0 Glicko updates and sessions on rated leagues so Casual
+ * rematches do not burn the ranked fairness cap.
+ */
 export async function pairCappedToday(ownerA: string, ownerB: string): Promise<boolean> {
+  const rankedIds = ARENA_LEAGUES.filter((l) => l.rated).map((l) => l.id);
   const rated = await query(
     `select count(*)::int as n from rated_matches
      where created_at > now() - interval '24 hours'
+       and weight > 0
        and ((owner_a=$1 and owner_b=$2) or (owner_a=$2 and owner_b=$1))`,
     [ownerA, ownerB],
   );
@@ -212,11 +319,13 @@ export async function pairCappedToday(ownerA: string, ownerB: string): Promise<b
   const sessions = await query(
     `select count(*)::int as n from table_sessions sa
      join table_sessions sb on sb.table_id = sa.table_id and sb.owner_id = $2
+     join tables t on t.id = sa.table_id
      where sa.owner_id = $1
+       and t.league_id = any($3::text[])
        and sa.started_at > now() - interval '24 hours'
        and sa.started_at < coalesce(sb.ended_at, now())
        and sb.started_at < coalesce(sa.ended_at, now())`,
-    [ownerA, ownerB],
+    [ownerA, ownerB, rankedIds],
   );
   return Number(sessions.rows[0]?.n ?? 0) >= MAX_PAIR_MATCHES_PER_DAY;
 }
@@ -230,19 +339,22 @@ async function createArenaTable(opts: {
   format: ArenaFormat;
 }) {
   const cfg = arenaFormatConfig(opts.format);
-  const { smallBlind, bigBlind, minBuyIn, maxBuyIn } = stakesForBuyIn(opts.buyIn);
+  // Stakes and the buy-in band belong to the city; `opts.buyIn` is what this
+  // particular player brings, and never changes the table's blind level.
+  const { smallBlind, bigBlind, minBuyIn, maxBuyIn } = stakesForCity(opts.leagueId);
   const short = randomUUID().replace(/-/g, "").slice(0, 6).toUpperCase();
   const league = ARENA_LEAGUES.find((l) => l.id === opts.leagueId);
   const id = `arena_${randomUUID().slice(0, 8)}`;
   const modeTag = opts.arenaMode === "onchain" ? "On-chain" : "Demo";
   const name = `${modeTag} ${league?.name ?? "Arena"} #${short}`;
   const chainId = opts.arenaMode === "onchain" ? (opts.chainId ?? 84532) : null;
+  const { rakePct, rakeCap } = arenaRakeForLeague(opts.leagueId, bigBlind);
 
   await query(
     `insert into tables
        (id, name, variant_id, league_id, small_blind, big_blind, min_buy_in, max_buy_in,
         max_seats, rake_pct, rake_cap, privacy, pace, is_active, created_by, arena_mode, chain_id)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,0.025,null,'public','normal',true,$10,$11::arena_mode,$12)`,
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'public','normal',true,$12,$13::arena_mode,$14)`,
     [
       id,
       name,
@@ -253,6 +365,8 @@ async function createArenaTable(opts: {
       minBuyIn,
       maxBuyIn,
       cfg.maxSeats,
+      rakePct,
+      rakeCap,
       opts.createdBy,
       opts.arenaMode,
       chainId,
@@ -325,6 +439,8 @@ export type FindArenaMatchResult = {
   alreadySeated: boolean;
   buyIn: number;
   leagueId: string;
+  /** Same value as `leagueId`; both are returned so either spelling works. */
+  cityId: string;
   arenaMode: ArenaMode;
   chainId: number | null;
   format: ArenaFormat;
@@ -338,56 +454,70 @@ export type FindArenaMatchResult = {
 
 /**
  * Ranked Arena matchmaking for Texas Hold'em (HU) or Poker Classic (6-max).
- * Buy-in is the league's fixed amount. HU allocation is random within the
- * pool; Classic fills the fullest eligible table before creating another.
+ *
+ * The city fixes the stakes; `buyIn` is what this player chooses to bring,
+ * anywhere in the 40–100BB band. Players who bought in for different amounts
+ * still share a pool — pooling is by STAKES, not by buy-in, which is what makes
+ * a 40BB seat and a 100BB seat able to sit at the same table as in real poker.
+ *
+ * The city may be named `cityId` or `leagueId`; they are the same value.
  */
-export async function findArenaMatch(opts: {
-  userId: string;
-  leagueId: string;
-  arenaMode?: ArenaMode;
-  chainId?: number | null;
-  format?: ArenaFormat;
-}): Promise<FindArenaMatchResult> {
+export async function findArenaMatch(
+  opts: CityRef & {
+    userId: string;
+    arenaMode?: ArenaMode;
+    chainId?: number | null;
+    format?: ArenaFormat;
+    /** Player-selected buy-in in USDC. Defaults to the city maximum (100BB). */
+    buyIn?: number | null;
+  },
+): Promise<FindArenaMatchResult> {
   await closeIdleArenaTables();
 
+  const cityId = requireCityId(opts);
   const format = opts.format ?? "hu";
   const cfg = arenaFormatConfig(format);
   const arenaMode = opts.arenaMode ?? (await getUserArenaMode(opts.userId));
   const chainId = arenaMode === "onchain" ? (opts.chainId ?? 84532) : null;
 
-  const league = ARENA_LEAGUES.find((l) => l.id === opts.leagueId);
-  if (!league || !league.open) throw new Error("League not available");
-  const buyIn = league.buyIn;
+  const city = requireCity(cityId);
+  const buyIn = resolveBuyIn(cityId, opts.buyIn);
+  const band = buyInBand(city);
+  const poolBuyIn = atomsToUsdc(band.minAtoms);
 
   const available = await getAvailableBalance(opts.userId, arenaMode);
   if (available < buyIn) {
-    throw new InsufficientFundsError(buyIn, available, league.id);
+    throw new InsufficientFundsError(buyIn, available, city.id);
   }
 
   const poolKey = rankedPoolKey({
-    leagueId: opts.leagueId,
+    leagueId: cityId,
     format,
     arenaMode,
     chainId,
-    buyIn,
+    // Pool identity is the city's stakes, not the individual buy-in.
+    buyIn: poolBuyIn,
   });
 
-  // Already in a live session for this format? Send them back.
+  // Already in a live session for this city+format? Send them back.
+  // Never reuse a seat from another city — that resurrected old stacks/blinds
+  // when Find Match was asked for Porto after leaving a deeper table open.
   const seated = await query(
-    `select s.table_id, t.name from table_sessions s
+    `select s.table_id, t.name, t.league_id from table_sessions s
      join tables t on t.id = s.table_id
      where s.owner_id = $1 and s.status = 'active' and t.is_active = true
        and t.arena_mode = $2::arena_mode
        and t.max_seats = $3
        and t.variant_id = $4
+       and t.league_id = $6
        and ($5::int is null or t.chain_id is null or t.chain_id = $5)
      order by s.started_at desc limit 1`,
-    [opts.userId, arenaMode, cfg.maxSeats, cfg.variantId, chainId],
+    [opts.userId, arenaMode, cfg.maxSeats, cfg.variantId, chainId, cityId],
   );
   if (seated.rows[0]) {
     const allocationId = await recordAllocationDecision({
       profileId: opts.userId,
-      leagueId: opts.leagueId,
+      leagueId: cityId,
       format,
       arenaMode,
       chainId,
@@ -405,7 +535,8 @@ export async function findArenaMatch(opts: {
       created: false,
       alreadySeated: true,
       buyIn,
-      leagueId: opts.leagueId,
+      leagueId: cityId,
+      cityId,
       arenaMode,
       chainId,
       format,
@@ -413,6 +544,27 @@ export async function findArenaMatch(opts: {
       allocationId,
       poolKey,
     };
+  }
+
+  // Seated elsewhere (another city): refuse so the lobby cannot silently move
+  // them while chips are still at the old table.
+  const elsewhere = await query(
+    `select s.table_id, t.name, t.league_id from table_sessions s
+     join tables t on t.id = s.table_id
+     where s.owner_id = $1 and s.status = 'active' and t.is_active = true
+       and t.arena_mode = $2::arena_mode
+       and t.league_id <> $3
+     order by s.started_at desc limit 1`,
+    [opts.userId, arenaMode, cityId],
+  );
+  if (elsewhere.rows[0]) {
+    const err = new Error(
+      `Leave your ${elsewhere.rows[0].league_id} table before finding a match in ${cityId}.`,
+    );
+    (err as Error & { code?: string; tableId?: string }).code = "already_seated_elsewhere";
+    (err as Error & { code?: string; tableId?: string }).tableId = elsewhere.rows[0]
+      .table_id as string;
+    throw err;
   }
 
   // Same-pool candidates only (SQL enforces league/buy-in/format/mode/chain).
@@ -432,7 +584,9 @@ export async function findArenaMatch(opts: {
          select 1 from table_seats s
          where s.table_id = t.id and s.status = 'empty'
        )`,
-    [opts.leagueId, buyIn, cfg.maxSeats, cfg.variantId, arenaMode, chainId],
+    // Match on the city's band floor, not this player's chosen buy-in — every
+    // table in a city shares the same band, and seats within it may differ.
+    [cityId, poolBuyIn, cfg.maxSeats, cfg.variantId, arenaMode, chainId],
   );
 
   const candidates: MatchCandidate[] = [];
@@ -477,12 +631,13 @@ export async function findArenaMatch(opts: {
     candidates,
     pairCapped,
     linkedToUser,
+    pairCapMode: leaguePairCapMode(cityId),
   });
 
   if (decision.kind === "join_existing") {
     const allocationId = await recordAllocationDecision({
       profileId: opts.userId,
-      leagueId: opts.leagueId,
+      leagueId: cityId,
       format,
       arenaMode,
       chainId,
@@ -508,7 +663,8 @@ export async function findArenaMatch(opts: {
       created: false,
       alreadySeated: false,
       buyIn,
-      leagueId: opts.leagueId,
+      leagueId: cityId,
+      cityId,
       arenaMode,
       chainId,
       format,
@@ -520,7 +676,7 @@ export async function findArenaMatch(opts: {
   }
 
   const created = await createArenaTable({
-    leagueId: opts.leagueId,
+    leagueId: cityId,
     buyIn,
     createdBy: opts.userId,
     arenaMode,
@@ -529,7 +685,7 @@ export async function findArenaMatch(opts: {
   });
   const allocationId = await recordAllocationDecision({
     profileId: opts.userId,
-    leagueId: opts.leagueId,
+    leagueId: cityId,
     format,
     arenaMode,
     chainId,
@@ -549,7 +705,8 @@ export async function findArenaMatch(opts: {
     created: true,
     alreadySeated: false,
     buyIn,
-    leagueId: opts.leagueId,
+    leagueId: cityId,
+    cityId,
     arenaMode,
     chainId,
     format,
@@ -560,12 +717,14 @@ export async function findArenaMatch(opts: {
   };
 }
 
-export async function findClassicArenaMatch(opts: {
-  userId: string;
-  leagueId: string;
-  arenaMode?: ArenaMode;
-  chainId?: number | null;
-}) {
+export async function findClassicArenaMatch(
+  opts: CityRef & {
+    userId: string;
+    arenaMode?: ArenaMode;
+    chainId?: number | null;
+    buyIn?: number | null;
+  },
+) {
   return findArenaMatch({ ...opts, format: "classic" });
 }
 

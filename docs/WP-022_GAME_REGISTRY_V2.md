@@ -55,9 +55,9 @@ templateHash = keccak256(abi.encode(
 ))
 ```
 
-Canonical ids: `keccak256("NLHE_HU_STANDARD_V2")`, `keccak256("NLHE_SIXMAX_STANDARD_V2")`.
+Canonical ids: `keccak256("NLHE_HU_STANDARD_V2")`, `keccak256("NLHE_SIXMAX_STANDARD_V2")`. Season 1 also registers one template per city — see `docs/WS-B_CITY_TEMPLATES_AND_BUY_IN_BAND.md` for the id naming rule.
 
-Structural checks on register: `protocolVersion == 3`, `bigBlind == 2 * smallBlind`, seat/buy-in bounds, non-zero engine/rules/deadline.
+Structural checks on register: `protocolVersion == 3`, `bigBlind == 2 * smallBlind`, seat bounds, the Season 1 buy-in band (`minBuyIn == 40 * bigBlind`, `maxBuyIn == 100 * bigBlind`), non-zero engine/rules/deadline.
 
 ---
 

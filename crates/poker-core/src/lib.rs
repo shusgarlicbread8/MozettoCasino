@@ -18,7 +18,7 @@ pub use deck::{commit_seed, shuffle_deck};
 pub use engine::{
     apply_action, build_pots, clear_seat, continue_runout, create_table, fold_seat, fold_win,
     get_legal_actions, is_all_in_runout, seat_player, set_sit_out, settle_showdown, start_hand,
-    timeout_fallback_action, uncalled_bet_amount,
+    timeout_fallback_action, uncalled_bet_amount, uncalled_from_totals,
 };
 pub use events::EngineEvent;
 pub use fixture::{
@@ -36,4 +36,4 @@ pub use types::{
 
 /// Engine build id — WP-109 release hardening; GameTemplate.engineHash candidate.
 /// Protocol V3 event vectors still use the draft placeholder until a protocol freeze packet.
-pub const RUST_ENGINE_BUILD_ID: &str = "mozetto-nlhe-rust-wp109";
+pub const RUST_ENGINE_BUILD_ID: &str = "mozetto-nlhe-engine-rc1";

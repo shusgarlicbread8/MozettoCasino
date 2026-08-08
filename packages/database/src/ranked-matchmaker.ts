@@ -220,10 +220,12 @@ export function randomSeatOrder(maxSeats: number, random: () => number = Math.ra
 }
 
 /**
- * Ranked allocation:
+ * Ranked / casual allocation:
  * - HU remains random among eligible opponents (anti-targeting).
  * - Classic fills the most populated eligible table first, randomizing ties.
- * - A new table is created only when no eligible seat exists.
+ * - Ranked HU pair-cap is hard: at cap → create/wait (fairness).
+ * - Casual HU pair-cap is soft-avoid: prefer uncapped, else still join.
+ * - A new table is created only when no joinable seat exists under that policy.
  */
 export function allocateRankedMatch(opts: {
   userId: string;
@@ -232,9 +234,12 @@ export function allocateRankedMatch(opts: {
   candidates: MatchCandidate[];
   pairCapped: (opponentId: string) => boolean;
   linkedToUser?: (opponentId: string) => boolean;
+  /** Ranked leagues: hard. Casual / unranked: soft. Default hard. */
+  pairCapMode?: "hard" | "soft";
   random?: () => number;
 }): AllocationDecision {
   const random = opts.random ?? Math.random;
+  const pairCapMode = opts.pairCapMode ?? "hard";
   const { eligible, rejects } = filterEligibleCandidates({
     userId: opts.userId,
     format: opts.format,
@@ -243,15 +248,37 @@ export function allocateRankedMatch(opts: {
     linkedToUser: opts.linkedToUser,
   });
   const seatOrder = randomSeatOrder(opts.maxSeats, random);
-  const fullest =
-    opts.format === "classic" && eligible.length > 0
-      ? Math.max(...eligible.map((candidate) => candidate.seated))
-      : null;
-  const pool =
-    fullest == null ? eligible : eligible.filter((candidate) => candidate.seated === fullest);
-  const picked = pickRandomEligible(pool, random);
-  if (picked) {
-    return { kind: "join_existing", candidate: picked, rejects, seatOrder };
+  const pickFrom = (poolIn: MatchCandidate[]): MatchCandidate | undefined => {
+    const fullest =
+      opts.format === "classic" && poolIn.length > 0
+        ? Math.max(...poolIn.map((candidate) => candidate.seated))
+        : null;
+    const pool =
+      fullest == null ? poolIn : poolIn.filter((candidate) => candidate.seated === fullest);
+    return pickRandomEligible(pool, random);
+  };
+  const preferred = pickFrom(eligible);
+  if (preferred) {
+    return { kind: "join_existing", candidate: preferred, rejects, seatOrder };
+  }
+  if (pairCapMode === "soft") {
+    // Soft-avoid fallback: ignore pair_capped only (self + linked still hard-block).
+    const soft = filterEligibleCandidates({
+      userId: opts.userId,
+      format: opts.format,
+      candidates: opts.candidates,
+      pairCapped: () => false,
+      linkedToUser: opts.linkedToUser,
+    });
+    const fallback = pickFrom(soft.eligible);
+    if (fallback) {
+      return {
+        kind: "join_existing",
+        candidate: fallback,
+        rejects,
+        seatOrder,
+      };
+    }
   }
   return { kind: "create_table", rejects, seatOrder };
 }

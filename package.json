@@ -29,6 +29,7 @@
     "test:engine-diff": "node tools/engine-diff/run.mjs",
     "test:engine-diff:random": "node tools/engine-diff/run.mjs --random",
     "test:engine-diff:full": "node tools/engine-diff/run.mjs --random --pokerkit",
+    "test:engine-diff:nightly": "node tools/engine-diff/run.mjs --nightly --pokerkit",
     "build:poker-wasm": "bash ./scripts/build-poker-wasm.sh",
     "sync:poker-wasm-web": "bash ./scripts/sync-poker-wasm-web.sh",
     "test:poker-wasm": "node tools/poker-wasm/verify-fixtures.mjs",
@@ -41,7 +42,6 @@
     "watchtower": "pnpm --filter @mozetto/watchtower verify",
     "test:unit": "pnpm --filter @mozetto/game-rules test && pnpm --filter @mozetto/unit-economics test && pnpm --filter @mozetto/ratings test && pnpm --filter @mozetto/presentation-adapter test && pnpm --filter @mozetto/database test && pnpm --filter @mozetto/agent-runtime test && pnpm --filter @mozetto/session-seal test && pnpm --filter @mozetto/dealer-deck test && pnpm --filter @mozetto/event-store test && pnpm --filter @mozetto/root-builder test && pnpm --filter @mozetto/attestors test && pnpm --filter @mozetto/proof-batch-publisher test && pnpm --filter @mozetto/reconciliation test && pnpm --filter @mozetto/randomness-verifier test && pnpm --filter @mozetto/watchtower test && pnpm --filter @mozetto/replay-verifier test && pnpm --filter @mozetto/dealer test && pnpm --filter @mozetto/settlement-worker test && pnpm --filter @mozetto/game-server test && pnpm --filter @mozetto/api test && pnpm --filter @mozetto/dealer-enclave test && pnpm test:protocol-vectors",
     "typecheck:ci": "pnpm --filter @mozetto/shared-types typecheck && pnpm --filter @mozetto/game-rules typecheck && pnpm --filter @mozetto/unit-economics typecheck && pnpm --filter @mozetto/ratings typecheck && pnpm --filter @mozetto/presentation-adapter typecheck && pnpm --filter @mozetto/database typecheck && pnpm --filter @mozetto/chain-manifest typecheck && pnpm --filter @mozetto/session-seal typecheck && pnpm --filter @mozetto/event-store typecheck && pnpm --filter @mozetto/root-builder typecheck && pnpm --filter @mozetto/attestors typecheck && pnpm --filter @mozetto/proof-batch-publisher typecheck && pnpm --filter @mozetto/reconciliation typecheck && pnpm --filter @mozetto/randomness-verifier typecheck && pnpm --filter @mozetto/watchtower typecheck && pnpm --filter @mozetto/replay-verifier typecheck && pnpm --filter @mozetto/dealer typecheck && pnpm --filter @mozetto/settlement-worker typecheck && pnpm --filter @mozetto/api typecheck && pnpm --filter @mozetto/game-server typecheck && pnpm --filter @mozetto/agent-runtime typecheck && pnpm --filter @mozetto/dealer-enclave typecheck",
-
     "build": "pnpm -r run build",
     "db:migrate": "pnpm --filter @mozetto/database migrate",
     "db:reap-orphans": "pnpm --filter @mozetto/database reap:orphans",
@@ -74,7 +74,10 @@
     "mainnet:check": "bash ./scripts/mainnet/deploy.sh check",
     "mainnet:dry-run": "bash ./scripts/mainnet/deploy.sh dry-run",
     "mainnet:deploy": "bash ./scripts/mainnet/deploy.sh broadcast",
-    "audit:register-check": "node ./scripts/audits/check-register.mjs"
+    "audit:register-check": "node ./scripts/audits/check-register.mjs",
+    "test:preplay": "node scripts/preplay-gate.mjs",
+    "test:preplay:full": "node scripts/preplay-gate.mjs --full",
+    "test:unequal-buyin": "node --import tsx scripts/unequal-buyin-e2e.mjs"
   },
   "devDependencies": {
     "@mozetto/blockchain": "workspace:*",

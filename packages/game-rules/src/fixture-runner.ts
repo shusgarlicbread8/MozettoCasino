@@ -16,6 +16,7 @@ import {
   type TableConfig,
 } from "./holdem.js";
 import { parseCard } from "./cards.js";
+import { asChips, chipsToNumber } from "./money.js";
 import type { Hex } from "viem";
 import { hashEngineState, hashLegalActions, snapshotStacks } from "./state-hash.js";
 
@@ -116,7 +117,13 @@ export type EngineFixture = {
   coverage: string[];
   format: "hu" | "sixmax" | "multi";
   seatCount: number;
-  config: TableConfig;
+  config: {
+    tableId: string;
+    smallBlind: number | bigint;
+    bigBlind: number | bigint;
+    rakePct: number;
+    rakeCap: number | bigint | null;
+  };
   seats: FixtureSeatIn[];
   /** Optional override of createTable initial button (default seatCount-1). */
   initialButton?: number;
@@ -149,17 +156,18 @@ function applyForceBetting(state: HoldemState, step: FixtureForceStateStep): Hol
   const seats: SeatState[] = state.seats.map((s) => {
     const o = seatMap.get(s.seatIndex);
     if (!o) {
-      return { ...s, sitOut: true, folded: true, stack: 0, bet: 0, totalBet: 0, hole: undefined };
+      return { ...s, sitOut: true, folded: true, stack: 0n, bet: 0n, totalBet: 0n, hole: undefined };
     }
+    const stack = asChips(o.stack);
     return {
       ...s,
       playerId: s.playerId || `p${s.seatIndex}`,
       agentId: s.agentId || `a${s.seatIndex}`,
-      stack: o.stack,
-      bet: o.bet,
-      totalBet: o.totalBet,
+      stack,
+      bet: asChips(o.bet),
+      totalBet: asChips(o.totalBet),
       folded: Boolean(o.folded),
-      allIn: o.allIn ?? o.stack === 0,
+      allIn: o.allIn ?? stack === 0n,
       sitOut: false,
       hole: cards(o.hole),
     };
@@ -168,9 +176,9 @@ function applyForceBetting(state: HoldemState, step: FixtureForceStateStep): Hol
     ...state,
     street: step.street,
     board: cards(step.board),
-    pot: step.pot,
-    currentBet: step.currentBet,
-    minRaise: step.minRaise,
+    pot: asChips(step.pot),
+    currentBet: asChips(step.currentBet),
+    minRaise: asChips(step.minRaise),
     button: step.button,
     actingIndex: step.actingIndex,
     lastRaiseComplete: step.lastRaiseComplete ?? true,
@@ -187,26 +195,32 @@ function applyInjectShowdown(state: HoldemState, step: FixtureShowdownInjectStep
   const seats: SeatState[] = state.seats.map((s) => {
     const o = seatMap.get(s.seatIndex);
     if (!o) {
-      return { ...s, sitOut: true, folded: true, stack: 0, bet: 0, totalBet: 0, hole: undefined };
+      return { ...s, sitOut: true, folded: true, stack: 0n, bet: 0n, totalBet: 0n, hole: undefined };
     }
+    const stack = asChips(o.stack);
     return {
       ...s,
       playerId: s.playerId || `p${s.seatIndex}`,
       agentId: s.agentId || `a${s.seatIndex}`,
-      stack: o.stack,
-      bet: 0,
-      totalBet: o.totalBet,
+      stack,
+      bet: 0n,
+      totalBet: asChips(o.totalBet),
       folded: Boolean(o.folded),
-      allIn: o.stack === 0,
+      allIn: stack === 0n,
       sitOut: false,
       hole: cards(o.hole),
     };
   });
-  const pot = seats.reduce((n, s) => n + s.totalBet, 0);
+  const pot = seats.reduce((n, s) => n + s.totalBet, 0n);
   const config = {
     ...state.config,
     rakePct: step.rakePct ?? state.config.rakePct,
-    rakeCap: step.rakeCap !== undefined ? step.rakeCap : state.config.rakeCap,
+    rakeCap:
+      step.rakeCap !== undefined
+        ? step.rakeCap == null
+          ? null
+          : asChips(step.rakeCap)
+        : state.config.rakeCap,
   };
   return {
     ...state,
@@ -299,13 +313,13 @@ function assertExpect(
   if (exp.actingIndex !== undefined && state.actingIndex !== exp.actingIndex) {
     throw new Error(`actingIndex: expected ${exp.actingIndex}, got ${state.actingIndex}`);
   }
-  if (exp.pot != null && state.pot !== exp.pot) {
+  if (exp.pot != null && chipsToNumber(state.pot) !== exp.pot) {
     throw new Error(`pot: expected ${exp.pot}, got ${state.pot}`);
   }
-  if (exp.currentBet != null && state.currentBet !== exp.currentBet) {
+  if (exp.currentBet != null && chipsToNumber(state.currentBet) !== exp.currentBet) {
     throw new Error(`currentBet: expected ${exp.currentBet}, got ${state.currentBet}`);
   }
-  if (exp.minRaise != null && state.minRaise !== exp.minRaise) {
+  if (exp.minRaise != null && chipsToNumber(state.minRaise) !== exp.minRaise) {
     throw new Error(`minRaise: expected ${exp.minRaise}, got ${state.minRaise}`);
   }
   if (exp.lastRaiseComplete != null && state.lastRaiseComplete !== exp.lastRaiseComplete) {
@@ -322,17 +336,22 @@ function assertExpect(
   if (exp.winners != null) {
     const sortW = (xs: { seatIndex: number; amount: number }[]) =>
       [...xs].sort((a, b) => a.seatIndex - b.seatIndex);
-    const got = sortW(state.winners.map((w) => ({ seatIndex: w.seatIndex, amount: w.amount })));
+    const got = sortW(
+      state.winners.map((w) => ({ seatIndex: w.seatIndex, amount: chipsToNumber(w.amount) })),
+    );
     const want = sortW(exp.winners);
     if (JSON.stringify(got) !== JSON.stringify(want)) {
       throw new Error(`winners: expected ${JSON.stringify(want)}, got ${JSON.stringify(got)}`);
     }
   }
-  if (exp.rake != null && state.rake !== exp.rake) {
+  if (exp.rake != null && chipsToNumber(state.rake) !== exp.rake) {
     throw new Error(`rake: expected ${exp.rake}, got ${state.rake}`);
   }
   if (exp.potLayers != null) {
-    const layers = buildPots(state.seats).map((p) => ({ amount: p.amount, eligible: p.eligible }));
+    const layers = buildPots(state.seats).map((p) => ({
+      amount: chipsToNumber(p.amount),
+      eligible: p.eligible,
+    }));
     if (JSON.stringify(layers) !== JSON.stringify(exp.potLayers)) {
       throw new Error(
         `potLayers: expected ${JSON.stringify(exp.potLayers)}, got ${JSON.stringify(layers)}`,
@@ -342,8 +361,8 @@ function assertExpect(
   if (exp.legalActions != null) {
     const legal = getLegalActions(state).map((a) => ({
       action: a.action,
-      ...(a.minAmount != null ? { minAmount: a.minAmount } : {}),
-      ...(a.maxAmount != null ? { maxAmount: a.maxAmount } : {}),
+      ...(a.minAmount != null ? { minAmount: chipsToNumber(a.minAmount) } : {}),
+      ...(a.maxAmount != null ? { maxAmount: chipsToNumber(a.maxAmount) } : {}),
     }));
     const sorted = (xs: typeof legal) =>
       [...xs].sort((a, b) => a.action.localeCompare(b.action));

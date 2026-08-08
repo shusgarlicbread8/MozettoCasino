@@ -55,10 +55,21 @@ export function useAiCognition(opts: {
     if (!parsed) return;
     if (mySeatIndex != null && parsed.seat != null && parsed.seat !== mySeatIndex) return;
     if (parsed.energyRemaining != null) lastEnergyRef.current = parsed.energyRemaining;
-    setStatus({
-      ...parsed,
-      energyRemaining: parsed.energyRemaining ?? lastEnergyRef.current,
-      seat: parsed.seat ?? mySeatIndex,
+    setStatus((prev) => {
+      const incoming = parsed.publicThinkingLog ?? [];
+      const mergedLog =
+        incoming.length > 0
+          ? [...(prev.publicThinkingLog ?? []).filter((l) => !incoming.includes(l)), ...incoming].slice(
+              -12,
+            )
+          : prev.publicThinkingLog ?? null;
+      return {
+        ...parsed,
+        energyRemaining: parsed.energyRemaining ?? lastEnergyRef.current,
+        seat: parsed.seat ?? mySeatIndex,
+        publicThinkingLog: mergedLog,
+        publicNarrative: parsed.publicNarrative ?? prev.publicNarrative,
+      };
     });
   }, [lastWsMessage, mySeatIndex]);
 

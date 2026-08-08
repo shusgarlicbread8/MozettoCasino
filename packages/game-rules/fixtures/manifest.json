@@ -2,10 +2,10 @@
   "workPacket": "WP-109",
   "generatedAt": "frozen",
   "stateDomain": "MOZETTO_TS_ENGINE_STATE_V1",
-  "tsEngineBuildId": "mozetto-nlhe-ts-wp109",
-  "tsEngineBuildHash": "0x0d5304b59412a9eeea2634f49b317282f6036d6412e74da13bb38387ca3984ba",
+  "tsEngineBuildId": "mozetto-nlhe-ts-rc1",
+  "tsEngineBuildHash": "0x3b3ae6033e31916638e51d6a75da7131aa533499ac4fd473de45893f433881e2",
   "protocolV3EngineHashPlaceholder": "0xfbaa172ca206187431a693cc6e030f2a05b550eaf7a54f3e62a3f86072b4d232",
-  "note": "WP-109: uncalled-bet return + sit-out/timeout. GameTemplate.engineHash → mozetto-nlhe-rust-wp109; Protocol V3 event vectors keep draft placeholder (no /specs mutation).",
+  "note": "NLHE_ENGINE_RC1: bigint chips + net-on-award rake. GameTemplate.engineHash → mozetto-nlhe-engine-rc1; Protocol V3 event vectors keep draft placeholder (no /specs mutation).",
   "fixtureCount": 20,
   "fixtures": [
     {

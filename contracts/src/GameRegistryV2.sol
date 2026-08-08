@@ -15,6 +15,12 @@ contract GameRegistryV2 is Ownable {
     bytes32 public constant NLHE_HU_STANDARD_V2 = keccak256("NLHE_HU_STANDARD_V2");
     bytes32 public constant NLHE_SIXMAX_STANDARD_V2 = keccak256("NLHE_SIXMAX_STANDARD_V2");
 
+    /// @notice Season 1 buy-in band, in big blinds. The table's blind level — not a
+    ///         player's bankroll — decides how much money may enter the game, so every
+    ///         Season 1 template must expose exactly the mainstream 40–100BB band.
+    uint256 public constant MIN_BUY_IN_BB = 40;
+    uint256 public constant MAX_BUY_IN_BB = 100;
+
     enum TemplateStatus {
         None,
         Registered, // sealed, not yet active for new sessions
@@ -241,6 +247,15 @@ contract GameRegistryV2 is Ownable {
         return _templates[templateId].status;
     }
 
+    /// @notice Sealed buy-in band for a template, for callers that must gate a seat ticket.
+    /// @dev Returns `(0, 0)` for an unregistered template instead of reverting, so a custody
+    ///      contract can distinguish "no band on record" from "amount out of band".
+    function buyInBand(bytes32 templateId) external view returns (uint256 minBuyIn, uint256 maxBuyIn) {
+        TemplateRecord storage rec = _templates[templateId];
+        if (rec.status == TemplateStatus.None) return (0, 0);
+        return (rec.body.minBuyIn, rec.body.maxBuyIn);
+    }
+
     /// @notice True only when status is Active — use before opening NEW sessions.
     function isActiveForNewSessions(bytes32 templateId) public view returns (bool) {
         return _templates[templateId].status == TemplateStatus.Active;
@@ -295,6 +310,8 @@ contract GameRegistryV2 is Ownable {
         if (t.minSeatsToStart > t.maxSeats) revert InvalidTemplate();
         if (t.smallBlind == 0 || t.bigBlind != 2 * t.smallBlind) revert InvalidTemplate();
         if (t.minBuyIn == 0 || t.maxBuyIn < t.minBuyIn) revert InvalidTemplate();
+        if (t.minBuyIn != MIN_BUY_IN_BB * t.bigBlind) revert InvalidTemplate();
+        if (t.maxBuyIn != MAX_BUY_IN_BB * t.bigBlind) revert InvalidTemplate();
         if (t.engineHash == bytes32(0) || t.rulesHash == bytes32(0)) revert InvalidTemplate();
         if (t.actionDeadlineMs == 0) revert InvalidTemplate();
     }

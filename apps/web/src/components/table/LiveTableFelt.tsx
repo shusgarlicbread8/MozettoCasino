@@ -7,7 +7,7 @@ import { deriveSeatCognition } from "@/lib/table/cognition";
 import { money } from "@/lib/session";
 import type { LiveTableState, SeatActionFx, SeatMeta, TableMeta, WinFx } from "@/lib/table/types";
 
-const SEAT_POS = [
+const SEAT_POS_6 = [
   { n: 1, x: "50%", y: "99%", glyph: "◆" },
   { n: 2, x: "11%", y: "76%", glyph: "●" },
   { n: 3, x: "11%", y: "24%", glyph: "◈" },
@@ -15,6 +15,18 @@ const SEAT_POS = [
   { n: 5, x: "89%", y: "24%", glyph: "✦" },
   { n: 6, x: "89%", y: "76%", glyph: "⬟" },
 ] as const;
+
+/** Heads-up: opposite seats only — never invent four OPEN Gold-looking chairs. */
+const SEAT_POS_HU = [
+  { n: 1, x: "50%", y: "99%", glyph: "◆" },
+  { n: 2, x: "50%", y: "1%", glyph: "◇" },
+] as const;
+
+function seatLayouts(maxSeats: number) {
+  const n = Math.max(2, Math.min(6, Math.floor(Number(maxSeats) || 6)));
+  if (n <= 2) return SEAT_POS_HU;
+  return SEAT_POS_6.slice(0, n);
+}
 
 type Props = {
   meta: TableMeta | null;
@@ -52,22 +64,25 @@ export function LiveTableFelt({
   const liveBoard: CardView[] = Array.from({ length: 5 }, (_, bi) => liveBoardFaces[bi] ?? CARD_SLOT);
   const livePot = live ? money(live.pot) : "$0";
   const boardText = boardLabel(liveBoardFaces);
-  const liveStreet = connecting
-    ? "CONNECTING"
-    : [
-        !live || live.street === "waiting" ? "WAITING" : live.street.toUpperCase().replace("_", "-"),
-        boardText,
-        remaining != null ? `${remaining}s` : null,
-      ]
-        .filter(Boolean)
-        .join(" · ");
+  const liveStreet =
+    connecting && !meta
+      ? "CONNECTING"
+      : [
+          !live || live.street === "waiting" ? "WAITING" : live.street.toUpperCase().replace("_", "-"),
+          boardText,
+          remaining != null ? `${remaining}s` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ");
 
   const timerPct = remaining != null ? `${Math.max(0, (remaining / 15) * 100)}%` : "0%";
-  const bb = Number(meta?.big_blind ?? 50);
-  const maxBuy = Number(meta?.max_buy_in ?? 10000);
+  const bb = Number(meta?.big_blind ?? 0) || 10;
+  const maxBuy = Number(meta?.max_buy_in ?? 0) || Number(meta?.min_buy_in ?? 0) || 100;
+  const minBuy = Number(meta?.min_buy_in ?? 0);
+  const maxSeats = Number(meta?.max_seats ?? live?.seats?.length ?? 0) || 2;
 
   const seats = useMemo(() => {
-    return SEAT_POS.map((layout, idx) => {
+    return seatLayouts(maxSeats).map((layout, idx) => {
       const ls = live?.seats?.find((x) => x.seatIndex === idx) || live?.seats?.[idx];
       const sm = seatMeta.find((x) => Number(x.seat_index) === idx);
       const rawId =
@@ -214,6 +229,7 @@ export function LiveTableFelt({
       };
     });
   }, [
+    maxSeats,
     live,
     seatMeta,
     myProfileId,
@@ -391,7 +407,9 @@ export function LiveTableFelt({
                 SEAT {s.n} OPEN
               </div>
               <div className="mz-mono" style={{ fontSize: 10, color: color.textFaint, marginTop: 5 }}>
-                ${Number(meta?.min_buy_in ?? 1000).toLocaleString()}–${Number(meta?.max_buy_in ?? 10000).toLocaleString()}
+                {minBuy > 0 || maxBuy > 0
+                  ? `$${minBuy.toLocaleString()}–$${maxBuy.toLocaleString()}`
+                  : "BUY-IN TBA"}
               </div>
             </div>
           ) : (

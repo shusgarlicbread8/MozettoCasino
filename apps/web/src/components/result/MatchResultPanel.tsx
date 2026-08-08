@@ -23,6 +23,9 @@ type TableSession = {
   started_at?: string;
   ended_at?: string | null;
   profile_key?: string | null;
+  /** Fees collected from this player's session profit (0 for net losers). */
+  platform_fees?: number | string;
+  assessed_rake?: number | string;
 };
 
 type ReplayHand = {
@@ -31,6 +34,7 @@ type ReplayHand = {
   table_name?: string;
   hand_number?: number | string;
   pot?: number | string;
+  rake?: number | string;
   street?: string;
   settled_at?: string | null;
   decisions?: number;
@@ -44,6 +48,7 @@ type RatedMatch = {
   hands?: number;
   stake?: number | string | null;
   opponent_handle?: string | null;
+  opponent_display_name?: string | null;
   opponent_agent?: string | null;
   pool_id?: string;
   rated_at?: string;
@@ -116,12 +121,15 @@ export function MatchResultPanel({ sessionId, handId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [sessionRow, setSessionRow] = useState<TableSession | null>(null);
   const [publicKind, setPublicKind] = useState<string | null>(null);
+  /** On-chain session id for Verify (table ids like arena_… also resolve via API). */
+  const [verifySessionId, setVerifySessionId] = useState<string | null>(null);
   const [tableName, setTableName] = useState<string | null>(null);
   const [profile, setProfile] = useState<ProfileSlice | null>(null);
   const [hands, setHands] = useState<ReplayHand[]>([]);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [timelineHint, setTimelineHint] = useState("Select a settled hand to load its public timeline.");
   const [activeHandId, setActiveHandId] = useState<string | null>(handId ?? null);
+  const [seatOpponent, setSeatOpponent] = useState<string | null>(null);
 
   useEffect(() => setMounted(true), []);
 
@@ -131,6 +139,7 @@ export function MatchResultPanel({ sessionId, handId }: Props) {
     setError(null);
 
     const handle = me?.profile?.handle || me?.session?.handle;
+    const myId = me?.profile?.id;
 
     Promise.all([
       api<{ kind?: string; session?: Record<string, unknown>; table?: Record<string, unknown> }>(
@@ -141,31 +150,63 @@ export function MatchResultPanel({ sessionId, handId }: Props) {
       handle
         ? api<ProfileSlice>(`/v1/profiles/${encodeURIComponent(handle)}`).catch(() => null)
         : Promise.resolve(null),
+      api<{
+        seats?: Array<{
+          owner_id?: string | null;
+          owner_display_name?: string | null;
+          owner_handle?: string | null;
+          agent_display_name?: string | null;
+          agent_handle?: string | null;
+          status?: string;
+        }>;
+      }>(`/v1/tables/${encodeURIComponent(sessionId)}`).catch(() => ({ seats: [] })),
     ])
-      .then(([pub, sessionsRes, replaysRes, profileRes]) => {
+      .then(([pub, sessionsRes, replaysRes, profileRes, tableRes]) => {
         if (cancelled) return;
         if (pub?.kind === "onchain_session") {
           setPublicKind("onchain");
+          const ocId = String(pub.session?.session_id ?? "");
+          setVerifySessionId(ocId || sessionId);
           setTableName(String(pub.session?.session_id ?? sessionId));
         } else if (pub?.kind === "table") {
           setPublicKind("table");
+          const ocFromTable = pub.table?.onchain_session_id
+            ? String(pub.table.onchain_session_id)
+            : null;
+          setVerifySessionId(ocFromTable || sessionId);
           setTableName(String(pub.table?.name ?? sessionId));
         } else {
           setPublicKind(null);
+          setVerifySessionId(sessionId);
         }
 
+        // Only bind the session that matches this result URL — never fall back to
+        // an unrelated prior session (that invented fake hands / opponents).
         const mine =
-          (sessionsRes.sessions || []).find((s) => s.table_id === sessionId) ??
-          (sessionsRes.sessions || [])[0] ??
-          null;
+          (sessionsRes.sessions || []).find((s) => s.table_id === sessionId) ?? null;
         setSessionRow(mine);
         if (mine?.table_name) setTableName(mine.table_name);
 
         const tableHands = (replaysRes.hands || []).filter((h) => h.table_id === sessionId);
-        setHands(tableHands.length ? tableHands : []);
+        setHands(tableHands);
         const first = handId ?? tableHands[0]?.id ?? null;
         setActiveHandId(first);
         setProfile(profileRes);
+
+        const oppSeat = (tableRes.seats || []).find(
+          (s) =>
+            s.status === "occupied" &&
+            s.owner_id &&
+            myId &&
+            s.owner_id !== myId,
+        );
+        const oppLabel =
+          oppSeat?.owner_display_name ||
+          oppSeat?.agent_display_name ||
+          oppSeat?.owner_handle ||
+          oppSeat?.agent_handle ||
+          null;
+        setSeatOpponent(oppLabel ? String(oppLabel) : null);
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load result");
@@ -177,7 +218,7 @@ export function MatchResultPanel({ sessionId, handId }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, handId, me?.profile?.handle, me?.session?.handle]);
+  }, [sessionId, handId, me?.profile?.handle, me?.session?.handle, me?.profile?.id]);
 
   useEffect(() => {
     if (!activeHandId) {
@@ -223,7 +264,7 @@ export function MatchResultPanel({ sessionId, handId }: Props) {
 
   const match = useMemo(() => {
     const list = profile?.recentMatches ?? [];
-    return list.find((m) => m.table_id === sessionId) ?? list[0] ?? null;
+    return list.find((m) => m.table_id === sessionId) ?? null;
   }, [profile, sessionId]);
 
   const pnl = useMemo(() => {
@@ -241,26 +282,43 @@ export function MatchResultPanel({ sessionId, handId }: Props) {
     return null;
   }, [sessionRow, match]);
 
+  const platformFees = useMemo(() => {
+    // Per-player fees only (never table-wide rake). Net session losers pay $0.
+    if (sessionRow?.platform_fees != null && Number.isFinite(Number(sessionRow.platform_fees))) {
+      return Number(sessionRow.platform_fees);
+    }
+    if (sessionRow && pnl != null && pnl <= 0) return 0;
+    return null;
+  }, [sessionRow, pnl]);
+
   const ratingDelta = useMemo(() => {
     const hist = profile?.history ?? [];
     if (hist.length < 2) return null;
-    // Prefer delta when this table's match is the latest rated result.
     if (match && match.table_id === sessionId) {
       return hist[hist.length - 1].rating - hist[hist.length - 2].rating;
     }
-    // Session not yet in rated_matches — don't invent a delta.
-    if (match && match.table_id !== sessionId) return null;
     return null;
   }, [profile, match, sessionId]);
 
   const score = match?.my_score != null ? Number(match.my_score) : null;
-  const outcome = outcomeFromScore(score);
+  const outcome =
+    hands.length === 0 && !match
+      ? { label: "No hands played", tone: color.textMuted }
+      : outcomeFromScore(score);
   const aggression =
     profile?.aggression && profile.aggression.hands > 0 ? profile.aggression : null;
-  const opponent =
-    match?.opponent_agent || match?.opponent_handle
-      ? String(match.opponent_agent || match.opponent_handle)
-      : null;
+  const opponent = (() => {
+    if (match) {
+      const labeled = String(
+        match.opponent_display_name ||
+          match.opponent_agent ||
+          match.opponent_handle ||
+          "",
+      ).trim();
+      if (labeled) return labeled;
+    }
+    return seatOpponent;
+  })();
 
   const rematchHref = "/poker";
 
@@ -290,10 +348,16 @@ export function MatchResultPanel({ sessionId, handId }: Props) {
           {opponent ? (
             <>
               vs <span style={{ color: color.text }}>{opponent}</span>
-              {match?.hands != null ? ` · ${Number(match.hands)} hands` : null}
+              {hands.length > 0
+                ? ` · ${hands.length} hands`
+                : match?.hands != null
+                  ? ` · ${Number(match.hands)} hands`
+                  : null}
             </>
+          ) : hands.length === 0 ? (
+            "No settled hands for this table — leave with zero hands returns you to the lobby next time."
           ) : (
-            "Post-match summary from published session data. Empty fields stay empty until settlement and rating publish."
+            "Post-match summary from published session data for this table only."
           )}
         </p>
         <div style={{ marginTop: space[4], display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
@@ -309,7 +373,11 @@ export function MatchResultPanel({ sessionId, handId }: Props) {
           >
             {outcome.label}
           </span>
-          <SessionTrustBadge sessionId={sessionId} handId={activeHandId} variant="result" />
+          <SessionTrustBadge
+            sessionId={verifySessionId || sessionId}
+            handId={activeHandId}
+            variant="result"
+          />
           {publicKind ? (
             <span style={{ font: `500 11px ${font.mono}`, color: color.textFaint }}>
               {publicKind === "onchain" ? "ON-CHAIN SESSION" : "TABLE SESSION"}
@@ -340,8 +408,20 @@ export function MatchResultPanel({ sessionId, handId }: Props) {
             pnl == null
               ? "Unavailable until your seat session posts buy-in / stack"
               : sessionRow
-                ? `Stack ${money(Number(sessionRow.stack))} − buy-in ${money(Number(sessionRow.buy_in))}`
+                ? `Cash-out ${money(Number(sessionRow.stack))} − buy-in ${money(Number(sessionRow.buy_in))}`
                 : "From rated match stake"
+          }
+        />
+        <StatCard
+          label="Platform fees"
+          value={loading ? "…" : platformFees != null ? money(platformFees) : "—"}
+          valueColor={platformFees != null && platformFees > 0 ? color.warn : color.textMuted}
+          hint={
+            platformFees != null && platformFees > 0
+              ? "Poker rake from pots you won, collected from session profit at leave — losers are not charged"
+              : pnl != null && pnl <= 0
+                ? "No platform fees on a losing session — rake tabs waived"
+                : "No rake collected for this session (e.g. all preflop folds)"
           }
         />
         <StatCard
@@ -372,9 +452,13 @@ export function MatchResultPanel({ sessionId, handId }: Props) {
         />
         <StatCard
           label="Hands"
-          value={loading ? "…" : String(hands.length || match?.hands || 0)}
+          value={loading ? "…" : String(hands.length)}
           valueColor={color.text}
-          hint={hands.length ? "Settled hands with public replay" : "None settled yet"}
+          hint={
+            hands.length
+              ? "Settled hands with public replay for this table"
+              : "None settled for this table"
+          }
         />
       </section>
 
@@ -428,7 +512,7 @@ export function MatchResultPanel({ sessionId, handId }: Props) {
                   }}
                 >
                   Hand #{h.hand_number ?? "?"}
-                  {h.pot != null ? ` · ${money(Number(h.pot))}` : ""}
+                  {h.pot != null && Number(h.pot) > 0 ? ` · pot ${money(Number(h.pot))}` : ""}
                 </button>
               );
             })}

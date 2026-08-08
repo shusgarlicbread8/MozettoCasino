@@ -136,7 +136,7 @@ export const STRATEGY_PRESETS: Record<StrategyProfileKey, StrategyPreset> = {
     glyph: "✦",
     color: profileColors.fox,
     intent: "Adaptation and deception",
-    blurb: "Shifts patterns against opponents; mixes timing to stay hard to read.",
+    blurb: "Shifts lines from public betting patterns; mixes timing. Never shares private thoughts with other AIs.",
     presetId: PRESET_IDS.fox,
     profileConfigHash: MATCHMAKING_PROFILE_HASHES.fox,
     axes: {

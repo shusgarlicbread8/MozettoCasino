@@ -17,11 +17,15 @@ async function authHeaders(hasJsonBody: boolean): Promise<HeadersInit> {
   if (hasJsonBody) headers["content-type"] = "application/json";
   try {
     const supabase = createClient();
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
+    // Never let a hung Supabase client block every API call (table meta, /me, join).
+    const session = await Promise.race([
+      supabase.auth.getSession().then((r) => r.data.session),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
+    ]);
+    const token = session?.access_token;
     if (token) headers.Authorization = `Bearer ${token}`;
   } catch {
-    /* anonymous */
+    /* anonymous — cookie session still works via credentials: "include" */
   }
   return headers;
 }

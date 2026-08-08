@@ -51,8 +51,8 @@ export default async function VerifySessionPage({ params }: { params: Promise<{ 
             ) : null}
           </div>
 
-          <Section title="Component status">
-            <ComponentGrid components={data.components} />
+          <Section title="Trust checklist">
+            <ComponentGrid components={data.components} friendly />
           </Section>
 
           <Section title="Chain & contracts">

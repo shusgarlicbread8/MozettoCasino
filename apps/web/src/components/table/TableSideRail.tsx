@@ -128,96 +128,52 @@ export function TableSideRail({
         </div>
       </div>
 
-      <details
+      <div
         className="mz-rail-status"
         style={{
           flex: "none",
           borderBottom: `1px solid ${color.line}`,
           background: `linear-gradient(180deg,${color.accentDim},transparent)`,
+          padding: "12px 18px",
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
         }}
       >
-        <summary
-          className="mz-touch mz-rail-status-summary"
+        <div className="mz-mono" style={{ fontSize: 12.5, fontWeight: 500, flex: 1, minWidth: 0 }}>
+          {agentName}
+        </div>
+        <div
+          className="mz-mono"
           style={{
-            listStyle: "none",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            padding: "14px 18px",
-            WebkitTapHighlightColor: "transparent",
+            padding: "4px 9px",
+            borderRadius: 5,
+            background: color.inkPanel,
+            border: `1px solid ${color.lineStrong}`,
+            fontSize: 9,
+            fontWeight: 500,
+            letterSpacing: ".07em",
+            color: color.accent,
+          }}
+          data-cognition-phase={cognitionStatus?.phase ?? cognitionPhase}
+        >
+          {cognitionStatus ? cognitionStatus.phase.replace(/_/g, " ") : phaseChip}
+        </div>
+        <div
+          className="mz-mono"
+          style={{
+            padding: "2.5px 9px",
+            borderRadius: 5,
+            background: color.line,
+            fontSize: 9,
+            fontWeight: 500,
+            letterSpacing: ".07em",
+            color: modeColor,
           }}
         >
-          <div
-            style={{
-              width: 26,
-              height: 26,
-              borderRadius: 8,
-              background: color.inkPanel,
-              border: `1px solid ${color.accentBorder}`,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 12,
-              color: color.accent,
-              flex: "none",
-            }}
-          >
-            ◆
-          </div>
-          <div className="mz-mono" style={{ fontSize: 12.5, fontWeight: 500, flex: 1, minWidth: 0 }}>
-            {agentName}
-          </div>
-          <div
-            className="mz-mono"
-            style={{
-              padding: "4px 9px",
-              borderRadius: 5,
-              background: color.inkPanel,
-              border: `1px solid ${color.lineStrong}`,
-              fontSize: 9,
-              fontWeight: 500,
-              letterSpacing: ".07em",
-              color: color.accent,
-            }}
-            data-cognition-phase={cognitionStatus?.phase ?? cognitionPhase}
-            title="WP-126 cognition presentation — no chain-of-thought"
-          >
-            {cognitionStatus
-              ? cognitionStatus.phase.replace(/_/g, " ")
-              : phaseChip}
-          </div>
-          <div
-            className="mz-mono"
-            style={{
-              padding: "2.5px 9px",
-              borderRadius: 5,
-              background: color.line,
-              fontSize: 9,
-              fontWeight: 500,
-              letterSpacing: ".07em",
-              color: modeColor,
-            }}
-          >
-            {mode}
-          </div>
-        </summary>
-        <div className="mz-rail-status-body" style={{ padding: "0 18px 16px" }}>
-          {cognitionStatus ? (
-            <AiCognitionPanel status={cognitionStatus} seated={seated} agentLabel={agentName} compact />
-          ) : (
-            <>
-              <div className="mz-mono" style={{ fontSize: 11.5, lineHeight: 1.7, color: color.textMuted }}>
-                {cognitionNote ??
-                  "Public cognition states only — never private reasoning or opponent Energy."}
-              </div>
-              <div className="mz-mono" style={{ fontSize: 9, letterSpacing: ".1em", color: color.textFaint, marginTop: 8 }}>
-                PUBLIC STATES ONLY · NO CHAIN-OF-THOUGHT
-              </div>
-            </>
-          )}
+          {mode}
         </div>
-      </details>
+      </div>
 
       {analysis && analysisStats ? (
         <div style={{ flex: "none", padding: "14px 18px", borderBottom: `1px solid ${color.line}` }}>
@@ -266,7 +222,7 @@ export function TableSideRail({
               animation: "ar-slidein .3s ease-out both",
             }}
           >
-            <div className="mz-mono" style={{ fontSize: 9.5, color: color.textFaint, width: 22, flex: "none" }}>
+            <div className="mz-mono" style={{ fontSize: 9.5, color: color.textFaint, width: 28, flex: "none" }}>
               {l.n}
             </div>
             <div className="mz-mono" style={{ fontSize: 10.5, fontWeight: 500, color: l.color, flex: 1 }}>
@@ -277,6 +233,32 @@ export function TableSideRail({
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Cognition sits between the action log and the live-engine/trust footer. */}
+      <div
+        style={{
+          flex: "none",
+          borderTop: `1px solid ${color.line}`,
+          padding: "12px 14px",
+          background: "linear-gradient(180deg, rgba(61,220,138,0.04), transparent)",
+          maxHeight: "42%",
+          overflowY: "auto",
+        }}
+      >
+        {cognitionStatus ? (
+          <AiCognitionPanel status={cognitionStatus} seated={seated} agentLabel={agentName} compact />
+        ) : (
+          <>
+            <div className="mz-mono" style={{ fontSize: 10, letterSpacing: ".12em", color: color.accent, marginBottom: 8 }}>
+              AI COGNITION
+            </div>
+            <div className="mz-mono" style={{ fontSize: 11.5, lineHeight: 1.7, color: color.textMuted }}>
+              {cognitionNote ??
+                "Your agent analyses each spot on Groq. Public cognition states appear here — never private chain-of-thought."}
+            </div>
+          </>
+        )}
       </div>
 
       <div style={{ flex: "none", borderTop: `1px solid ${color.line}`, padding: "10px 12px 14px" }}>

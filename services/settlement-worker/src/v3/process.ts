@@ -17,6 +17,48 @@ import {
 } from "./real-roots.js";
 import { maybeRateOnchainSession } from "../rating.js";
 
+/** ArenaVaultV2 `sessions(bytes32)` — openedAt is 0 when the vault never opened this id. */
+const ARENA_VAULT_SESSION_ABI = [
+  {
+    type: "function",
+    name: "sessions",
+    stateMutability: "view",
+    inputs: [{ name: "sessionId", type: "bytes32" }],
+    outputs: [
+      { name: "sessionId", type: "bytes32" },
+      { name: "templateId", type: "bytes32" },
+      { name: "dealerRoot", type: "bytes32" },
+      { name: "engineHash", type: "bytes32" },
+      { name: "profileSetHash", type: "bytes32" },
+      { name: "openedAt", type: "uint64" },
+      { name: "settled", type: "bool" },
+      { name: "lastSequence", type: "uint64" },
+      { name: "lastBalanceRoot", type: "bytes32" },
+      { name: "emergencyExitAfter", type: "uint64" },
+    ],
+  },
+] as const;
+
+/** True when the configured vault has no record of this session id. */
+async function isUnknownOnChain(session: { session_id: string }): Promise<boolean> {
+  const vault = process.env.ARENA_VAULT_ADDRESS as Hex | undefined;
+  const pk = process.env.SETTLEMENT_PRIVATE_KEY as Hex | undefined;
+  if (!vault || !pk) return false;
+  try {
+    const { publicClient } = chainClients(pk);
+    const row = (await publicClient.readContract({
+      address: vault,
+      abi: ARENA_VAULT_SESSION_ABI,
+      functionName: "sessions",
+      args: [sessionIdToBytes32(session.session_id)],
+    })) as readonly unknown[];
+    return BigInt((row[5] as bigint | number | string) ?? 0) === 0n;
+  } catch {
+    // Never void on a transport error — only on a definite on-chain answer.
+    return false;
+  }
+}
+
 const ARENA_VAULT_FEE_ABI = [
   {
     type: "function",
@@ -120,9 +162,19 @@ export async function buildProposalV3FromDb(
     [session.session_id],
   ).catch(() => ({ rows: [] as { balance_root: string }[] }));
 
+  // Abandoned before play: no hand was ever dealt, so no chips moved and there
+  // is no hand root to have. Refunding at the buy-in is what releases the
+  // vault lock and the ArenaAccount's concurrent-game slot — an unsettled
+  // session strands the player's funds and eventually locks them out entirely.
+  const dealt = await query<{ n: string }>(
+    `select count(*)::text as n from hands where table_id = $1`,
+    [session.table_id],
+  ).catch(() => ({ rows: [{ n: "0" }] }));
+  const noPlay = Number(dealt.rows[0]?.n ?? 0) === 0;
+
   const players = stacks.map((row, i) => {
     const startLocked = BigInt(row.buy_in_raw);
-    const endBalance = BigInt(Math.floor(Number(row.stack) * 1e6));
+    const endBalance = noPlay ? startLocked : BigInt(Math.floor(Number(row.stack) * 1e6));
     return {
       user: row.wallet_address as Address,
       seat: row.seat != null ? Number(row.seat) : i,
@@ -139,6 +191,7 @@ export async function buildProposalV3FromDb(
       storedHandRoot: handRootRow.rows[0]?.hand_root,
       storedBalanceRoot: checkpointBal.rows[0]?.balance_root,
       finalSequence,
+      noPlay,
       balanceLeaves: balanceLeavesFromPlayers({
         sessionId: sessionIdToBytes32(session.session_id),
         finalSequence,
@@ -247,18 +300,81 @@ export async function processOnchainSettlementsV3(hub: Hex) {
              where ts.table_id = os.table_id and ts.status = 'completed'
            )
          )
+         -- Abandoned sessions still hold the on-chain lock. Until they settle,
+         -- the player's ArenaAccount keeps the buy-in at risk and burns one of
+         -- its maxConcurrentGames slots, so the account eventually cannot join
+         -- any match at all. 'blocked' is a DB verdict, not an on-chain one.
+         or (
+           status in ('blocked', 'pending', 'opened', 'settling')
+           and created_at < now() - interval '2 minutes'
+           and exists (
+             select 1 from onchain_session_players osp
+             where osp.session_id = os.session_id
+           )
+           and not exists (
+             select 1 from table_sessions active
+             where active.table_id = os.table_id and active.status = 'active'
+           )
+         )
        )
-     order by created_at asc
-     limit 5`,
+     -- Prefer sessions that are not pinned by a fresh in-flight proposal, and
+     -- prefer recent leaves so a player is not locked out of Find Match.
+     order by
+       case when exists (
+         select 1 from settlement_proposals sp
+         where sp.session_id = os.session_id
+           and sp.status in ('proposed','attesting','submitted')
+           and sp.created_at >= now() - interval '90 seconds'
+       ) then 1 else 0 end asc,
+       os.created_at desc
+     limit 8`,
   ).catch(() => ({ rows: [] as SessionRow[] }));
 
   for (const session of sessions.rows) {
-    const existing = await query(
-      `select id from settlement_proposals where session_id = $1 and status in ('proposed','attesting','submitted') limit 1`,
+    // A session the vault has never heard of cannot be settled and holds no
+    // on-chain funds — it is a DB row left behind by an earlier deployment
+    // (an Anvil redeploy, typically). Retire it, otherwise the oldest ghosts
+    // permanently occupy this batch and real settlements never get processed.
+    if (await isUnknownOnChain(session)) {
+      // status check constraint forbids arbitrary values like 'void'. Mark the
+      // row settled with a sentinel tx hash so it never re-enters this queue
+      // (settlement_tx_hash IS NULL is the selection gate).
+      await query(
+        `update onchain_sessions
+         set status = 'settled',
+             settlement_tx_hash = '0x00000000000000000000000000000000000000000000000000000000000000ff'
+         where session_id = $1 and settlement_tx_hash is null`,
+        [session.session_id],
+      ).catch((err) => console.warn("[settlement-worker:v3] ghost retire failed", session.session_id, err));
+      console.warn("[settlement-worker:v3] retired ghost session unknown to the vault", session.session_id);
+      continue;
+    }
+
+    // Stale in-flight proposals used to block the whole FIFO forever:
+    // leave → settling → "proposal already exists" → activeGames never released.
+    await query(
+      `update settlement_proposals
+       set status = 'rejected'
+       where session_id = $1
+         and status in ('proposed', 'attesting', 'submitted')
+         and created_at < now() - interval '90 seconds'`,
+      [session.session_id],
+    ).catch(() => null);
+
+    const existing = await query<{ id: string }>(
+      `select id from settlement_proposals
+       where session_id = $1 and status in ('proposed','attesting','submitted')
+       order by created_at desc limit 1`,
       [session.session_id],
     );
     if (existing.rows[0]) {
-      console.log("[settlement-worker:v3] proposal already exists", session.session_id);
+      // Fresh proposal from a parallel tick — let the next loop pick it up after
+      // the 90s stale window, but do not starve younger sessions forever.
+      console.log(
+        "[settlement-worker:v3] fresh proposal in flight — skip for now",
+        session.session_id,
+        existing.rows[0].id,
+      );
       continue;
     }
 

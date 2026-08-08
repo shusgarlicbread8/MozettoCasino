@@ -1,5 +1,6 @@
 /** Chain + contract configuration — delegates to @mozetto/chain-manifest. */
 
+import { keccak256, toBytes } from "viem";
 import {
   chainManifest,
   getManifest,
@@ -483,18 +484,49 @@ export function gamePermissionDomain(chainId: number, arenaAccount: `0x${string}
   } as const;
 }
 
+/**
+ * One bit per city. The keys are the persisted `tables.league_id` values,
+ * which are the same strings as `cityId` (Berlin = bronze, Monaco = diamond).
+ * Every city in the ladder must have a bit: `ArenaAccount.lockBuyIn` reverts
+ * with `LeagueNotAllowed()` on bit 0, so a missing entry silently blocks that
+ * city on-chain.
+ */
 export const LEAGUE_BITS = {
   bronze: 1,
   silver: 2,
   gold: 4,
   platinum: 8,
+  /** Casual / unranked — same custody path, no Arena Rating. */
+  casual: 16,
+  diamond: 32,
 } as const;
 
-export function leagueBit(leagueId: string): number {
-  return (LEAGUE_BITS as Record<string, number>)[leagueId] ?? 0;
+/** Accepts a `cityId` or the equivalent legacy `leagueId` — same value. */
+export function leagueBit(cityId: string): number {
+  return (LEAGUE_BITS as Record<string, number>)[cityId] ?? 0;
 }
 
-export const ALL_LEAGUE_MASK = 15; // bronze|silver|gold|platinum
+export const cityBit = leagueBit;
+
+/** Derived, so adding a city to LEAGUE_BITS cannot leave the mask stale. */
+export const ALL_LEAGUE_MASK = Object.values(LEAGUE_BITS).reduce((mask, bit) => mask | bit, 0);
+
+/**
+ * The GameTemplateV2 a city plays under. Season 1 ids are frozen preimages:
+ *
+ *   NLHE_HU_<CITY>_V1        heads-up
+ *   NLHE_SIXMAX_<CITY>_V1    six-max
+ *
+ * `<CITY>` is the uppercased city id — the same value stored as
+ * `tables.league_id` and carried on the seat ticket, never the display name.
+ *
+ * A city IS its blind level, so each seals its own template and therefore its
+ * own 40-100BB buy-in band, which `ArenaVaultV2` re-reads on every lock. Must
+ * stay in step with `contracts/script/CityTemplates.sol`.
+ */
+export function cityTemplateId(cityId: string, seats: "hu" | "sixmax" = "hu"): `0x${string}` {
+  return keccak256(toBytes(`NLHE_${seats.toUpperCase()}_${cityId.toUpperCase()}_V1`));
+}
 
 export const arenaAccountFactoryAbi = [
   {

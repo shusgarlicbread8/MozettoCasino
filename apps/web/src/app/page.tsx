@@ -264,10 +264,12 @@ export default function LandingPage() {
               className="mz-display"
               style={{ margin: 0, fontSize: 40, fontWeight: 650, letterSpacing: "-.04em" }}
             >
-              Six leagues
+              Six cities
             </h2>
             <p style={{ margin: "14px auto 0", fontSize: 15, color: color.textMuted, maxWidth: 620 }}>
-              Fixed buy-ins per league. Matchmaking finds your seat — you never pick the opponent.
+              The city fixes the blinds; you pick a buy-in between 40 and 100 big blinds. Porto is
+              Casual, Berlin through Monaco are Ranked. Matchmaking finds your seat — you never pick
+              the opponent.
             </p>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)", gap: 12 }}>
@@ -301,7 +303,7 @@ export default function LandingPage() {
                     letterSpacing: ".08em",
                   }}
                 >
-                  MINIMUM BUY-IN
+                  BLINDS · SMALL / BIG
                 </div>
                 <div
                   style={{

@@ -15,6 +15,7 @@ import {
   privateView,
   publicView,
   seatPlayer,
+  setSitOut,
   startHand,
   type EngineEvent,
   type EquityRow,
@@ -23,6 +24,14 @@ import {
   hashEvent,
   hashEngineState,
   GENESIS_EVENT_HASH,
+  buildDecisionFacts,
+  nextBlindSeats,
+  chipsToNumber,
+  chipsToUsd,
+  usdToChips,
+  type DecisionFacts,
+  type OpponentStats,
+  type SeatActionLog,
 } from "@mozetto/game-rules";
 import { fetchHandSeed, fallbackHandSeed } from "@mozetto/dealer/client";
 import type { Card } from "@mozetto/shared-types";
@@ -31,11 +40,14 @@ import {
   persistWithOutbox,
   lockBuyIn,
   releaseSession,
+  recordRatHoleExit,
   markOnchainSessionPlaying,
   markOnchainSessionReadyForSettlement,
+  closeOnchainSessionForSettlement,
   abandonUnseatedOnchainPlayer,
   rebalanceEscrowToStacks,
   settleRatedMatch,
+  isRankedLeague,
   getOnchainSessionForTable,
   handPhase,
   enqueueSeatChange,
@@ -87,6 +99,11 @@ import {
   resolveSpectatorDelayMs,
   type SpectatorOutboundMessage,
 } from "./spectator-delay.js";
+import {
+  THINK_CADENCE_MIN_MS,
+  buildPublicThinkingLines,
+  computeThinkCadenceMs,
+} from "./ai-think-cadence.js";
 
 type Hex = `0x${string}`;
 
@@ -99,7 +116,25 @@ function hexToBytes(hex: string): Buffer {
 export const TURN_SECONDS = 15;
 const TURN_MS = TURN_SECONDS * 1000;
 
-/** Temporary: humans play; bots/agents do not auto-act. */
+/**
+ * Absolute minimum visible AI think time (ms). Difficulty scheduling in
+ * `computeThinkCadenceMs` targets ~5s easy → ~13s hard within the 15s clock.
+ * PUBLIC_CADENCE_FLOOR_MS still overrides the minimum when set (>0).
+ */
+const PUBLIC_CADENCE_FLOOR_MS = (() => {
+  const raw = process.env.PUBLIC_CADENCE_FLOOR_MS;
+  if (raw === "0") return 0;
+  if (raw != null && raw !== "" && Number.isFinite(Number(raw))) {
+    return Math.max(0, Math.min(TURN_MS, Math.trunc(Number(raw))));
+  }
+  return THINK_CADENCE_MIN_MS;
+})();
+
+/**
+ * HUMAN_PLAY=1 allows a bound human to override via WS.
+ * Agent seats still use agent-runtime / Groq — Mozetto is AI-played poker.
+ * Set HUMAN_PLAY=0 only for fully autonomous golden runs with no human clock.
+ */
 const HUMAN_PLAY = process.env.HUMAN_PLAY !== "0";
 const DEALER_URL = process.env.DEALER_URL ?? "http://localhost:4003";
 /** WP-129 — ranked spectator WS delay (Plan 07 spectator-delayed). */
@@ -124,6 +159,11 @@ export class TableRuntime {
   arenaMode: "demo" | "onchain" = "demo";
   /** game_variants.id — nlhe_hu (Texas Hold'em) or nlhe_6max (Poker Classic). */
   variantId = "nlhe_6max";
+  /**
+   * Sealed HU match ended by elimination — no new joins / hands until settle.
+   * Prevents "bust → leave → instant JOINED with chips" on the same session.
+   */
+  matchClosed = false;
   state: HoldemState;
   sequence = 0;
   /** WP-080: durable chain verified on load; false ⇒ refuse advancement. */
@@ -144,6 +184,8 @@ export class TableRuntime {
   running = false;
   loopTimer: NodeJS.Timeout | null = null;
   agentProfiles = new Map<number, string>();
+  /** Last known Energy per seat — avoid null flashes between cognition frames. */
+  lastAiEnergy = new Map<number, number>();
   sessions = new Map<string, string>(); // userId -> sessionId
   stackBaseline = new Map<string, number>(); // userId -> stack at last ledger sync
   sessionStartHand = new Map<string, number>(); // sessionId -> handNumber when the session began (for rated match hand counts)
@@ -156,6 +198,40 @@ export class TableRuntime {
   runoutRevealPublished = false;
   /** Cached private hero odds: `${seat}:${boardLen}:${handId}` → pct */
   privateEquityCache = new Map<string, { hand: string; equity: number }>();
+  /**
+   * Ordered public action log for the current hand. Feeds the deterministic
+   * range engine — without it an opponent's range is only a positional prior.
+   */
+  handActionLog: SeatActionLog = [];
+  /**
+   * Seats that asked to sit back in but must wait for their natural big blind.
+   *
+   * Without this, a player can dodge a blind: sit out as the BB approaches,
+   * let it pass, then sit straight back in. That is a real poker-integrity
+   * exploit, not UI polish, so re-entry is gated here. The seat stays
+   * `sitOut` in the engine (which keeps RC1 state hashing untouched) until the
+   * big blind reaches it, at which point it is dealt in as the BB.
+   */
+  awaitingBigBlind = new Set<number>();
+  /**
+   * Cross-hand opponent statistics keyed by seat. Public evidence only; reset
+   * when a seat changes occupant.
+   */
+  opponentStats = new Map<
+    number,
+    OpponentStats & {
+      openOpportunities: number;
+      opens: number;
+      vpipHands: number;
+      pfrHands: number;
+      threeBetOpportunities: number;
+      threeBets: number;
+      foldToThreeBetOpportunities: number;
+      foldToThreeBets: number;
+      volunteeredThisHand: boolean;
+      raisedPreflopThisHand: boolean;
+    }
+  >();
   /** On-chain session id for canonical events + dealer seeds (when arenaMode=onchain). */
   onchainSessionId: string | null = null;
   canonicalPrevHash: Hex = GENESIS_EVENT_HASH;
@@ -206,13 +282,14 @@ export class TableRuntime {
     config: { smallBlind: number; bigBlind: number; rakePct: number; rakeCap: number | null; maxSeats?: number },
   ) {
     this.tableId = tableId;
+    // DB / API speak USDC dollars; the engine plays integer cent-chips.
     this.state = createTable(
       {
         tableId,
-        smallBlind: config.smallBlind,
-        bigBlind: config.bigBlind,
+        smallBlind: usdToChips(config.smallBlind),
+        bigBlind: usdToChips(config.bigBlind),
         rakePct: Number(config.rakePct),
-        rakeCap: config.rakeCap,
+        rakeCap: config.rakeCap == null ? null : usdToChips(config.rakeCap),
       },
       config.maxSeats ?? 6,
     );
@@ -249,6 +326,10 @@ export class TableRuntime {
     }
     if (rt.arenaMode === "onchain") {
       await rt.loadOnchainSession();
+      const oc = await getOnchainSessionForTable(tableId).catch(() => null);
+      if (oc && (oc.status === "settling" || oc.status === "settled" || oc.status === "blocked")) {
+        rt.matchClosed = true;
+      }
     }
     // WP-080: replay durable hand_events tip (hash chain) after lease reclaim.
     const eventRows = await query(
@@ -268,7 +349,7 @@ export class TableRuntime {
     const seats = await query(`select * from table_seats where table_id = $1 order by seat_index`, [tableId]);
     for (const s of seats.rows) {
       if (s.status === "occupied" && s.agent_id && s.owner_id) {
-        rt.state = seatPlayer(rt.state, s.seat_index, s.owner_id, s.agent_id, Number(s.stack));
+        rt.state = seatPlayer(rt.state, s.seat_index, s.owner_id, s.agent_id, usdToChips(Number(s.stack)));
         const cfg = await query(
           `select profile_key from agent_configs where agent_id = $1 and is_active = true limit 1`,
           [s.agent_id],
@@ -384,6 +465,10 @@ export class TableRuntime {
       }
     }
     for (const join of plan.joins) {
+      if (this.matchClosed) {
+        console.warn("[table-runtime] skip queued join — match closed", this.tableId, join.id);
+        continue;
+      }
       const buyIn = Number(join.amount ?? 0);
       const agentConfigId = join.agentConfigId ?? String(join.payload?.agentConfigId ?? "");
       if (!(buyIn > 0) || !join.agentId || !agentConfigId) {
@@ -391,18 +476,27 @@ export class TableRuntime {
         continue;
       }
       const payload = join.payload ?? {};
-      await this.joinUnlocked({
-        userId: join.ownerId,
-        agentId: join.agentId,
-        agentConfigId,
-        buyIn,
-        seatIndex: join.seatIndex ?? undefined,
-        profileKey: join.profileKey ?? String(payload.profileKey ?? "machine"),
-        stopLoss: payload.stopLoss != null ? Number(payload.stopLoss) : undefined,
-        profitTarget: payload.profitTarget != null ? Number(payload.profitTarget) : undefined,
-        autoRebuy: Boolean(payload.autoRebuy),
-        forceImmediate: true,
-      });
+      try {
+        await this.joinUnlocked({
+          userId: join.ownerId,
+          agentId: join.agentId,
+          agentConfigId,
+          buyIn,
+          seatIndex: join.seatIndex ?? undefined,
+          profileKey: join.profileKey ?? String(payload.profileKey ?? "machine"),
+          stopLoss: payload.stopLoss != null ? Number(payload.stopLoss) : undefined,
+          profitTarget: payload.profitTarget != null ? Number(payload.profitTarget) : undefined,
+          autoRebuy: Boolean(payload.autoRebuy),
+          forceImmediate: true,
+        });
+      } catch (err) {
+        console.warn(
+          "[table-runtime] queued join rejected",
+          this.tableId,
+          join.id,
+          err instanceof Error ? err.message : err,
+        );
+      }
     }
 
     this.pendingLeaveOwners = await listPendingLeaveOwnerIds(this.tableId).catch(
@@ -450,12 +544,157 @@ export class TableRuntime {
     }
   }
 
-  isBotSeat(_seatIndex: number): boolean {
+  isHeadsUpTable(): boolean {
+    return this.variantId === "nlhe_hu" || this.state.seats.length === 2;
+  }
+
+  isBotSeat(seatIndex: number): boolean {
     if (!HUMAN_PLAY) return true;
-    // HUMAN_PLAY: every occupied seat waits for a human action (or timeout fold).
-    // Never AI-auto when the WS hasn't bound yet — that yields YOUR TURN +
-    // "No action pending" with a dead clock.
+    const seat = this.state.seats.find((s) => s.seatIndex === seatIndex);
+    // Agent / profile seats are AI-controlled (Groq via agent-runtime).
+    // Pure human test seats (no agent) still wait on the WS clock.
+    if (seat?.agentId || this.agentProfiles.has(seatIndex)) return true;
     return false;
+  }
+
+  /**
+   * Append a public action to this hand's log and fold it into the seat's
+   * cross-hand statistics. Only public information — never hole cards.
+   */
+  recordHandAction(
+    seatIndex: number,
+    action: string,
+    amountChips: number | undefined,
+    street: string,
+  ) {
+    this.handActionLog.push({ seat: seatIndex, action, amountChips, street });
+
+    const prior = this.opponentStats.get(seatIndex) ?? {
+      seat: seatIndex,
+      handsObserved: 0,
+      openOpportunities: 0,
+      opens: 0,
+      openPct: null,
+      vpipHands: 0,
+      pfrHands: 0,
+      threeBetOpportunities: 0,
+      threeBets: 0,
+      foldToThreeBetOpportunities: 0,
+      foldToThreeBets: 0,
+      volunteeredThisHand: false,
+      raisedPreflopThisHand: false,
+      vpipPct: null,
+      threeBetPct: null,
+      foldToThreeBetPct: null,
+      avgPublicCadenceMs: null,
+    };
+    if (street === "preflop") {
+      const voluntary =
+        action === "call" || action === "bet" || action === "raise" || action === "all_in";
+      if (voluntary && !prior.volunteeredThisHand) {
+        prior.volunteeredThisHand = true;
+        prior.vpipHands += 1;
+      }
+      const priorRaises = this.handActionLog.filter(
+        (a) =>
+          a.street === "preflop" &&
+          a.seat !== seatIndex &&
+          (a.action === "raise" || a.action === "bet" || a.action === "all_in"),
+      ).length;
+      const priorAggression = priorRaises > 0;
+      // An "open" is first-in aggression.
+      if (!priorAggression && (action === "raise" || action === "bet" || action === "all_in")) {
+        prior.opens += 1;
+      }
+      if ((action === "raise" || action === "all_in") && !prior.raisedPreflopThisHand) {
+        prior.raisedPreflopThisHand = true;
+        prior.pfrHands += 1;
+      }
+      // Facing exactly one prior raise → 3-bet opportunity.
+      if (priorRaises === 1) {
+        prior.threeBetOpportunities += 1;
+        if (action === "raise" || action === "all_in") prior.threeBets += 1;
+        if (action === "fold") {
+          prior.foldToThreeBetOpportunities += 1;
+          prior.foldToThreeBets += 1;
+        } else if (action === "call" || action === "raise" || action === "all_in") {
+          prior.foldToThreeBetOpportunities += 1;
+        }
+      }
+    }
+    prior.openPct =
+      prior.openOpportunities > 0 ? prior.opens / prior.openOpportunities : null;
+    prior.vpipPct = prior.handsObserved > 0 ? prior.vpipHands / prior.handsObserved : null;
+    prior.threeBetPct =
+      prior.threeBetOpportunities > 0 ? prior.threeBets / prior.threeBetOpportunities : null;
+    prior.foldToThreeBetPct =
+      prior.foldToThreeBetOpportunities > 0
+        ? prior.foldToThreeBets / prior.foldToThreeBetOpportunities
+        : null;
+    this.opponentStats.set(seatIndex, prior);
+  }
+
+  /** Count one preflop opening opportunity per seat dealt into the hand. */
+  notePreflopOpenOpportunities() {
+    for (const s of this.state.seats) {
+      if (!s.playerId || s.sitOut) continue;
+      const prior = this.opponentStats.get(s.seatIndex) ?? {
+        seat: s.seatIndex,
+        handsObserved: 0,
+        openOpportunities: 0,
+        opens: 0,
+        openPct: null,
+        vpipHands: 0,
+        pfrHands: 0,
+        threeBetOpportunities: 0,
+        threeBets: 0,
+        foldToThreeBetOpportunities: 0,
+        foldToThreeBets: 0,
+        volunteeredThisHand: false,
+        raisedPreflopThisHand: false,
+        vpipPct: null,
+        threeBetPct: null,
+        foldToThreeBetPct: null,
+        avgPublicCadenceMs: null,
+      };
+      prior.handsObserved += 1;
+      prior.openOpportunities += 1;
+      prior.volunteeredThisHand = false;
+      prior.raisedPreflopThisHand = false;
+      prior.openPct =
+        prior.openOpportunities > 0 ? prior.opens / prior.openOpportunities : null;
+      prior.vpipPct = prior.handsObserved > 0 ? prior.vpipHands / prior.handsObserved : null;
+      this.opponentStats.set(s.seatIndex, prior);
+    }
+  }
+
+  /** Plain `OpponentStats` view for the range engine. */
+  opponentStatsForFacts(): Record<number, OpponentStats> {
+    const out: Record<number, OpponentStats> = {};
+    for (const [seat, s] of this.opponentStats) {
+      out[seat] = {
+        seat: s.seat,
+        handsObserved: s.handsObserved,
+        openPct: s.openPct ?? null,
+        vpipPct: s.vpipPct ?? null,
+        threeBetPct: s.threeBetPct ?? null,
+        foldToThreeBetPct: s.foldToThreeBetPct ?? null,
+        avgPublicCadenceMs: s.avgPublicCadenceMs ?? null,
+      };
+    }
+    return out;
+  }
+
+  /** Deterministic decision facts for the acting seat (WP-131 grounding). */
+  decisionFactsFor(seatIndex: number): DecisionFacts {
+    return buildDecisionFacts({
+      state: this.state,
+      seatIndex,
+      actions: this.handActionLog,
+      stats: this.opponentStatsForFacts(),
+      // Keep inside the action clock; ±1% is well within reported confidence.
+      equitySamples: 1_500,
+    });
   }
 
   seatControllerFor(seatIndex: number): SeatController {
@@ -625,7 +864,7 @@ export class TableRuntime {
 
   /** Public-only table view for spectators (no holeCards / legalActions / owner equity). */
   spectatorView() {
-    const base = publicView(this.state);
+    const base = this.wireViewUsd(publicView(this.state));
     const labels = Object.entries(this.runoutRevealed).map(([seat, hole]) => ({
       seatIndex: Number(seat),
       label: madeHandLabel(hole, this.state.board),
@@ -708,11 +947,37 @@ export class TableRuntime {
     };
   }
 
+  /** Convert engine cent-chips in a public/private view back to USDC dollars for clients. */
+  private wireViewUsd<T extends ReturnType<typeof publicView>>(view: T): T {
+    const usd = (n: number) => n / 100;
+    return {
+      ...view,
+      pot: usd(view.pot),
+      currentBet: usd(view.currentBet),
+      rake: usd(view.rake),
+      sessionRake: usd(view.sessionRake ?? 0),
+      seats: view.seats.map((s) => ({ ...s, stack: usd(s.stack), bet: usd(s.bet) })),
+      winners: view.winners.map((w) => ({ ...w, amount: usd(w.amount) })),
+      ...( "legalActions" in view && Array.isArray((view as { legalActions?: unknown }).legalActions)
+        ? {
+            legalActions: (
+              view as { legalActions: { action: string; minAmount?: number; maxAmount?: number }[] }
+            ).legalActions.map((a) => ({
+              ...a,
+              minAmount: a.minAmount != null ? usd(a.minAmount) : undefined,
+              maxAmount: a.maxAmount != null ? usd(a.maxAmount) : undefined,
+            })),
+          }
+        : {}),
+    };
+  }
+
   viewFor(client: Client) {
-    const base =
+    const base = this.wireViewUsd(
       client.role === "player" && client.seatIndex != null
         ? privateView(this.state, client.seatIndex)
-        : publicView(this.state);
+        : publicView(this.state),
+    );
     const labels = Object.entries(this.runoutRevealed).map(([seat, hole]) => ({
       seatIndex: Number(seat),
       label: madeHandLabel(hole, this.state.board),
@@ -804,10 +1069,25 @@ export class TableRuntime {
       handId?: string | null;
       sessionId?: string;
       atMs?: number;
+      modelId?: string | null;
+      intentAction?: string | null;
+      intentAmount?: number | null;
+      publicNarrative?: string | null;
+      publicThinkingLog?: string[] | null;
+      fallbackUsed?: boolean;
     },
   ) {
     const ownerId = this.state.seats.find((s) => s.seatIndex === seatIndex)?.playerId;
     if (!ownerId) return;
+    let energy: number | null =
+      status.energyRemaining == null || !Number.isFinite(status.energyRemaining)
+        ? null
+        : Math.max(0, Math.trunc(status.energyRemaining));
+    if (energy != null) this.lastAiEnergy.set(seatIndex, energy);
+    else energy = this.lastAiEnergy.get(seatIndex) ?? null;
+    const thinkingLog = Array.isArray(status.publicThinkingLog)
+      ? status.publicThinkingLog.filter((l) => typeof l === "string" && l.trim()).slice(-12)
+      : null;
     const frame = {
       type: "ai_cognition",
       workPacket: "WP-126",
@@ -815,14 +1095,17 @@ export class TableRuntime {
       handId: status.handId ?? this.state.handId,
       sessionId: status.sessionId ?? this.sessionIdForAi(),
       phase: status.phase,
-      energyRemaining:
-        status.energyRemaining == null || !Number.isFinite(status.energyRemaining)
-          ? null
-          : Math.max(0, Math.trunc(status.energyRemaining)),
+      energyRemaining: energy,
       energyPerHand: status.energyPerHand ?? 100,
       publicCadenceMs: status.publicCadenceMs ?? null,
       signalSource: status.signalSource ?? "cognition",
       atMs: status.atMs ?? Date.now(),
+      modelId: status.modelId ?? null,
+      intentAction: status.intentAction ?? null,
+      intentAmount: status.intentAmount ?? null,
+      publicNarrative: status.publicNarrative ?? null,
+      publicThinkingLog: thinkingLog,
+      fallbackUsed: status.fallbackUsed ?? false,
     };
     for (const c of this.clients) {
       const isOwner =
@@ -1050,14 +1333,14 @@ export class TableRuntime {
           typeof payload.amount === "number" || typeof payload.amount === "string"
             ? payload.amount
             : null,
-        pot: this.state.pot,
+        pot: chipsToUsd(this.state.pot),
         rake,
         boardCardCount: this.state.board.length,
         activeSeats: this.state.seats
           .filter((s) => s.playerId && !s.folded)
           .map((s) => s.seatIndex),
         stacksBySeat: Object.fromEntries(
-          this.state.seats.filter((s) => s.playerId).map((s) => [String(s.seatIndex), s.stack]),
+          this.state.seats.filter((s) => s.playerId).map((s) => [String(s.seatIndex), chipsToUsd(s.stack)]),
         ),
         summaryCode: eventType,
       },
@@ -1065,6 +1348,30 @@ export class TableRuntime {
     // WP-126: forward public cognition phases + Energy to seat owners only.
     for (const st of statuses) {
       if (typeof st.seat !== "number" || !st.phase) continue;
+      const patternRead = st.phase === "UPDATING_OPPONENT_MODEL";
+      const action = String(payload.action ?? "").toUpperCase();
+      const amount =
+        typeof payload.amount === "number" || typeof payload.amount === "string"
+          ? Number(payload.amount)
+          : null;
+      const actorLabel = actorSeat == null ? "The table" : `Seat ${actorSeat + 1}`;
+      let observation: string | undefined;
+      if (eventType === "HAND_STARTED") {
+        observation = `New hand: tracking position, effective stacks, and the opening price.`;
+      } else if (eventType === "BLINDS_POSTED") {
+        observation = `Blinds posted; the starting pot is $${this.state.pot}.`;
+      } else if (eventType === "STREET_DEALT") {
+        const street = String(payload.street ?? this.state.street);
+        observation = `${street[0]?.toUpperCase() ?? ""}${street.slice(1)} dealt; recalculating made-hand strength, draws, and range advantage.`;
+      } else if (eventType === "PLAYER_ACTED" && action) {
+        const sized = amount != null && amount > 0 ? ` $${amount}` : "";
+        observation =
+          actorSeat === st.seat
+            ? `My ${action}${sized} is in; watching how the opponent responds to the new $${this.state.pot} pot.`
+            : `${actorLabel} chose ${action}${sized}; updating their likely range and the price of continuing.`;
+      } else if (patternRead) {
+        observation = "Updating the opponent range from observed bet sizes, checks, calls, and folds.";
+      }
       this.sendOwnerAiCognition(st.seat, {
         phase: st.phase,
         energyRemaining: st.energyRemaining,
@@ -1074,6 +1381,8 @@ export class TableRuntime {
         handId: st.handId ?? handId,
         sessionId: st.sessionId,
         atMs: st.atMs,
+        publicNarrative: observation,
+        publicThinkingLog: observation ? [observation] : undefined,
       });
     }
     // WP-111 — explicit hand/end so rake is recorded even if observe mapping misses.
@@ -1117,16 +1426,54 @@ export class TableRuntime {
       throw new Error(`Buy-in must be $${minBuy}–$${maxBuy}`);
     }
 
+    if (this.matchClosed) {
+      throw new Error("Match over — this table is settling. Find a new match to buy in again.");
+    }
+
     if (this.arenaMode === "onchain") {
       const onchain = await getOnchainSessionForTable(this.tableId);
       if (!onchain || (onchain.status !== "opened" && onchain.status !== "playing")) {
         throw new Error(
           onchain?.status === "pending"
             ? "Session opening on-chain — wait for confirmation before joining"
-            : "On-chain session not opened for this table",
+            : onchain?.status === "settling" || onchain?.status === "settled"
+              ? "Match over — session is settling. Find a new match to buy in again."
+              : "On-chain session not opened for this table",
         );
       }
+      // New custody session on this table ⇒ new match (clear elimination freeze).
+      if (this.onchainSessionId && this.onchainSessionId !== onchain.session_id) {
+        this.matchClosed = false;
+      }
       this.onchainSessionId = onchain.session_id;
+      // Sealed HU: only the original session players may sit. No outsider refill.
+      if (this.isHeadsUpTable()) {
+        const sealed = await query<{ profile_id: string }>(
+          `select profile_id from onchain_session_players where session_id = $1`,
+          [onchain.session_id],
+        );
+        if (sealed.rows.length > 0) {
+          const allowed = new Set(sealed.rows.map((r) => String(r.profile_id)));
+          if (!allowed.has(opts.userId)) {
+            throw new Error("This heads-up match is sealed — only the original players may sit.");
+          }
+          // Already cashed out / busted out of THIS session — must Find Match again
+          // (new ticket + buy-in), not refill the eliminated seat for free.
+          const priorInSession = await query<{ id: string }>(
+            `select ts.id from table_sessions ts
+             where ts.table_id = $1 and ts.owner_id = $2 and ts.status = 'completed'
+               and ts.ended_at is not null
+               and ts.ended_at >= (select created_at from onchain_sessions where session_id = $3)
+             limit 1`,
+            [this.tableId, opts.userId, onchain.session_id],
+          );
+          if (priorInSession.rows[0]) {
+            throw new Error(
+              "You already left this match. Commit a new buy-in via Find Match — seats are not free refills.",
+            );
+          }
+        }
+      }
     }
 
     const already = this.state.seats.find((s) => s.playerId === opts.userId && !s.sitOut);
@@ -1240,7 +1587,7 @@ export class TableRuntime {
        where table_id=$4 and seat_index=$5`,
       [opts.agentId, opts.userId, opts.buyIn, this.tableId, empty.seatIndex],
     );
-    this.state = seatPlayer(this.state, empty.seatIndex, opts.userId, opts.agentId, opts.buyIn);
+    this.state = seatPlayer(this.state, empty.seatIndex, opts.userId, opts.agentId, usdToChips(opts.buyIn));
     this.agentProfiles.set(empty.seatIndex, opts.profileKey);
     this.sessions.set(opts.userId, sessionId);
     this.stackBaseline.set(opts.userId, opts.buyIn);
@@ -1284,6 +1631,38 @@ export class TableRuntime {
     this.enqueueSpectatorMessages([
       { type: "snapshot", sequence: this.sequence, state: this.spectatorView() },
     ]);
+  }
+
+  /**
+   * Net-on-award (NLHE_ENGINE_RC1): rake is already removed from stacks at hand
+   * settle. Kept as a no-op so leave/match-end call sites remain stable.
+   */
+  async collectSessionRakeTabs(_seatIndexes?: number[]) {
+    return 0;
+  }
+
+  /** Active session buy-ins keyed by seat (for profit-capped rake collection). */
+  private async buyInBySeatIndex(): Promise<Map<number, number>> {
+    const map = new Map<number, number>();
+    const rows = await query<{ seat_index: number; buy_in: string | number }>(
+      `select seat_index, buy_in from table_sessions
+       where table_id=$1 and status in ('active','completed')
+       order by started_at desc`,
+      [this.tableId],
+    ).catch(() => ({ rows: [] as { seat_index: number; buy_in: string | number }[] }));
+    for (const row of rows.rows) {
+      const seat = Number(row.seat_index);
+      const buyIn = Number(row.buy_in);
+      if (!Number.isFinite(seat) || !Number.isFinite(buyIn) || buyIn <= 0) continue;
+      if (!map.has(seat)) map.set(seat, buyIn);
+    }
+    for (const [userId, baseline] of this.stackBaseline) {
+      const seat = this.state.seats.find((s) => s.playerId === userId);
+      if (seat && !map.has(seat.seatIndex) && baseline > 0) {
+        map.set(seat.seatIndex, baseline);
+      }
+    }
+    return map;
   }
 
   /**
@@ -1331,7 +1710,12 @@ export class TableRuntime {
         }
       }
       this.pendingLeaveOwners.delete(userId);
-      return { queued: false, ok: true, abandoned: true };
+      return {
+        queued: false,
+        ok: true,
+        abandoned: true,
+        handsPlayed: Math.max(0, Number(this.state.handNumber) || 0),
+      };
     }
 
     // WP-042: mid-hand leave is queued — player remains exposed until hand finishes.
@@ -1368,7 +1752,10 @@ export class TableRuntime {
 
     const seatIndex = seat.seatIndex;
     const agentId = seat.agentId;
-    const stack = Math.max(0, Number(seat.stack) || 0);
+    // Collect this seat's fee tab before cash-out so payouts are net of platform rake.
+    await this.collectSessionRakeTabs([seatIndex]);
+    const seatAfter = this.state.seats.find((s) => s.seatIndex === seatIndex);
+    const stack = Math.max(0, chipsToUsd(seatAfter?.stack ?? seat.stack));
     let sessionId = this.sessions.get(userId);
     if (!sessionId) {
       const row = await query(
@@ -1444,12 +1831,31 @@ export class TableRuntime {
     }
 
     try {
+      const meta = await query<{ league_id: string; variant_id: string }>(
+        `select league_id, variant_id from tables where id=$1`,
+        [this.tableId],
+      );
+      const cityId = String(meta.rows[0]?.league_id ?? "");
+      const format = String(meta.rows[0]?.variant_id ?? "").includes("6max") ? "sixmax" : "hu";
+      if (cityId) {
+        await recordRatHoleExit({
+          ownerId: userId,
+          cityId,
+          format,
+          leavingStackUsd: stack,
+        });
+      }
+    } catch (err) {
+      console.error("rat-hole exit record failed", this.tableId, err);
+    }
+
+    try {
       await this.persistEvent("PLAYER_LEFT", { seatIndex, userId, stack, midHand });
     } catch (err) {
       console.error("PLAYER_LEFT event failed", this.tableId, err);
     }
 
-    const remaining = this.state.seats.filter((s) => s.playerId && !s.sitOut && s.stack > 0);
+    const remaining = this.state.seats.filter((s) => s.playerId && !s.sitOut && s.stack > 0n);
     if (remaining.length < 2 && this.state.street !== "waiting" && this.state.street !== "settlement") {
       await this.settleIfOnePlayerLeft("table_abandoned");
       this.resetToWaiting();
@@ -1461,7 +1867,9 @@ export class TableRuntime {
     }
     // Always push a fresh snapshot so every client flips the seat to SEAT OPEN.
     this.broadcastSnapshots();
-    return { queued: false, ok: true };
+    const startHand = sessionId ? (this.sessionStartHand.get(sessionId) ?? 0) : 0;
+    const handsPlayed = Math.max(0, (Number(this.state.handNumber) || 0) - startHand);
+    return { queued: false, ok: true, handsPlayed };
   }
 
   /**
@@ -1488,6 +1896,14 @@ export class TableRuntime {
     if (others.length !== 1) return; // only rate clean 1-on-1 stretches for now
     const [opponentId, opponentSessionId] = others[0];
     if (!opponentId || !opponentSessionId) return;
+
+    // Casual / unranked tables never move Arena Rating.
+    const leagueRow = await query<{ league_id: string }>(
+      `select league_id::text as league_id from tables where id = $1 limit 1`,
+      [this.tableId],
+    );
+    const leagueId = leagueRow.rows[0]?.league_id ?? "bronze";
+    if (!isRankedLeague(leagueId)) return;
 
     // Texas Hold'em → HU pool. Poker Classic → 6-max pool only for degenerate HU sessions.
     const poolId =
@@ -1526,6 +1942,7 @@ export class TableRuntime {
       stake: Number(mine.buy_in),
       eventLogRoot: this.prevHash,
       reason: "session_end",
+      gate: { matchClass: "ranked_public" },
     });
   }
 
@@ -1589,16 +2006,16 @@ export class TableRuntime {
       handId: null,
       actingIndex: null,
       board: [],
-      pot: 0,
-      currentBet: 0,
+      pot: 0n,
+      currentBet: 0n,
       winners: [],
       deck: [],
       seats: this.state.seats.map((s) => ({
         ...s,
-        bet: 0,
-        totalBet: 0,
+        bet: 0n,
+        totalBet: 0n,
         hole: undefined,
-        folded: s.sitOut || !s.playerId || s.stack <= 0,
+        folded: s.sitOut || !s.playerId || s.stack <= 0n,
         allIn: false,
       })),
     };
@@ -1642,7 +2059,7 @@ export class TableRuntime {
   async loop() {
     while (this.running) {
       try {
-        const seated = this.state.seats.filter((s) => !s.sitOut && s.playerId && s.stack > 0);
+        const seated = this.state.seats.filter((s) => !s.sitOut && s.playerId && s.stack > 0n);
         if (seated.length < 2) {
           if (this.state.street !== "waiting" && this.state.street !== "settlement") {
             await this.settleIfOnePlayerLeft("alone_at_table");
@@ -1679,11 +2096,11 @@ export class TableRuntime {
           this.state = {
             ...this.state,
             seats: this.state.seats.map((s) =>
-              s.playerId && s.stack <= 0 ? { ...s, sitOut: true, folded: true, hole: undefined } : s,
+              s.playerId && s.stack <= 0n ? { ...s, sitOut: true, folded: true, hole: undefined } : s,
             ),
           };
           for (const s of this.state.seats) {
-            if (s.playerId && s.stack <= 0) {
+            if (s.playerId && s.stack <= 0n) {
               await query(`update table_seats set stack=0, updated_at=now() where table_id=$1 and seat_index=$2`, [
                 this.tableId,
                 s.seatIndex,
@@ -1698,15 +2115,23 @@ export class TableRuntime {
           // Hold so clients can play win / reveal animations — and busted players can top up.
           await sleep(3200);
           // Anyone still at $0 vacates: open seat, not a dimmed ghost card.
-          const broke = this.state.seats.filter((s) => s.playerId && s.stack <= 0).map((s) => s.playerId!);
+          // They do NOT get free chips — a new buy-in (top-up before vacate, or
+          // Find Match after) is required.
+          const broke = this.state.seats.filter((s) => s.playerId && s.stack <= 0n).map((s) => s.playerId!);
           // Hold the seat lock across the whole boundary so an inbound join
           // cannot land between vacating busted seats and the epoch flush.
           await this.withSeatLock(async () => {
             for (const uid of broke) {
               await this.leaveUnlocked(uid, { forceImmediate: true });
             }
-            // WP-042: apply queued join/leave/top-up before the next hand.
-            await this.applyEpochBoundary();
+            // Heads-up: elimination ends the sealed match. Do not flush queued
+            // joins that would refill the seat with "mystery" chips.
+            if (this.isHeadsUpTable() && broke.length > 0) {
+              await this.closeMatchForElimination(broke);
+            } else {
+              // WP-042: apply queued join/leave/top-up before the next hand.
+              await this.applyEpochBoundary();
+            }
           });
         }
       } catch (err) {
@@ -1727,14 +2152,43 @@ export class TableRuntime {
     }
   }
 
+  /**
+   * HU elimination: close the sealed custody session and freeze the table so
+   * nobody can sit back with a fresh stack without a new Find Match buy-in.
+   */
+  async closeMatchForElimination(eliminated: string[]) {
+    this.matchClosed = true;
+    // Winner may still be seated with gross stacks — claw back all tabs before settle.
+    await this.collectSessionRakeTabs();
+    if (this.arenaMode === "onchain") {
+      if (!this.onchainSessionId) await this.loadOnchainSession();
+      if (this.onchainSessionId) {
+        await closeOnchainSessionForSettlement(this.onchainSessionId).catch((err) =>
+          console.error("closeOnchainSessionForSettlement failed", this.tableId, err),
+        );
+      }
+    }
+    await this.persistEvent("MATCH_COMPLETE", {
+      reason: "elimination",
+      eliminated,
+      message: "Heads-up match over — eliminated players must Find Match to buy in again.",
+    }).catch(() => null);
+    this.broadcastSnapshots();
+  }
+
   async beginHand() {
-    const seated = this.state.seats.filter((s) => !s.sitOut && s.playerId && s.stack > 0);
+    if (this.matchClosed) return;
+    // Deal back in anyone whose natural big blind has arrived (wait-for-BB).
+    // Runs BEFORE the seated-count gate: a returning player may be the second
+    // player the table needs, and releasing later would deadlock the table.
+    this.releaseSeatsAwaitingBigBlind();
+    const seated = this.state.seats.filter((s) => !s.sitOut && s.playerId && s.stack > 0n);
     if (seated.length < 2) return;
 
     // WP-042 safety net: flush pending queue only (avoid double epoch rotate).
     await this.withSeatLock(() => this.applyEpochBoundary({ onlyIfPending: true }));
 
-    const seatedAfter = this.state.seats.filter((s) => !s.sitOut && s.playerId && s.stack > 0);
+    const seatedAfter = this.state.seats.filter((s) => !s.sitOut && s.playerId && s.stack > 0n);
     if (seatedAfter.length < 2) return;
 
     // On-chain: hard-gate first deal on confirmed V2 custody locks (not ledger mirror alone).
@@ -1818,10 +2272,13 @@ export class TableRuntime {
     }
 
     const handId = `hand_${this.tableId}_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+    // Range evidence is per-hand; cross-hand stats in `opponentStats` persist.
+    this.handActionLog = [];
+    this.notePreflopOpenOpportunities();
     // WP-108: capture opening hash/stacks before blinds mutate stacks.
     this.handOpeningStateHash = hashEngineState(this.state);
     this.handOpeningStacks = new Map(
-      this.state.seats.filter((s) => s.playerId).map((s) => [s.seatIndex, s.stack]),
+      this.state.seats.filter((s) => s.playerId).map((s) => [s.seatIndex, chipsToUsd(s.stack)]),
     );
     const { state, events } = startHand(this.state, seed, handId);
 
@@ -1837,11 +2294,98 @@ export class TableRuntime {
     for (const ev of events) await this.emitEngine(ev);
   }
 
+  /**
+   * Sit out (keep chips, skip future deals) or return.
+   * Season 1 return policy: wait for the big blind before being dealt in again.
+   */
+  async setPlayerSitOut(userId: string, sitOut: boolean) {
+    const seat = this.state.seats.find((s) => s.playerId === userId);
+    if (!seat) throw new Error("Not seated");
+
+    if (sitOut) {
+      this.awaitingBigBlind.delete(seat.seatIndex);
+      this.state = setSitOut(this.state, seat.seatIndex, true);
+      await this.persistEvent("PLAYER_SIT_OUT", {
+        seatIndex: seat.seatIndex,
+        userId,
+        policy: "effective_next_hand",
+      }).catch(() => null);
+      this.broadcastSnapshots();
+      return { ok: true, sitOut: true, seatIndex: seat.seatIndex, waitingForBigBlind: false };
+    }
+
+    // Sitting back in: Season 1 policy is wait-for-big-blind. The seat is only
+    // dealt in once the BB reaches it naturally, so a sit-out cannot be used
+    // to skip a blind. `beginHand` clears the flag when that hand arrives.
+    const wouldBeBb = nextBlindSeats(this.state, {
+      extraEligibleSeats: [seat.seatIndex],
+    })?.bb;
+    const dealInNow = wouldBeBb === seat.seatIndex;
+
+    if (dealInNow) {
+      this.awaitingBigBlind.delete(seat.seatIndex);
+      this.state = setSitOut(this.state, seat.seatIndex, false);
+    } else {
+      this.awaitingBigBlind.add(seat.seatIndex);
+    }
+
+    await this.persistEvent("PLAYER_SIT_IN", {
+      seatIndex: seat.seatIndex,
+      userId,
+      policy: "wait_for_big_blind",
+      waitingForBigBlind: !dealInNow,
+    }).catch(() => null);
+    this.broadcastSnapshots();
+    return {
+      ok: true,
+      sitOut: !dealInNow,
+      seatIndex: seat.seatIndex,
+      waitingForBigBlind: !dealInNow,
+    };
+  }
+
+  /**
+   * Deal back in any seat whose natural big blind has now arrived.
+   * Called immediately before a hand is dealt.
+   */
+  releaseSeatsAwaitingBigBlind() {
+    if (!this.awaitingBigBlind.size) return;
+    for (const seatIndex of [...this.awaitingBigBlind]) {
+      const seat = this.state.seats.find((s) => s.seatIndex === seatIndex);
+      if (!seat || !seat.playerId || seat.stack <= 0n) {
+        this.awaitingBigBlind.delete(seatIndex);
+        continue;
+      }
+      const blinds = nextBlindSeats(this.state, { extraEligibleSeats: [seatIndex] });
+      if (blinds?.bb === seatIndex) {
+        this.awaitingBigBlind.delete(seatIndex);
+        this.state = setSitOut(this.state, seatIndex, false);
+      }
+    }
+  }
+
   /** Add chips to a seated (possibly busted) player mid-session. */
   async topUp(userId: string, amount: number, opts?: { forceImmediate?: boolean }) {
     if (!(amount > 0)) throw new Error("Invalid top-up");
     const seat = this.state.seats.find((s) => s.playerId === userId);
     if (!seat) throw new Error("Not seated");
+
+    // Never top up above the city's 100BB entry cap via fresh funds.
+    const tableRow = await query<{ league_id: string; big_blind: string | number }>(
+      `select league_id, big_blind from tables where id=$1`,
+      [this.tableId],
+    );
+    const bb = Number(tableRow.rows[0]?.big_blind ?? chipsToUsd(this.state.config.bigBlind));
+    const maxStackUsd = bb * 100;
+    const currentUsd = chipsToUsd(seat.stack);
+    if (currentUsd + amount > maxStackUsd + 1e-9) {
+      const room = Math.max(0, maxStackUsd - currentUsd);
+      throw new Error(
+        room <= 0
+          ? `Already at or above the 100BB table cap ($${maxStackUsd.toFixed(2)})`
+          : `Top-up would exceed 100BB; maximum add is $${room.toFixed(2)}`,
+      );
+    }
 
     // WP-042: mid-hand top-ups queue for the next epoch (stack mutation deferred).
     const phase = this.currentHandPhase();
@@ -1880,7 +2424,8 @@ export class TableRuntime {
       this.sessions.set(userId, sessionId);
     }
     await lockBuyIn(userId, amount, `${sessionId}-topup-${Date.now()}`, this.arenaMode);
-    const nextStack = seat.stack + amount;
+    const chipAmount = usdToChips(amount);
+    const nextStack = seat.stack + chipAmount;
     this.state = {
       ...this.state,
       seats: this.state.seats.map((s) =>
@@ -1890,15 +2435,16 @@ export class TableRuntime {
       ),
     };
     this.stackBaseline.set(userId, (this.stackBaseline.get(userId) ?? 0) + amount);
+    const nextUsd = chipsToUsd(nextStack);
     await query(`update table_seats set stack=$1, updated_at=now() where table_id=$2 and seat_index=$3`, [
-      nextStack,
+      nextUsd,
       this.tableId,
       seat.seatIndex,
     ]);
-    await query(`update table_sessions set stack=$1, buy_in = buy_in + $2 where id=$3`, [nextStack, amount, sessionId]);
-    await this.persistEvent("PLAYER_TOP_UP", { seatIndex: seat.seatIndex, userId, amount, stack: nextStack });
+    await query(`update table_sessions set stack=$1, buy_in = buy_in + $2 where id=$3`, [nextUsd, amount, sessionId]);
+    await this.persistEvent("PLAYER_TOP_UP", { seatIndex: seat.seatIndex, userId, amount, stack: nextUsd });
     this.ensureLoop();
-    return { stack: nextStack, queued: false };
+    return { stack: nextUsd, queued: false };
   }
 
   clearPendingHuman(reason: "cancelled" | "replaced" = "cancelled") {
@@ -1912,7 +2458,7 @@ export class TableRuntime {
     const fallback = fold ?? check ?? pending.legal[0];
     pending.resolve({
       action: fallback?.action ?? "fold",
-      amount: fallback?.minAmount,
+      amount: fallback?.minAmount != null ? chipsToUsd(fallback.minAmount) : undefined,
       reasonCode: reason === "replaced" ? "turn_replaced" : "turn_cancelled",
     });
   }
@@ -1932,16 +2478,24 @@ export class TableRuntime {
       const opts = legal.map((l) => l.action).join(", ") || "none";
       throw new Error(`Illegal action: ${action}. Legal now: ${opts}`);
     }
-    let amt = amount;
-    if (action === "call" || action === "check" || action === "fold") amt = match.minAmount;
-    if ((action === "bet" || action === "raise" || action === "all_in") && amt == null) amt = match.minAmount;
-    if (match.minAmount != null && amt != null && amt < match.minAmount) amt = match.minAmount;
-    if (match.maxAmount != null && amt != null && amt > match.maxAmount) amt = match.maxAmount;
+    let amtUsd = amount;
+    if (action === "call" || action === "check" || action === "fold") {
+      amtUsd = match.minAmount != null ? chipsToUsd(match.minAmount) : undefined;
+    }
+    if ((action === "bet" || action === "raise" || action === "all_in") && amtUsd == null) {
+      amtUsd = match.minAmount != null ? chipsToUsd(match.minAmount) : undefined;
+    }
+    if (match.minAmount != null && amtUsd != null && usdToChips(amtUsd) < match.minAmount) {
+      amtUsd = chipsToUsd(match.minAmount);
+    }
+    if (match.maxAmount != null && amtUsd != null && usdToChips(amtUsd) > match.maxAmount) {
+      amtUsd = chipsToUsd(match.maxAmount);
+    }
     const resolve = this.pendingHuman.resolve;
     const timer = this.pendingHuman.timer;
     this.pendingHuman = null;
     clearTimeout(timer);
-    resolve({ action, amount: amt, reasonCode: "human" });
+    resolve({ action, amount: amtUsd, reasonCode: "human" });
   }
 
   async actForCurrent() {
@@ -1997,18 +2551,62 @@ export class TableRuntime {
         turnSeconds: TURN_SECONDS,
         humanPlay: HUMAN_PLAY,
       });
-      // WP-126: owner sees ANALYSING while runtime decides (cadence signal until Energy returns).
+      // WP-126: owner sees ANALYSING while runtime decides.
+      const profile = this.agentProfiles.get(seatIndex) ?? "machine";
+      const street = String(this.state.street ?? "preflop");
+      const opponents = this.state.seats.filter(
+        (s) => s.playerId && !s.folded && s.seatIndex !== seatIndex,
+      ).length;
+      const toCallChips =
+        this.state.currentBet > seat.bet ? this.state.currentBet - seat.bet : 0n;
+      const toCall = chipsToUsd(toCallChips);
+      // Deterministic grounding: equity is measured against the opponent's
+      // modelled range, not against a random hand. Falls back to the
+      // vs-random number only when no range model applies (multiway), and the
+      // narration says so rather than passing it off as a range read.
+      const facts = this.decisionFactsFor(seatIndex);
+      const rangeEquity = facts.heroEquityVsRange;
+      const estimatedEquity =
+        rangeEquity != null
+          ? rangeEquity.value * 100
+          : seat.hole?.length === 2 && opponents > 0
+            ? computeHeroEquity(seat.hole, this.state.board, opponents, { samples: 800 })
+            : null;
+      const equityBasis: "range" | "random" | null =
+        rangeEquity != null ? "range" : estimatedEquity != null ? "random" : null;
+      const handLabel =
+        seat.hole?.length === 2 ? personalHandLabel(seat.hole, this.state.board) : null;
+      const narrationOpts = {
+        profileKey: profile,
+        pot: chipsToUsd(this.state.pot),
+        toCall,
+        stack: chipsToUsd(seat.stack),
+        equityPct: estimatedEquity,
+        equityBasis,
+        equityConfidence: rangeEquity?.confidence ?? null,
+        rangeSummary: facts.villain?.rangeSummary ?? null,
+        handLabel,
+        opponents,
+      };
+      const analysingLines = buildPublicThinkingLines({
+        ...narrationOpts,
+        street,
+        action: "think",
+      }).slice(0, 2);
       this.sendOwnerAiCognition(seatIndex, {
         phase: "ANALYSING",
-        energyRemaining: null,
         signalSource: "cadence",
+        publicCadenceMs: PUBLIC_CADENCE_FLOOR_MS || THINK_CADENCE_MIN_MS,
+        modelId: "openai/gpt-oss-120b",
+        publicNarrative: analysingLines[1] ?? analysingLines[0]!,
+        publicThinkingLog: analysingLines,
       });
-      const profile = this.agentProfiles.get(seatIndex) ?? "machine";
       const controller = this.seatControllerFor(seatIndex);
       const botDecision = await controller.decide({
         state: this.state,
         seatIndex,
         profileKey: profile,
+        facts,
         computeRemainingMs: TURN_MS,
         sessionId:
           this.onchainSessionId ??
@@ -2021,12 +2619,45 @@ export class TableRuntime {
         amount: botDecision.amount,
         reasonCode: botDecision.reasonCode,
       };
+      const modelLabel = botDecision.modelId ?? "openai/gpt-oss-120b";
+      const intentLabel =
+        botDecision.amount != null && botDecision.amount > 0
+          ? `${botDecision.action.toUpperCase()} ${botDecision.amount}`
+          : botDecision.action.toUpperCase();
+      const thinkMs = Math.max(
+        PUBLIC_CADENCE_FLOOR_MS,
+        computeThinkCadenceMs({
+          action: botDecision.action,
+          legal: legal.map((l) => ({
+            action: l.action,
+            minAmount: l.minAmount != null ? chipsToUsd(l.minAmount) : undefined,
+            maxAmount: l.maxAmount != null ? chipsToUsd(l.maxAmount) : undefined,
+          })),
+          street,
+          profileKey: profile,
+          modelCadenceMs: botDecision.publicCadenceMs,
+          turnMs: TURN_MS,
+        }),
+      );
+      const thinkingLines = buildPublicThinkingLines({
+        ...narrationOpts,
+        street,
+        action: botDecision.action,
+        amount: botDecision.amount,
+        fallbackUsed: botDecision.fallbackUsed,
+      });
       this.sendOwnerAiCognition(seatIndex, {
         phase: "DECISION_READY",
         energyRemaining: botDecision.energyRemaining ?? null,
-        publicCadenceMs: botDecision.publicCadenceMs ?? null,
+        publicCadenceMs: thinkMs,
         signalSource:
           botDecision.energyRemaining != null ? "cognition" : "cadence",
+        modelId: modelLabel,
+        intentAction: botDecision.action,
+        intentAmount: botDecision.amount ?? null,
+        fallbackUsed: botDecision.fallbackUsed ?? false,
+        publicNarrative: thinkingLines[2] ?? thinkingLines[1]!,
+        publicThinkingLog: thinkingLines.slice(0, 3),
       });
       try {
         const obsHash = hashObservation({
@@ -2056,35 +2687,61 @@ export class TableRuntime {
       } catch (err) {
         console.warn("agent_invocations insert failed", this.tableId, err);
       }
-      // WP-107 / WP-075: wait remaining public cadence on the table clock (client-owned).
-      // Runtime may have already slept (cadenceSleptMs); never double-wait.
-      const cadenceWait =
+      // WP-107 / WP-075: wait remaining public cadence on the table clock.
+      // Easy spots ~5s, hard spots ~13s (profile tempo + model cadence blend).
+      const providerMs = Math.max(0, botDecision.providerLatencyMs ?? botDecision.latencyMs ?? 0);
+      let cadenceWait =
         botDecision.cadenceSleptMs && botDecision.cadenceSleptMs > 0
-          ? 0
-          : Math.max(0, botDecision.cadenceWaitMs ?? 0);
-      if (cadenceWait > 0) {
+          ? Math.max(0, thinkMs - botDecision.cadenceSleptMs - providerMs)
+          : Math.max(0, thinkMs - providerMs);
+      const remaining = Math.max(0, (this.actionDeadlineAt ?? Date.now()) - Date.now() - 250);
+      cadenceWait = Math.min(cadenceWait, remaining, TURN_MS);
+
+      // Stream owner-safe thinking lines across the wait window.
+      const chunkMs = 1_600;
+      let elapsed = 0;
+      let lineIdx = 3;
+      while (elapsed < cadenceWait) {
+        const slice = Math.min(chunkMs, cadenceWait - elapsed);
+        const phase =
+          elapsed + slice >= cadenceWait || lineIdx >= thinkingLines.length - 1
+            ? ("ACTING" as const)
+            : ("DECISION_READY" as const);
+        const logEnd = Math.min(thinkingLines.length, Math.max(3, lineIdx + 1));
         this.sendOwnerAiCognition(seatIndex, {
-          phase: "ACTING",
+          phase,
           energyRemaining: botDecision.energyRemaining ?? null,
-          publicCadenceMs: cadenceWait,
-          signalSource: "cadence",
+          publicCadenceMs: Math.max(0, cadenceWait - elapsed),
+          signalSource:
+            botDecision.publicCadenceMs == null && !botDecision.modelId ? "inferred" : "cadence",
+          modelId: modelLabel,
+          intentAction: botDecision.action,
+          intentAmount: botDecision.amount ?? null,
+          fallbackUsed: botDecision.fallbackUsed ?? false,
+          publicNarrative:
+            thinkingLines[Math.min(lineIdx, thinkingLines.length - 1)] ??
+            `Committing ${intentLabel} on the public clock.`,
+          publicThinkingLog: thinkingLines.slice(0, logEnd),
         });
-        const remaining = Math.max(0, (this.actionDeadlineAt ?? Date.now()) - Date.now() - 250);
-        await sleep(Math.min(cadenceWait, remaining, TURN_MS));
-      } else if (botDecision.publicCadenceMs == null) {
-        // Legacy controllers without cadence metadata.
+        lineIdx += 1;
+        await sleep(slice);
+        elapsed += slice;
+        if (this.state.actingIndex !== seatIndex || this.state.street === "waiting" || !this.state.handId) {
+          return;
+        }
+      }
+      if (cadenceWait <= 0) {
         this.sendOwnerAiCognition(seatIndex, {
           phase: "ACTING",
           energyRemaining: botDecision.energyRemaining ?? null,
-          signalSource: "inferred",
-        });
-        await sleep(Math.min(400, TURN_MS / 4));
-      } else {
-        this.sendOwnerAiCognition(seatIndex, {
-          phase: "ACTING",
-          energyRemaining: botDecision.energyRemaining ?? null,
-          publicCadenceMs: botDecision.publicCadenceMs,
+          publicCadenceMs: thinkMs,
           signalSource: "cadence",
+          modelId: modelLabel,
+          intentAction: botDecision.action,
+          intentAmount: botDecision.amount ?? null,
+          fallbackUsed: botDecision.fallbackUsed ?? false,
+          publicNarrative: thinkingLines[thinkingLines.length - 1]!,
+          publicThinkingLog: thinkingLines,
         });
       }
     } else {
@@ -2097,7 +2754,11 @@ export class TableRuntime {
       const fold = legal.find((l) => l.action === "fold");
       const check = legal.find((l) => l.action === "check");
       const fallback = fold ?? check ?? legal[0];
-      decided = { action: fallback.action, amount: fallback.minAmount, reasonCode: "auto" };
+      decided = {
+        action: fallback.action,
+        amount: fallback.minAmount != null ? chipsToUsd(fallback.minAmount) : undefined,
+        reasonCode: "auto",
+      };
       await sleep(400);
     }
 
@@ -2110,7 +2771,11 @@ export class TableRuntime {
       const fold = legal.find((l) => l.action === "fold");
       const check = legal.find((l) => l.action === "check");
       const fallback = fold ?? check ?? legal[0];
-      decided = { action: fallback.action, amount: fallback.minAmount, reasonCode: "forced_legal" };
+      decided = {
+        action: fallback.action,
+        amount: fallback.minAmount != null ? chipsToUsd(fallback.minAmount) : undefined,
+        reasonCode: "forced_legal",
+      };
     }
 
     this.actionDeadlineAt = null;
@@ -2118,15 +2783,27 @@ export class TableRuntime {
       clearTimeout(this.pendingHuman.timer);
       this.pendingHuman = null;
     }
-    // WP-126: after public commit, owner AI returns to OBSERVING (Energy kept if known).
+    // WP-126: after public commit, owner AI returns to OBSERVING (keep last Energy).
     if (this.agentProfiles.has(seatIndex)) {
       this.sendOwnerAiCognition(seatIndex, {
         phase: "OBSERVING",
-        energyRemaining: null,
         signalSource: "cadence",
+        publicNarrative: "Action complete. Tracking the next board card, pot size, and opponent response.",
       });
     }
-    const { state, events } = applyAction(this.state, decided.action, decided.amount);
+    // Record the public line before the state advances — the range engine
+    // needs the street the action was taken on, not the street after it.
+    this.recordHandAction(
+      seatIndex,
+      decided.action,
+      decided.amount != null ? chipsToNumber(usdToChips(decided.amount)) : undefined,
+      this.state.street,
+    );
+    const { state, events } = applyAction(
+      this.state,
+      decided.action,
+      decided.amount != null ? usdToChips(decided.amount) : undefined,
+    );
     this.state = state;
     try {
       await query(
@@ -2159,11 +2836,14 @@ export class TableRuntime {
     }
     if (ev.type === "HAND_SETTLED") {
       await this.persistEvent(ev.type, ev as unknown as Record<string, unknown>);
+      // Gross awards already equal contested pot (rake is deferred on winner tabs).
+      const awardTotal = (ev.winners ?? []).reduce((sum, w) => sum + chipsToUsd(w.amount), 0);
+      const potAtSettle = awardTotal;
       await query(
         `update hands set status='settled', board=$1::jsonb, pot=$2, street='settlement', seed_reveal=$3, settled_at=now() where id=$4`,
-        [JSON.stringify(this.state.board), this.state.pot, ev.seedReveal, this.state.handId],
+        [JSON.stringify(this.state.board), potAtSettle, ev.seedReveal, this.state.handId],
       );
-      await this.persistCanonicalRootsAfterHand(ev.seedReveal, ev.rake).catch((err) => {
+      await this.persistCanonicalRootsAfterHand(ev.seedReveal, chipsToUsd(ev.rake)).catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn("[wp-108] persistCanonicalRootsAfterHand failed", this.tableId, msg);
         if (requireRealRoots()) {
@@ -2178,7 +2858,7 @@ export class TableRuntime {
       await query(`update hands set board=$1::jsonb, street=$2, pot=$3 where id=$4`, [
         JSON.stringify(this.state.board),
         ev.street,
-        this.state.pot,
+        chipsToUsd(this.state.pot),
         this.state.handId,
       ]);
     }
@@ -2335,7 +3015,8 @@ export class TableRuntime {
           : this.state.seats.findIndex((s) => s.playerId);
       const seatState = this.state.seats.find((s) => s.seatIndex === seatIdx);
       const startLocked = BigInt(row.buy_in_raw);
-      const endChips = seatState?.stack ?? Number(row.buy_in_raw) / 1e6;
+      const endChips =
+        seatState?.stack != null ? chipsToUsd(seatState.stack) : Number(row.buy_in_raw) / 1e6;
       const endBalance = BigInt(Math.round(endChips * 1e6));
       players.push({
         wallet: row.wallet_address as Address,
@@ -2405,16 +3086,22 @@ export class TableRuntime {
           ? Number(row.seat)
           : this.state.seats.find((s) => s.playerId === row.owner_id)?.seatIndex ?? i;
       const seatState = this.state.seats.find((s) => s.seatIndex === seatIdx);
-      const openingChips =
+      const openingUsd =
         this.handOpeningStacks.get(seatIdx) ??
         Number(row.buy_in_raw) / 1e6;
-      const currentChips = seatState?.stack ?? openingChips;
+      const currentUsd =
+        seatState != null ? chipsToUsd(seatState.stack) : openingUsd;
+      // Net-on-award: session rake is tracked on the table, not per-seat tabs.
+      const seatRakeUsd =
+        this.state.sessionRake > 0n
+          ? chipsToUsd(this.state.sessionRake) / Math.max(1, this.state.seats.filter((s) => s.playerId).length)
+          : 0;
       out.push({
         wallet: row.wallet_address as Address,
         seat: seatIdx,
-        openingBalance: BigInt(Math.round(openingChips * 1e6)),
-        currentBalance: BigInt(Math.round(currentChips * 1e6)),
-        cumulativeRake: 0n,
+        openingBalance: BigInt(Math.round(openingUsd * 1e6)),
+        currentBalance: BigInt(Math.round(currentUsd * 1e6)),
+        cumulativeRake: BigInt(Math.round(seatRakeUsd * 1e6)),
       });
     }
     // Seat-order for leaf hash alignment with buildBalanceRoot.
@@ -2427,17 +3114,18 @@ export class TableRuntime {
     const changes: { userId: string; prevStack: number; nextStack: number }[] = [];
     for (const s of this.state.seats) {
       if (!s.playerId) continue;
-      const prev = this.stackBaseline.get(s.playerId) ?? s.stack;
-      changes.push({ userId: s.playerId, prevStack: prev, nextStack: s.stack });
-      this.stackBaseline.set(s.playerId, s.stack);
+      const nextUsd = chipsToUsd(s.stack);
+      const prev = this.stackBaseline.get(s.playerId) ?? nextUsd;
+      changes.push({ userId: s.playerId, prevStack: prev, nextStack: nextUsd });
+      this.stackBaseline.set(s.playerId, nextUsd);
       await query(`update table_seats set stack=$1, updated_at=now() where table_id=$2 and seat_index=$3`, [
-        s.stack,
+        nextUsd,
         this.tableId,
         s.seatIndex,
       ]);
       const sessionId = this.sessions.get(s.playerId);
       if (sessionId) {
-        await query(`update table_sessions set stack=$1 where id=$2`, [s.stack, sessionId]);
+        await query(`update table_sessions set stack=$1 where id=$2`, [nextUsd, sessionId]);
       }
     }
     try {
