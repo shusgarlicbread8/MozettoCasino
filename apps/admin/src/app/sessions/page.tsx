@@ -1,21 +1,30 @@
 import Link from "next/link";
 import { adminFetch } from "@/lib/api";
+import {
+  ControlHealthBadge,
+  ControlPageHeader,
+  ControlTable,
+  type ControlColumn,
+} from "../../components/control";
+import type { ControlHealth } from "../../components/control/types";
 
-type SessionRow = {
-  session_id: string;
-  chain_id: number;
-  game_template_id: string;
+type SessionListItem = {
+  sessionId: string;
+  tableId: string | null;
+  city: { leagueId: string; name: string; smallBlind: string; bigBlind: string } | null;
+  seats: { occupied: number; max: number | null };
+  handNumber: number | null;
   status: string;
-  table_id: string | null;
-  player_count: number;
-  created_at: string;
-  settlement_tx_hash: string | null;
-  last_sequence?: number;
-  engine_hash?: string | null;
-  profile_set_hash?: string | null;
-  latest_randomness_status?: string | null;
-  checkpointAgeSec?: number | null;
-  fallback_invocation_count?: number;
+  lifecycleState: string | null;
+  startedAt: string;
+  durationSec: number | null;
+  lockedFundsRaw: string | null;
+  settlementStatus: string | null;
+  randomnessStatus: string | null;
+  aiHealth: { status: string; fallbackCount: number; invocationCount: number };
+  reviewState: { underReview: boolean; pauseAfterHand: boolean; replayRequested: boolean };
+  checkpointAgeSec: number | null;
+  lastSequence: number;
 };
 
 function ageLabel(sec: number | null | undefined): string {
@@ -25,71 +34,205 @@ function ageLabel(sec: number | null | undefined): string {
   return `${Math.floor(sec / 3600)}h`;
 }
 
+function durationLabel(sec: number | null): string {
+  if (sec == null) return "—";
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+  return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
+}
+
+function aiHealthStatus(status: string): ControlHealth {
+  if (status === "ok") return "HEALTHY";
+  if (status === "degraded") return "DEGRADED";
+  if (status === "critical") return "CRITICAL";
+  return "UNAVAILABLE";
+}
+
+function settlementHealth(status: string | null, sessionStatus: string): ControlHealth {
+  if (status === "confirmed" || sessionStatus === "settled") return "HEALTHY";
+  if (status === "pending" || sessionStatus === "settling") return "PENDING";
+  if (status === "failed" || sessionStatus === "blocked") return "CRITICAL";
+  return status ? "PENDING" : "UNAVAILABLE";
+}
+
+function randomnessHealth(status: string | null): ControlHealth {
+  if (!status) return "UNAVAILABLE";
+  if (status === "fulfilled") return "HEALTHY";
+  if (status === "failed") return "CRITICAL";
+  if (status === "requested" || status === "committed") return "PENDING";
+  return "UNAVAILABLE";
+}
+
+function reviewHealth(review: SessionListItem["reviewState"]): ControlHealth {
+  if (review.pauseAfterHand) return "PAUSED";
+  if (review.underReview) return "UNDER_REVIEW";
+  return "HEALTHY";
+}
+
+const columns: ControlColumn<SessionListItem>[] = [
+  {
+    key: "session",
+    header: "Session",
+    mono: true,
+    render: (s) => (
+      <Link href={`/sessions/${encodeURIComponent(s.sessionId)}`} title={s.sessionId}>
+        {s.sessionId.slice(0, 10)}…
+      </Link>
+    ),
+  },
+  {
+    key: "city",
+    header: "City / stakes",
+    render: (s) =>
+      s.city ? (
+        <span>
+          {s.city.name}{" "}
+          <span className="muted">
+            {s.city.smallBlind}/{s.city.bigBlind}
+          </span>
+        </span>
+      ) : (
+        "—"
+      ),
+  },
+  {
+    key: "status",
+    header: "Status",
+    render: (s) => (
+      <span>
+        {s.status}
+        {s.lifecycleState ? <span className="muted"> · {s.lifecycleState}</span> : null}
+      </span>
+    ),
+  },
+  {
+    key: "hand",
+    header: "Hand",
+    render: (s) => (s.handNumber != null ? String(s.handNumber) : "—"),
+  },
+  {
+    key: "seats",
+    header: "Seats",
+    render: (s) =>
+      s.seats.max != null ? `${s.seats.occupied}/${s.seats.max}` : String(s.seats.occupied),
+  },
+  {
+    key: "settlement",
+    header: "Settlement",
+    render: (s) => (
+      <ControlHealthBadge
+        status={settlementHealth(s.settlementStatus, s.status)}
+        label={s.settlementStatus ?? s.status}
+      />
+    ),
+  },
+  {
+    key: "randomness",
+    header: "Randomness",
+    render: (s) => (
+      <ControlHealthBadge
+        status={randomnessHealth(s.randomnessStatus)}
+        label={s.randomnessStatus ?? "none"}
+      />
+    ),
+  },
+  {
+    key: "ai",
+    header: "AI",
+    render: (s) => (
+      <ControlHealthBadge
+        status={aiHealthStatus(s.aiHealth.status)}
+        label={
+          s.aiHealth.invocationCount > 0
+            ? `${s.aiHealth.status} (${s.aiHealth.fallbackCount} fb)`
+            : s.aiHealth.status
+        }
+      />
+    ),
+  },
+  {
+    key: "review",
+    header: "Review",
+    render: (s) => <ControlHealthBadge status={reviewHealth(s.reviewState)} />,
+  },
+  {
+    key: "checkpoint",
+    header: "Checkpoint",
+    render: (s) => ageLabel(s.checkpointAgeSec),
+  },
+  {
+    key: "duration",
+    header: "Duration",
+    render: (s) => durationLabel(s.durationSec),
+  },
+];
+
 export default async function SessionsPage() {
-  let sessions: SessionRow[] = [];
+  let sessions: SessionListItem[] = [];
+  let generatedAt: string | null = null;
   let error: string | null = null;
   try {
-    const data = await adminFetch<{ sessions: SessionRow[] }>("/v1/admin/sessions?limit=100");
+    const data = await adminFetch<{ sessions: SessionListItem[]; generatedAt?: string }>(
+      "/v1/admin/sessions?limit=100",
+    );
     sessions = data.sessions;
+    generatedAt = data.generatedAt ?? null;
   } catch (e) {
     error = e instanceof Error ? e.message : "fetch failed";
   }
 
-  const webOrigin = process.env.WEB_ORIGIN ?? "http://localhost:3000";
+  const activeCount = sessions.filter((s) =>
+    ["opened", "playing", "settling"].includes(s.status),
+  ).length;
+  const underReviewCount = sessions.filter((s) => s.reviewState.underReview).length;
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold">Sessions</h1>
-        <p className="muted text-sm mt-1">
-          Investigation view — state, participants, checkpoint age, VRF status. No stack edits or
-          settlement mutation.
-        </p>
+    <div>
+      <ControlPageHeader
+        title="Sessions"
+        description="Live and historical on-chain sessions — city, hand, AI, settlement, and randomness from existing DB joins. No stack edits."
+        status={error ? "UNAVAILABLE" : activeCount > 0 ? "HEALTHY" : "PENDING"}
+      />
+
+      {error ? (
+        <div className="card badge-err text-sm" style={{ marginBottom: 16 }}>
+          {error}
+        </div>
+      ) : null}
+
+      <div className="ctrl-metric-grid" style={{ marginBottom: 16 }}>
+        <div className="ctrl-metric">
+          <div className="ctrl-metric-label">Active</div>
+          <div className="ctrl-metric-value">{activeCount}</div>
+        </div>
+        <div className="ctrl-metric">
+          <div className="ctrl-metric-label">Listed</div>
+          <div className="ctrl-metric-value">{sessions.length}</div>
+        </div>
+        <div className="ctrl-metric">
+          <div className="ctrl-metric-label">Under review</div>
+          <div className="ctrl-metric-value">{underReviewCount}</div>
+        </div>
+        {generatedAt ? (
+          <div className="ctrl-metric">
+            <div className="ctrl-metric-label">Snapshot</div>
+            <div className="ctrl-metric-value" style={{ fontSize: 13 }}>
+              {new Date(generatedAt).toLocaleTimeString()}
+            </div>
+          </div>
+        ) : null}
       </div>
-      {error && <div className="card badge-err text-sm">{error}</div>}
-      <div className="card overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="text-left muted">
-              <th className="pb-2 pr-3">Session</th>
-              <th className="pr-3">Status</th>
-              <th className="pr-3">Players</th>
-              <th className="pr-3">Seq</th>
-              <th className="pr-3">Checkpoint</th>
-              <th className="pr-3">VRF</th>
-              <th className="pr-3">Fallbacks</th>
-              <th>Links</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sessions.map((s) => (
-              <tr key={s.session_id} className="border-t border-[#2a2a2a]">
-                <td className="py-2 pr-3 font-mono max-w-[160px] truncate" title={s.session_id}>
-                  <Link href={`/sessions/${encodeURIComponent(s.session_id)}`}>{s.session_id}</Link>
-                </td>
-                <td className="pr-3">{s.status}</td>
-                <td className="pr-3">{s.player_count}</td>
-                <td className="pr-3">{s.last_sequence ?? "—"}</td>
-                <td className="pr-3 muted">{ageLabel(s.checkpointAgeSec)}</td>
-                <td className="pr-3">{s.latest_randomness_status ?? "—"}</td>
-                <td className="pr-3">{s.fallback_invocation_count ?? 0}</td>
-                <td className="space-x-2">
-                  <Link href={`/sessions/${encodeURIComponent(s.session_id)}`}>detail</Link>
-                  <Link href={`${webOrigin}/verify/${s.session_id}`} target="_blank">
-                    verify
-                  </Link>
-                </td>
-              </tr>
-            ))}
-            {!sessions.length && !error && (
-              <tr>
-                <td colSpan={8} className="py-4 muted">
-                  No sessions yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+
+      <ControlTable
+        columns={columns}
+        rows={sessions}
+        rowKey={(s) => s.sessionId}
+        empty="No sessions yet."
+        error={error}
+      />
+
+      <div className="ctrl-stub-note" style={{ marginTop: 16 }}>
+        Pause-after-hand and under-review flags are operational overlays — the current hand always
+        completes before pause takes effect (MC-062).
       </div>
     </div>
   );

@@ -13,9 +13,9 @@
 
 | Field | Value |
 |---|---|
-| **Active wave** | **C0 → C1** (baseline ship, then wallet auth) |
-| **Active packets** | MC-000 `IN_PROGRESS` → MC-001 + MC-010…015 |
-| **Baseline SHA** | _(pending MC-000 push)_ |
+| **Active wave** | **C5 Risk + C8 Protocol** (C0–C4/C7 largely DONE) |
+| **Active packets** | MC-050+; MC-080+; MC-046 export; C6 drain/resume |
+| **Baseline SHA** | `6b7ab332de11e24ead3549eaea2c0b04dcf61df4` |
 | **Superadmin allowlist** | Env `ADMIN_SUPERADMIN_ADDRESSES` only — never hardcode wallet in app code |
 | **App** | Evolve `apps/admin` @ `:3001` into Mozetto Control |
 | **Hard stops** | No Protocol/Treasury Safe keys in browser; no set-balance endpoints; no mid-hand card/stack/profile rewrite |
@@ -26,14 +26,14 @@
 
 | Phase | Name | Status | Notes |
 |---|---|---|---|
-| 0 | Ship poker baseline | `IN_PROGRESS` | Migrations through `036`; commit/push next |
-| 1 | Wallet-gated admin identity | `NOT_STARTED` | Plan `02`; wave C1 |
-| 2 | Control shell & IA | `NOT_STARTED` | Plan `03`; wave C2 |
-| 3 | Command Center | `NOT_STARTED` | Plan `04`; wave C3 |
-| 4 | Economics / treasury / P&L | `NOT_STARTED` | Plan `05`; wave C4 |
-| 5 | Players / risk / support | `NOT_STARTED` | Plan `06`; wave C5 |
-| 6 | Table / session / MM ops | `NOT_STARTED` | Plan `07`; wave C6 |
-| 7 | AI model & agent ops | `NOT_STARTED` | Plan `08`; wave C7 |
+| 0 | Ship poker baseline | `DONE` | `6b7ab33`; migrate `036` applied; plans + tracker in repo |
+| 1 | Wallet-gated admin identity | `DONE` | Wave C1 MC-010–015; migration `037`, SIWE routes, admin login |
+| 2 | Control shell & IA | `DONE` | Shell, primitives, search, IA routes; existing pages inherit rail |
+| 3 | Command Center | `DONE` | MC-030–033 overview API + hero UI + thresholds |
+| 4 | Economics / treasury / P&L | `DONE` | MC-040–045; city econ + players; export MC-046 remaining |
+| 5 | Players / risk / support | `IN_PROGRESS` | Player list/detail (C4); integrity/restrictions C5 |
+| 6 | Table / session / MM ops | `IN_PROGRESS` | MC-060/061/065 DONE; drain/resume remaining |
+| 7 | AI model & agent ops | `DONE` | MC-070–074 DONE; mutate controls MC-075/076 remaining |
 | 8 | Chain / solvency / randomness / proofs | `NOT_STARTED` | Plan `09`; wave C8 |
 | 9 | Governance & mutation controls | `NOT_STARTED` | Plan `10`; wave C9 |
 | 10 | Incidents / security / audit | `NOT_STARTED` | Plan `11`; wave C10 |
@@ -74,49 +74,49 @@ MC-000 baseline → MC-001 manifest
 
 | Packet | Status | Evidence / notes |
 |---|---|---|
-| MC-000 Ship current baseline | `IN_PROGRESS` | `pnpm db:migrate` applied `036_ai_activity_feed.sql`; commit+push pending |
-| MC-001 Control architecture manifest | `NOT_STARTED` | Map existing admin routes/APIs/DB/roles → `docs/MOZETTO_CONTROL_ARCHITECTURE.md` |
+| MC-000 Ship current baseline | `DONE` | `pnpm db:migrate` → `036`; commit `6b7ab33` pushed to `origin/main` |
+| MC-001 Control architecture manifest | `DONE` | Evidence: [`docs/MOZETTO_CONTROL_ARCHITECTURE.md`](MOZETTO_CONTROL_ARCHITECTURE.md) — routes, `/v1/admin/*`, DB, auth, ops/governance, IA gaps, evolve-file list |
 
 ### Wave C1 — Authentication
 
 | Packet | Status | Evidence / notes |
 |---|---|---|
-| MC-010 Admin SIWE nonce service | `NOT_STARTED` | |
-| MC-011 Admin SIWE verify/session | `NOT_STARTED` | |
-| MC-012 Admin session revoke/logout | `NOT_STARTED` | |
-| MC-013 Role/capability engine | `NOT_STARTED` | |
-| MC-014 Break-glass token compatibility | `NOT_STARTED` | |
-| MC-015 Auth test suite | `NOT_STARTED` | |
+| MC-010 Admin SIWE nonce service | `DONE` | `GET /v1/admin/auth/nonce`; table `admin_siwe_nonces`; `services/api/src/admin-wallet-auth.ts` |
+| MC-011 Admin SIWE verify/session | `DONE` | `POST /v1/admin/auth/verify`; `admin_sessions` + `mozetto_admin_session` cookie; `ADMIN_SESSION_SECRET` |
+| MC-012 Admin session revoke/logout | `DONE` | `POST /v1/admin/auth/logout`; revokes `admin_sessions`; clears cookie |
+| MC-013 Role/capability engine | `DONE` | Control roles + `controlCapabilities`; extended `admin_principals` CHECK in `037` |
+| MC-014 Break-glass token compatibility | `DONE` | `x-admin-token` / `admin_token` + `?breakglass=1` UI; token audit `admin.auth.token_used` |
+| MC-015 Auth test suite | `DONE` | `services/api/src/admin-auth.test.ts`, `admin-wallet-auth.test.ts`; `pnpm --filter @mozetto/api test` |
 
 ### Wave C2 — Shell
 
 | Packet | Status | Evidence / notes |
 |---|---|---|
-| MC-020 ControlShell | `NOT_STARTED` | |
-| MC-021 Shared UI primitives | `NOT_STARTED` | |
-| MC-022 Existing page reshell | `NOT_STARTED` | |
-| MC-023 Global search | `NOT_STARTED` | |
-| MC-024 Staleness/source UX | `NOT_STARTED` | |
+| MC-020 ControlShell | `DONE` | `apps/admin/src/components/control/ControlShell.tsx` — rail/header/footer; skips `/login` |
+| MC-021 Shared UI primitives | `DONE` | Metric/Table/Health/Range/PageHeader/DangerAction under `components/control/` |
+| MC-022 Existing page reshell | `DONE` | Layout ControlShell; sessions/AI/economics/command center use primitives |
+| MC-023 Global search | `DONE` | `ControlGlobalSearch` in topbar — wallet/session/tx/incident heuristics → routes |
+| MC-024 Staleness/source UX | `DONE` | Metric cards require source/lastUpdated/status; stale table banner; health badges |
 
 ### Wave C3 — Command Center
 
 | Packet | Status | Evidence / notes |
 |---|---|---|
-| MC-030 Admin overview API | `NOT_STARTED` | |
-| MC-031 Command Center UI | `NOT_STARTED` | |
-| MC-032 Service health registry | `NOT_STARTED` | |
-| MC-033 Alert thresholds | `NOT_STARTED` | |
+| MC-030 Admin overview API | `DONE` | Deepened `GET /v1/admin/overview?range=1d\|7d\|30d` — `services/api/src/admin-overview.ts`; component health + bounded parallel fanout |
+| MC-031 Command Center UI | `DONE` | `apps/admin/src/app/page.tsx` — CEO strip (solvency, play, economics, settlement, incidents, AI) + service topology |
+| MC-032 Service health registry | `DONE` | `overview.services[]` — version from package.json + `/health` probe (api/game/agent/dealer/replay/indexer) |
+| MC-033 Alert thresholds | `DONE` | `services/api/src/admin-thresholds.ts` — indexer lag/stale, settlement age/queue, VRF pending, AI fallback/p95; wired into component status |
 
 ### Wave C4 — Economics
 
 | Packet | Status | Evidence / notes |
 |---|---|---|
-| MC-040 Canonical admin economics schema | `NOT_STARTED` | |
-| MC-041 City economics API | `NOT_STARTED` | |
-| MC-042 Economics UI | `NOT_STARTED` | |
-| MC-043 Player stats read model | `NOT_STARTED` | |
-| MC-044 Player list API/UI | `NOT_STARTED` | |
-| MC-045 Player detail P&L | `NOT_STARTED` | |
+| MC-040 Canonical admin economics schema | `DONE` | `services/api/src/admin-economics-schema.ts` — USD micro fields + availability types |
+| MC-041 City economics API | `DONE` | `GET /v1/admin/economics/cities`; `admin-economics-cities.ts` |
+| MC-042 Economics UI | `DONE` | City table via `ControlTable` on `/economics`; metric cards retained |
+| MC-043 Player stats read model | `DONE` | Migration `038_admin_player_stats_v1.sql` — view over profiles/ledger/sessions |
+| MC-044 Player list API/UI | `DONE` | `GET /v1/admin/players`; `apps/admin/src/app/players/page.tsx` |
+| MC-045 Player detail P&L | `DONE` | `GET /v1/admin/players/:id`; `apps/admin/src/app/players/[id]/page.tsx` |
 | MC-046 Export audit | `NOT_STARTED` | |
 
 ### Wave C5 — Player risk/support
@@ -133,23 +133,23 @@ MC-000 baseline → MC-001 manifest
 
 | Packet | Status | Evidence / notes |
 |---|---|---|
-| MC-060 Sessions v2 list | `NOT_STARTED` | |
-| MC-061 Session detail v2 | `NOT_STARTED` | |
-| MC-062 Pause-after-hand E2E | `NOT_STARTED` | |
+| MC-060 Sessions v2 list | `DONE` | `GET /v1/admin/sessions` enriched fields + ControlTable list UI |
+| MC-061 Session detail v2 | `DONE` | `GET /v1/admin/session/:id` sections + reshelled detail page |
+| MC-062 Pause-after-hand E2E | `PARTIAL` | Ops POST audited; UI documents hand-boundary semantics; game-server consumption tracked separately |
 | MC-063 Drain table/city | `NOT_STARTED` | |
 | MC-064 Resume safety gate | `NOT_STARTED` | |
-| MC-065 Matchmaking cockpit | `NOT_STARTED` | |
+| MC-065 Matchmaking cockpit | `DONE` | `GET /v1/admin/matchmaking` + matchmaking page wired |
 
 ### Wave C7 — AI operations
 
 | Packet | Status | Evidence / notes |
 |---|---|---|
-| MC-070 AI economics/latency API | `NOT_STARTED` | |
-| MC-071 AI health page v2 | `NOT_STARTED` | |
-| MC-072 Policy/version inventory | `NOT_STARTED` | |
-| MC-073 AgentState persistence health | `NOT_STARTED` | |
-| MC-074 AI activity feed diagnostics | `NOT_STARTED` | |
-| MC-075 Provider disable safe control | `NOT_STARTED` | |
+| MC-070 AI economics/latency API | `DONE` | `GET /v1/admin/ai/economics` — provider/model/profile/city breakdown + agent-runtime COGS merge (`services/api/src/admin-ai.ts`) |
+| MC-071 AI health page v2 | `DONE` | `apps/admin/src/app/ai/page.tsx` — Control primitives, SLOs, fallback, Energy, COGS, UNAVAILABLE when missing |
+| MC-072 Policy/version inventory | `DONE` | `GET /v1/admin/ai/deployments` — agent-runtime /health + profile/session hash inventory |
+| MC-073 AgentState persistence health | `DONE` | `GET /v1/admin/ai/agent-state` — store backend, lag, checkpoint counts (no raw state_json) |
+| MC-074 AI activity feed diagnostics | `DONE` | `GET /v1/admin/ai/activity-feed` — event counts, latest seq, sequence gap signals |
+| MC-075 Provider disable safe control | `NOT_STARTED` | Stub note on AI Ops page — read-only pass; needs audited `ai.disable_provider` feature-flag path |
 | MC-076 AI policy rollback workflow | `NOT_STARTED` | |
 
 ### Wave C8 — Protocol operations
@@ -202,7 +202,12 @@ MC-000 baseline → MC-001 manifest
 
 | When | Wave | Notes |
 |---|---|---|
-| 2026-08-08 | C0 | Created tracker; applied migration `036` via `pnpm db:migrate`; preparing baseline commit |
+| 2026-08-08 | C0 | Tracker created; `036` migrated; baseline `6b7ab33` pushed |
+| 2026-08-08 | C1 | Launching MC-001 + C1 (MC-010–015) subagents in parallel |
+| 2026-08-08 | C0/C1 | MC-001 DONE — architecture manifest at `docs/MOZETTO_CONTROL_ARCHITECTURE.md` |
+| 2026-08-08 | C1 | MC-010–015 DONE — migration `037`, SIWE auth API, admin wallet login, tests |
+| 2026-08-08 | C4 | MC-040–045 DONE — economics schema, city API, player view `038`, players UI |
+| 2026-08-08 | C3 | MC-030–033 — overview API, Command Center hero UI, service registry probes, alert thresholds |
 
 ---
 

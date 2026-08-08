@@ -37,3 +37,21 @@ export function sessionCookieOpts() {
     maxAge: 60 * 60 * 24 * 30,
   };
 }
+
+/** Mozetto Control admin session cookie (distinct from player mozetto_session). */
+export function adminSessionCookieOpts() {
+  const crossSite = (process.env.COOKIE_SAMESITE || "").toLowerCase() === "none";
+  const secure =
+    process.env.COOKIE_SECURE === "1" ||
+    process.env.NODE_ENV === "production" ||
+    crossSite;
+  const ttlHours = Number(process.env.ADMIN_SESSION_TTL_HOURS ?? 6);
+  const maxAge = Math.min(Math.max(ttlHours, 1), 24) * 60 * 60;
+  return {
+    path: "/",
+    httpOnly: true as const,
+    sameSite: "strict" as const,
+    secure,
+    maxAge,
+  };
+}

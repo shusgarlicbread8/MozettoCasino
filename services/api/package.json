@@ -7,7 +7,7 @@
     "dev": "tsx watch --env-file=../../.env.local src/index.ts",
     "start": "tsx src/index.ts",
     "start:local": "tsx --env-file=../../.env.local src/index.ts",
-    "test": "tsx --test src/verify-status.test.ts src/admin-ops.test.ts src/admin-auth.test.ts src/city-league-bits.test.ts",
+    "test": "tsx --test src/verify-status.test.ts src/admin-ops.test.ts src/admin-auth.test.ts src/admin-wallet-auth.test.ts src/admin-thresholds.test.ts src/admin-ai.test.ts src/city-league-bits.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -61,8 +61,12 @@ export function SessionOpsActions({
     <div className="card space-y-3 text-xs">
       <h2 className="text-sm font-semibold">Privileged ops (mutate role)</h2>
       <p className="muted">
-        Narrow Plan 13 actions only — no stack/balance edits. Requires{" "}
-        <code>ADMIN_MUTATE_TOKEN</code> or <code>ADMIN_TOKEN</code>. Each call appends an audit row.
+        Narrow Plan 13 actions only — no stack/balance edits. Each call appends an audit row via{" "}
+        <code>POST /v1/admin/sessions/:id/ops</code>.
+      </p>
+      <p className="muted">
+        <strong>Pause after hand:</strong> the current hand always completes; the next hand is not
+        dealt and the table enters PAUSED. Never aborts a healthy in-progress hand.
       </p>
       <div className="flex flex-wrap gap-3">
         <span className={ops.pauseAfterHand ? "badge-warn" : "muted"}>

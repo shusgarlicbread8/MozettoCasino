@@ -1,95 +1,128 @@
 import Link from "next/link";
 import { SessionOpsActions } from "@/components/SessionOpsActions";
 import { adminFetch } from "@/lib/api";
+import {
+  ControlHealthBadge,
+  ControlMetricCard,
+  ControlPageHeader,
+  ControlTable,
+  type ControlColumn,
+} from "../../../components/control";
+import type { ControlHealth } from "../../../components/control/types";
+
+type Participant = {
+  wallet_address: string;
+  seat: number | null;
+  buy_in_raw: string;
+  agent_profile_hash: string | null;
+};
 
 type SessionDetail = {
   readOnly: boolean;
   note?: string;
+  generatedAt?: string;
   ops?: {
     pauseAfterHand: boolean;
     underReview: boolean;
     replayRequested: boolean;
   };
-  session: {
-    session_id: string;
-    status: string;
-    chain_id: number;
-    game_template_id: string;
-    table_id: string | null;
-    dealer_root: string | null;
-    engine_hash: string | null;
-    profile_set_hash: string | null;
-    last_sequence: number;
-    last_balance_root: string | null;
-    last_event_root: string | null;
-    settlement_tx_hash: string | null;
-    created_at: string;
-    opened_at: string | null;
-    settled_at: string | null;
+  session: { session_id: string; status: string };
+  sections: {
+    overview: {
+      status: string;
+      lifecycleState: string | null;
+      gameTemplateId: string;
+      engineHash: string | null;
+      profileSetHash: string | null;
+      tableId: string | null;
+      city: { leagueId: string; name: string; smallBlind: string; bigBlind: string } | null;
+      participants: Participant[];
+      currentHandNumber: number | null;
+      lastSequence: number;
+      checkpointAgeSec: number | null;
+      durationSec: number | null;
+      settlementTxHash: string | null;
+    };
+    money: {
+      lockedFundsRaw: string | null;
+      cumulativeRake: string | null;
+      settlementProposals: Array<{
+        id: string;
+        status: string;
+        final_sequence: number;
+        attestor_count: number;
+      }>;
+      latestBalanceLeaves: Array<{ wallet_address: string; table_balance: string; seat: number | null }>;
+    };
+    ai: {
+      health: string;
+      fallbackCount: number;
+      invocationCount: number;
+      fallbackRate: number;
+      latency: { p50: number | null; p95: number | null };
+      recentInvocations: Array<{
+        id: string;
+        model_id: string | null;
+        fallback_used: boolean;
+        latency_ms: number | null;
+        legal_action: string | null;
+      }>;
+    };
+    randomness: {
+      dealerCommitment: { dealer_root: string; secret_count: number } | null;
+      epochs: Array<{ epoch_id: string; status: string; health: string; created_at: string }>;
+    };
+    proofs: {
+      inclusionProofs: Array<{ batch_sequence: number; checkpoint_root: string; proof_batch_hash: string }>;
+      verificationPackages: Array<{ package_id: string; status: string }>;
+      publicVerifyPath: string;
+    };
   };
-  checkpointAgeSec: number | null;
-  players: Array<{
-    wallet_address: string;
-    seat: number | null;
-    buy_in_raw: string;
-    controller_hash: string | null;
-    agent_profile_hash: string | null;
-  }>;
-  checkpoints: Array<{
-    sequence: number;
-    hand_number: number | null;
-    event_root: string;
-    balance_root: string;
-    randomness_epoch: string | null;
-    created_at: string;
-  }>;
-  settlementProposals: Array<{
-    id: string;
-    status: string;
-    final_sequence: number;
-    attestor_count: number;
-    created_at: string;
-  }>;
-  dealerCommitment: {
-    dealer_root: string;
-    secret_count: number;
-    revealed_after_settlement: boolean;
-  } | null;
-  randomnessEpochs: Array<{
-    epoch_id: string;
-    status: string;
-    health: string;
-    dealer_root: string;
-    vrf_request_id: string | null;
-    fulfill_tx: string | null;
-    created_at: string;
-  }>;
-  recentInvocations: Array<{
-    id: string;
-    model_id: string | null;
-    fallback_used: boolean;
-    latency_ms: number | null;
-    legal_action: string | null;
-    created_at: string;
-  }>;
-  tableEpochs: Array<{
-    epoch_number: number;
-    status: string;
-    opened_at: string;
-  }>;
-  emergencyExits: Array<{
-    id: string;
-    wallet_address: string;
-    status: string;
-    created_at: string;
-  }>;
+  tableEpochs: Array<{ epoch_number: number; status: string }>;
+  emergencyExits: Array<{ id: string; status: string; wallet_address: string }>;
 };
 
-function badge(health: string): string {
-  if (health === "healthy" || health === "ok") return "badge-ok";
-  if (health === "pending" || health === "degraded" || health === "stale") return "badge-warn";
-  return "badge-err";
+function aiHealth(status: string): ControlHealth {
+  if (status === "ok") return "HEALTHY";
+  if (status === "degraded") return "DEGRADED";
+  if (status === "critical") return "CRITICAL";
+  return "UNAVAILABLE";
 }
+
+function randomnessHealth(health: string): ControlHealth {
+  if (health === "healthy") return "HEALTHY";
+  if (health === "pending") return "PENDING";
+  if (health === "stale") return "STALE";
+  if (health === "failed") return "CRITICAL";
+  return "UNAVAILABLE";
+}
+
+function formatAtoms(raw: string | null): string {
+  if (!raw) return "—";
+  try {
+    const n = Number(BigInt(raw)) / 1_000_000;
+    return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  } catch {
+    return raw;
+  }
+}
+
+const participantColumns: ControlColumn<Participant>[] = [
+  { key: "seat", header: "Seat", render: (p) => (p.seat ?? "—") },
+  {
+    key: "wallet",
+    header: "Wallet",
+    mono: true,
+    render: (p) => <span title={p.wallet_address}>{p.wallet_address.slice(0, 12)}…</span>,
+  },
+  { key: "buyin", header: "Buy-in (raw)", mono: true, render: (p) => p.buy_in_raw },
+  {
+    key: "profile",
+    header: "Agent profile",
+    mono: true,
+    render: (p) => (p.agent_profile_hash ? `${p.agent_profile_hash.slice(0, 10)}…` : "—"),
+  },
+];
 
 export default async function SessionDetailPage({
   params,
@@ -107,49 +140,71 @@ export default async function SessionDetailPage({
     error = e instanceof Error ? e.message : "fetch failed";
   }
 
-  const webOrigin = process.env.WEB_ORIGIN ?? "http://localhost:3000";
-  const s = data?.session;
+  const ov = data?.sections.overview;
+  const money = data?.sections.money;
+  const ai = data?.sections.ai;
+  const rnd = data?.sections.randomness;
+  const proofs = data?.sections.proofs;
+
+  const pageStatus: ControlHealth = error
+    ? "UNAVAILABLE"
+    : data?.ops?.pauseAfterHand
+      ? "PAUSED"
+      : data?.ops?.underReview
+        ? "UNDER_REVIEW"
+        : ov?.status === "playing"
+          ? "HEALTHY"
+          : "PENDING";
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-baseline gap-4">
-        <Link href="/sessions" className="text-sm muted">
-          ← Sessions
-        </Link>
-        <h1 className="text-xl font-semibold truncate" title={sessionId}>
-          Session
-        </h1>
-      </div>
-      {error && <div className="card badge-err text-sm">{error}</div>}
-      {data?.note && <p className="muted text-xs">{data.note}</p>}
+    <div>
+      <ControlPageHeader
+        title={`Session ${sessionId.slice(0, 12)}…`}
+        description="Overview, money, AI, randomness, and proof links from existing joins. Current hand is immutable — pause applies after hand boundary."
+        status={pageStatus}
+        actions={
+          <Link href="/sessions" className="ctrl-btn">
+            ← Sessions
+          </Link>
+        }
+      />
 
-      {data && s && (
+      {error ? <div className="card badge-err text-sm">{error}</div> : null}
+      {data?.note ? <p className="ctrl-page-desc">{data.note}</p> : null}
+
+      {data && ov && (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="card">
-              <div className="muted text-xs uppercase mb-1">Status</div>
-              <div>{s.status}</div>
-            </div>
-            <div className="card">
-              <div className="muted text-xs uppercase mb-1">Sequence</div>
-              <div>{s.last_sequence}</div>
-            </div>
-            <div className="card">
-              <div className="muted text-xs uppercase mb-1">Checkpoint age</div>
-              <div>
-                {data.checkpointAgeSec != null ? `${data.checkpointAgeSec}s` : "—"}
-              </div>
-            </div>
-            <div className="card">
-              <div className="muted text-xs uppercase mb-1">Public verify</div>
-              <Link href={`${webOrigin}/verify/${s.session_id}`} target="_blank">
-                open
-              </Link>
-            </div>
+          <div className="ctrl-metric-grid">
+            <ControlMetricCard label="Status" value={ov.status} status="PENDING" />
+            <ControlMetricCard
+              label="Hand"
+              value={ov.currentHandNumber != null ? `#${ov.currentHandNumber}` : "—"}
+              source="session_checkpoints"
+            />
+            <ControlMetricCard
+              label="Sequence"
+              value={String(ov.lastSequence)}
+              source="onchain_sessions"
+            />
+            <ControlMetricCard
+              label="Checkpoint age"
+              value={ov.checkpointAgeSec != null ? `${ov.checkpointAgeSec}s` : "—"}
+              status={ov.checkpointAgeSec != null && ov.checkpointAgeSec > 120 ? "STALE" : "HEALTHY"}
+            />
+            <ControlMetricCard
+              label="Locked funds"
+              value={formatAtoms(money?.lockedFundsRaw ?? null)}
+              source="buy_in_raw sum"
+            />
+            <ControlMetricCard
+              label="AI health"
+              value={ai?.health ?? "—"}
+              status={ai ? aiHealth(ai.health) : "UNAVAILABLE"}
+            />
           </div>
 
           <SessionOpsActions
-            sessionId={s.session_id}
+            sessionId={data.session.session_id}
             initialOps={{
               pauseAfterHand: data.ops?.pauseAfterHand ?? false,
               underReview: data.ops?.underReview ?? false,
@@ -157,140 +212,159 @@ export default async function SessionDetailPage({
             }}
           />
 
-          <div className="card text-xs space-y-2">
-            <h2 className="text-sm font-semibold">Commitments</h2>
-            <div>
-              <span className="muted">session id </span>
-              <span className="font-mono break-all">{s.session_id}</span>
+          <section className="card" style={{ marginTop: 16 }}>
+            <h2 className="text-sm font-semibold mb-2">Overview</h2>
+            <div className="text-xs space-y-1">
+              {ov.city ? (
+                <div>
+                  <span className="muted">City </span>
+                  {ov.city.name} ({ov.city.smallBlind}/{ov.city.bigBlind})
+                </div>
+              ) : null}
+              <div>
+                <span className="muted">Template </span>
+                <span className="font-mono">{ov.gameTemplateId}</span>
+              </div>
+              {ov.lifecycleState ? (
+                <div>
+                  <span className="muted">Lifecycle </span>
+                  {ov.lifecycleState}
+                </div>
+              ) : null}
+              {ov.tableId ? (
+                <div>
+                  <span className="muted">Table </span>
+                  <span className="font-mono">{ov.tableId}</span>
+                </div>
+              ) : null}
             </div>
-            <div>
-              <span className="muted">template </span>
-              <span className="font-mono break-all">{s.game_template_id}</span>
-            </div>
-            <div>
-              <span className="muted">engine </span>
-              <span className="font-mono break-all">{s.engine_hash ?? "—"}</span>
-            </div>
-            <div>
-              <span className="muted">profile set </span>
-              <span className="font-mono break-all">{s.profile_set_hash ?? "—"}</span>
-            </div>
-            <div>
-              <span className="muted">dealer root </span>
-              <span className="font-mono break-all">
-                {data.dealerCommitment?.dealer_root ?? s.dealer_root ?? "—"}
-              </span>
-            </div>
-          </div>
+            <h3 className="text-xs font-semibold mt-4 mb-2">Participants</h3>
+            <ControlTable
+              columns={participantColumns}
+              rows={ov.participants}
+              rowKey={(p) => p.wallet_address}
+              empty="No players."
+            />
+          </section>
 
-          <div className="card overflow-x-auto">
-            <h2 className="text-sm font-semibold mb-2">Participants</h2>
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-left muted">
-                  <th className="pb-2 pr-3">Seat</th>
-                  <th className="pr-3">Wallet</th>
-                  <th className="pr-3">Buy-in</th>
-                  <th>Profile</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.players.map((p) => (
-                  <tr key={p.wallet_address} className="border-t border-[#2a2a2a]">
-                    <td className="py-2 pr-3">{p.seat ?? "—"}</td>
-                    <td className="pr-3 font-mono truncate max-w-[180px]">{p.wallet_address}</td>
-                    <td className="pr-3">{p.buy_in_raw}</td>
-                    <td className="font-mono truncate max-w-[140px]">
-                      {p.agent_profile_hash ?? "—"}
-                    </td>
-                  </tr>
-                ))}
-                {!data.players.length && (
-                  <tr>
-                    <td colSpan={4} className="py-3 muted">
-                      No players.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="card overflow-x-auto">
-            <h2 className="text-sm font-semibold mb-2">Randomness epochs</h2>
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-left muted">
-                  <th className="pb-2 pr-3">Epoch</th>
-                  <th className="pr-3">Status</th>
-                  <th className="pr-3">Health</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.randomnessEpochs.map((e) => (
-                  <tr key={e.epoch_id} className="border-t border-[#2a2a2a]">
-                    <td className="py-2 pr-3 font-mono truncate max-w-[140px]">{e.epoch_id}</td>
-                    <td className="pr-3">{e.status}</td>
-                    <td className={`pr-3 ${badge(e.health)}`}>{e.health}</td>
-                    <td className="muted">{new Date(e.created_at).toLocaleString()}</td>
-                  </tr>
-                ))}
-                {!data.randomnessEpochs.length && (
-                  <tr>
-                    <td colSpan={4} className="py-3 muted">
-                      No randomness requests.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="card overflow-x-auto">
-              <h2 className="text-sm font-semibold mb-2">Settlement / attestors</h2>
-              {data.settlementProposals.length === 0 ? (
-                <p className="muted text-xs">No proposals.</p>
-              ) : (
-                <ul className="text-xs space-y-2">
-                  {data.settlementProposals.map((p) => (
-                    <li key={p.id} className="border-t border-[#2a2a2a] pt-2">
-                      <span className={badge(p.status === "confirmed" ? "ok" : "pending")}>
-                        {p.status}
-                      </span>{" "}
+          <section className="card" style={{ marginTop: 16 }}>
+            <h2 className="text-sm font-semibold mb-2">Money</h2>
+            <div className="text-xs space-y-2">
+              <div>
+                Cumulative rake (latest leaves): {formatAtoms(money?.cumulativeRake ?? null)}
+              </div>
+              {money?.settlementProposals.length ? (
+                <ul className="space-y-1">
+                  {money.settlementProposals.map((p) => (
+                    <li key={p.id}>
+                      <ControlHealthBadge
+                        status={p.status === "confirmed" ? "HEALTHY" : "PENDING"}
+                        label={p.status}
+                      />{" "}
                       seq {p.final_sequence} · attestors {p.attestor_count}
                     </li>
                   ))}
                 </ul>
-              )}
-              {s.settlement_tx_hash && (
-                <p className="text-xs mt-2 font-mono break-all">tx {s.settlement_tx_hash}</p>
-              )}
-            </div>
-
-            <div className="card overflow-x-auto">
-              <h2 className="text-sm font-semibold mb-2">Recent AI invocations</h2>
-              {data.recentInvocations.length === 0 ? (
-                <p className="muted text-xs">No invocations.</p>
               ) : (
-                <ul className="text-xs space-y-2">
-                  {data.recentInvocations.slice(0, 12).map((i) => (
-                    <li key={i.id} className="border-t border-[#2a2a2a] pt-2 flex gap-2">
-                      <span className={i.fallback_used ? "badge-warn" : "badge-ok"}>
-                        {i.fallback_used ? "fallback" : "ok"}
-                      </span>
-                      <span>{i.legal_action ?? "—"}</span>
-                      <span className="muted">{i.latency_ms != null ? `${i.latency_ms}ms` : ""}</span>
+                <p className="muted">No settlement proposals.</p>
+              )}
+              {ov.settlementTxHash ? (
+                <div className="font-mono break-all">tx {ov.settlementTxHash}</div>
+              ) : null}
+            </div>
+          </section>
+
+          <section className="card" style={{ marginTop: 16 }}>
+            <h2 className="text-sm font-semibold mb-2">AI</h2>
+            <div className="flex flex-wrap gap-2 mb-2">
+              <ControlHealthBadge status={ai ? aiHealth(ai.health) : "UNAVAILABLE"} />
+              <span className="text-xs muted">
+                {ai?.invocationCount ?? 0} invocations · {ai?.fallbackCount ?? 0} fallbacks
+                {ai?.latency.p95 != null ? ` · p95 ${ai.latency.p95}ms` : ""}
+              </span>
+            </div>
+            {ai?.recentInvocations.length ? (
+              <ul className="text-xs space-y-1">
+                {ai.recentInvocations.slice(0, 8).map((i) => (
+                  <li key={i.id} className="flex gap-2">
+                    <ControlHealthBadge
+                      status={i.fallback_used ? "DEGRADED" : "HEALTHY"}
+                      label={i.fallback_used ? "fallback" : "ok"}
+                    />
+                    <span>{i.legal_action ?? "—"}</span>
+                    <span className="muted">{i.latency_ms != null ? `${i.latency_ms}ms` : ""}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted text-xs">No invocations.</p>
+            )}
+          </section>
+
+          <section className="card" style={{ marginTop: 16 }}>
+            <h2 className="text-sm font-semibold mb-2">Randomness</h2>
+            {rnd?.dealerCommitment ? (
+              <div className="text-xs mb-2 font-mono break-all">
+                dealer root {rnd.dealerCommitment.dealer_root} · secrets{" "}
+                {rnd.dealerCommitment.secret_count}
+              </div>
+            ) : null}
+            <ControlTable
+              columns={[
+                { key: "epoch", header: "Epoch", mono: true, render: (e) => e.epoch_id },
+                { key: "status", header: "Status", render: (e) => e.status },
+                {
+                  key: "health",
+                  header: "Health",
+                  render: (e) => (
+                    <ControlHealthBadge status={randomnessHealth(e.health)} label={e.health} />
+                  ),
+                },
+                {
+                  key: "created",
+                  header: "Created",
+                  render: (e) => new Date(e.created_at).toLocaleString(),
+                },
+              ]}
+              rows={rnd?.epochs ?? []}
+              rowKey={(e) => e.epoch_id}
+              empty="No randomness requests."
+            />
+          </section>
+
+          <section className="card" style={{ marginTop: 16 }}>
+            <h2 className="text-sm font-semibold mb-2">Proofs & verification</h2>
+            <div className="text-xs space-y-2">
+              <div>
+                <Link href={proofs?.publicVerifyPath ?? "#"} target="_blank">
+                  Public verify surface
+                </Link>
+              </div>
+              {proofs?.inclusionProofs.length ? (
+                <ul className="space-y-1">
+                  {proofs.inclusionProofs.map((p, i) => (
+                    <li key={`${p.batch_sequence}-${i}`} className="font-mono">
+                      batch #{p.batch_sequence} · {p.proof_batch_hash.slice(0, 16)}…
                     </li>
                   ))}
                 </ul>
+              ) : (
+                <p className="muted">No proof batch inclusions indexed yet.</p>
               )}
+              {proofs?.verificationPackages.length ? (
+                <ul className="space-y-1">
+                  {proofs.verificationPackages.map((p) => (
+                    <li key={p.package_id}>
+                      {p.package_id} · {p.status}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
-          </div>
+          </section>
 
           {(data.tableEpochs.length > 0 || data.emergencyExits.length > 0) && (
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid gap-4 lg:grid-cols-2" style={{ marginTop: 16 }}>
               {data.tableEpochs.length > 0 && (
                 <div className="card text-xs">
                   <h2 className="text-sm font-semibold mb-2">Table epochs</h2>
