@@ -53,7 +53,15 @@ async function unloadTable(tableId: string, reason: string) {
   await leaseManager.release(tableId).catch(() => null);
 }
 
-async function getRuntime(tableId: string) {
+type RuntimeLoadOpts = {
+  /**
+   * Escape hatch for leave / disconnect cash-out when the durable event log is
+   * torn (e.g. after a partial hand persist). Play paths still refuse a broken chain.
+   */
+  allowBrokenChain?: boolean;
+};
+
+async function getRuntime(tableId: string, opts?: RuntimeLoadOpts) {
   let rt = tables.get(tableId);
   if (!rt) {
     const lease = await leaseManager.acquire(tableId, { waitMs: leaseWaitMs });
@@ -66,10 +74,16 @@ async function getRuntime(tableId: string) {
       await leaseManager.release(tableId).catch(() => null);
       throw err;
     }
-    if (!rt.durableChainOk) {
+    if (!rt.durableChainOk && !opts?.allowBrokenChain) {
       await leaseManager.release(tableId).catch(() => null);
       throw new Error(
         `table_durable_chain_broken: ${rt.durableChainIssues.join("; ") || "unknown"}`,
+      );
+    }
+    if (!rt.durableChainOk && opts?.allowBrokenChain) {
+      app.log.warn(
+        { tableId, issues: rt.durableChainIssues },
+        "loading table with broken durable chain for escape path",
       );
     }
     rt.bindLease(lease.actorInstanceId, lease.leaseVersion);
@@ -232,9 +246,9 @@ app.post("/v1/tables/:id/leave", async (req, reply) => {
   if (!player) return reply.code(401).send({ error: "unauthenticated" });
   const tableId = (req.params as { id: string }).id;
   try {
-    const rt = await getRuntime(tableId);
+    const rt = await getRuntime(tableId, { allowBrokenChain: true });
     requireLease(tableId);
-    const result = await rt.leave(player.profileId);
+    const result = await rt.leave(player.profileId, { forceImmediate: true });
     return { ok: true, ...result };
   } catch (e) {
     const message = e instanceof Error ? e.message : "leave_failed";
@@ -371,7 +385,8 @@ app.get("/ws", { websocket: true }, (socket, req) => {
           current.rt.unsubscribe(current.client);
           current = null;
         }
-        const rt = await getRuntime(m.tableId);
+        // Allow subscribe on a torn log so the client can still Leave / cash out.
+        const rt = await getRuntime(m.tableId, { allowBrokenChain: true });
         requireLease(m.tableId);
         const seat = identity ? rt.state.seats.find((s) => s.playerId === identity!.profileId) : undefined;
         const client = {
@@ -404,9 +419,9 @@ app.get("/ws", { websocket: true }, (socket, req) => {
       }
       if (m.type === "leave_table") {
         if (!identity) return send({ type: "error", code: "unauthenticated", message: "Auth required", retryable: false });
-        const rt = await getRuntime(m.tableId);
+        const rt = await getRuntime(m.tableId, { allowBrokenChain: true });
         requireLease(m.tableId);
-        await rt.leave(identity.profileId);
+        await rt.leave(identity.profileId, { forceImmediate: true });
         return send({ type: "left", tableId: m.tableId });
       }
       if (m.type === "player_action") {
@@ -418,9 +433,13 @@ app.get("/ws", { websocket: true }, (socket, req) => {
       }
       if (m.type === "owner_command") {
         if (!identity) return send({ type: "error", code: "unauthenticated", message: "Auth required", retryable: false });
-        const rt = await getRuntime(m.tableId);
+        const rt = await getRuntime(m.tableId, {
+          allowBrokenChain: m.command === "leave",
+        });
         requireLease(m.tableId);
-        if (m.command === "leave") await rt.leave(identity.profileId);
+        if (m.command === "leave") {
+          await rt.leave(identity.profileId, { forceImmediate: true });
+        }
         return send({ type: "ok", command: m.command });
       }
       if (m.type === "replay_from") {

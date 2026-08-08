@@ -173,13 +173,25 @@ function rpcForChain(chainId: number) {
  * collides with the first on seat 0 and the table never reaches two stacks.
  *
  * SEAL_AND_FUND_V3=1 selects the atomic HU pair-seal path instead
- * (SeatTicketV3 → sealAndFundSession). WP-106's golden suite sets it, because
- * that is the protocol path it exists to verify.
+ * (SeatTicketV3 → sealAndFundSession). That path waits for a second human
+ * ticket before creating a table — fine for WP-106 golden AI-only runs, but
+ * wrong for interactive play where Find Match must always seat immediately
+ * (fill the fullest open table, else create one and wait at the felt).
  */
 function useSealAndFundV3(format: ArenaFormat = "hu"): boolean {
   if (format !== "hu") return false;
   if (process.env.LEGACY_OPEN_TOPUP === "1") return false;
-  return process.env.SEAL_AND_FUND_V3 === "1";
+  // Interactive cash play: progressive openSession / topUpSession only.
+  if (process.env.HUMAN_PLAY !== "0") return false;
+  if (process.env.LEGACY_PAIR_MATCHMAKING === "1") return true;
+  return process.env.SEAL_AND_FUND_V3 === "1" || process.env.MOZETTO_GOLDEN === "1";
+}
+
+/** True when Find Match should fill/create a table instead of queuing for a pair. */
+function useProgressiveTableFill(format: ArenaFormat = "hu"): boolean {
+  if (format === "classic") return true;
+  if (process.env.LEGACY_PAIR_MATCHMAKING === "1") return false;
+  return !useSealAndFundV3(format);
 }
 
 /** Active ranked custody template registered by the current V2 deployment. */
@@ -1350,10 +1362,10 @@ export async function handleOnchainFindMatch(
     }
   }
 
-  // Non-V3 formats (Classic 6-max, LEGACY_OPEN_TOPUP=1): claim the fullest
-  // compatible open session, otherwise open a table and fill it progressively.
-  // Ranked HU never lands here — it pair-seals below (WP-106).
-  if (!useSealAndFundV3(format) && process.env.LEGACY_PAIR_MATCHMAKING !== "1") {
+  // Default cash path: claim the fullest compatible open seat, otherwise open
+  // a table and sit immediately. Pair-seal (waiting for an opponent ticket)
+  // is golden/AI-only — never the interactive Find Match UX.
+  if (useProgressiveTableFill(format)) {
     return openOrJoinImmediateTable({
       req,
       reply,

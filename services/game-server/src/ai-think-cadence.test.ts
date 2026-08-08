@@ -49,16 +49,80 @@ describe("buildPublicThinkingLines", () => {
       equityPct: 38,
       equityBasis: "range",
       equityConfidence: 0.5,
-      rangeSummary: "18.4% of hands (AA, KK, AKs)",
+      rangeSummary: "18.4% of hands",
+      rangeKind: "action_conditioned",
       handLabel: "Pair",
       opponents: 1,
     });
     assert.ok(lines.length >= 4);
-    assert.match(lines.join(" "), /break-even is 25%/i);
+    assert.match(lines.join(" "), /pot odds 25%/i);
     assert.match(lines.join(" "), /38%/);
-    assert.match(lines.join(" "), /estimated range/i);
+    assert.match(lines.join(" "), /18\.4% of hands/i);
     assert.match(lines.join(" "), /decision: call/i);
     assert.doesNotMatch(lines.join("\n"), /openai|groq|chain-of-thought|opponent AIs/i);
+  });
+
+  it("labels holding vs predicted continue before villain acts", () => {
+    const lines = buildPublicThinkingLines({
+      profileKey: "fox",
+      street: "preflop",
+      action: "call",
+      amount: 0.25,
+      pot: 0.75,
+      toCall: 0.25,
+      stack: 50,
+      equityPct: 54,
+      equityBasis: "range",
+      equityConfidence: 0.35,
+      rangeSummary: "holding ≈100.0% of hands",
+      rangeKind: "holding",
+      predictedContinueSummary: "predicted continue 32.9% of hands (BB prior)",
+      handLabel: "Ace-Ten offsuit",
+      opponents: 1,
+    });
+    const text = lines.join(" ");
+    assert.match(text, /dealt holding/i);
+    assert.match(text, /predicted continue/i);
+    assert.match(text, /low confidence/i);
+    assert.doesNotMatch(text, /against their estimated range — 32\.9%/i);
+  });
+
+  it("does not claim marginal value when river showdown equity is ~0%", () => {
+    const lines = buildPublicThinkingLines({
+      profileKey: "fox",
+      street: "river",
+      action: "check",
+      pot: 1,
+      toCall: 0,
+      stack: 50,
+      equityPct: 0.8,
+      equityBasis: "range",
+      equityConfidence: 0.3,
+      rangeSummary: "28.0% of hands",
+      rangeKind: "action_conditioned",
+      handLabel: "High Card",
+      opponents: 1,
+    });
+    const text = lines.join(" ");
+    assert.match(text, /near-zero showdown|free showdown/i);
+    assert.doesNotMatch(text, /marginal value/i);
+  });
+
+  it("marks timeout fallback as degraded execution", () => {
+    const lines = buildPublicThinkingLines({
+      profileKey: "fox",
+      street: "preflop",
+      action: "call",
+      amount: 0.25,
+      pot: 0.75,
+      toCall: 0.25,
+      fallbackUsed: true,
+      equityPct: 54,
+      equityBasis: "range",
+      rangeKind: "holding",
+      handLabel: "Ace-Ten offsuit",
+    });
+    assert.match(lines.join(" "), /degraded fallback/i);
   });
 
   it("labels a vs-random estimate as an upper bound rather than a range read", () => {
@@ -78,8 +142,7 @@ describe("buildPublicThinkingLines", () => {
     const text = lines.join(" ");
     assert.match(text, /random hand/i);
     assert.match(text, /upper bound/i);
-    // It must never claim a range read it does not have.
-    assert.doesNotMatch(text, /against their estimated range/i);
+    assert.doesNotMatch(text, /action-conditioned range/i);
   });
 
   it("names an all-in as an all-in instead of a pot percentage", () => {
@@ -108,6 +171,9 @@ describe("buildPublicThinkingLines", () => {
       pot: 120,
       toCall: 20,
       stack: 500,
+      equityPct: 70,
+      equityBasis: "range",
+      rangeKind: "action_conditioned",
       handLabel: "Two Pair",
       opponents: 1,
     });

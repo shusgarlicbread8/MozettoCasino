@@ -16,10 +16,13 @@ import { getLegalActions, type HoldemState, type LegalAction } from "./holdem.js
 import { chipsToNumber } from "./money.js";
 import {
   describeRange,
+  describeRangeShort,
+  fullHoldingRange,
   handClassOf,
   narrowRange,
   openingRangeFor,
   rangeWidth,
+  reweightForBoard,
   type PositionLabel,
   type RangeDistribution,
   type RangeEvidence,
@@ -76,6 +79,9 @@ export type CandidateAction = {
   priceOfferedPct: number | null;
 };
 
+/** What the equity / summary range represents. */
+export type VillainRangeKind = "holding" | "action_conditioned";
+
 export type DecisionFacts = {
   street: string;
   hero: {
@@ -121,10 +127,20 @@ export type DecisionFacts = {
   villain: {
     seat: number;
     position: PositionLabel;
-    /** Compact description of the modelled range. */
+    /**
+     * `holding` = cards that could physically have been dealt (≈100% before
+     * voluntary action). `action_conditioned` = narrowed by observed line.
+     */
+    rangeKind: VillainRangeKind;
+    /** Compact description of the range used for equity. */
     rangeSummary: string;
+    /** Developer detail with top classes — not for default player copy. */
+    rangeDetail: string;
     rangeWidthPct: number;
     rangeConfidence: number;
+    /** Predicted continue/open width when equity still uses holding range. */
+    predictedContinueSummary: string | null;
+    predictedContinueWidthPct: number | null;
     /** The public actions that shaped this range, oldest first. */
     rangeEvidence: string[];
     handsObserved: number;
@@ -185,15 +201,57 @@ export type SeatActionLog = Array<{
   street: string;
 }>;
 
+function villainActionsFromLog(actions: SeatActionLog, villainSeat: number): SeatActionLog {
+  return actions.filter((a) => a.seat === villainSeat);
+}
+
+function hasVoluntaryAction(actions: SeatActionLog): boolean {
+  return actions.some(
+    (a) =>
+      a.action === "raise" ||
+      a.action === "bet" ||
+      a.action === "call" ||
+      a.action === "all_in" ||
+      a.action === "fold" ||
+      // Preflop check (BB option) and any postflop check are voluntary.
+      a.action === "check",
+  );
+}
+
 /**
- * Rebuild an opponent's range from their public preflop line.
- * `actions` should contain this hand's actions in order.
+ * When the action log is missing, infer whether villain has already entered
+ * the pot voluntarily from public table state (bet size / aggressor).
+ */
+function inferVillainActedFromState(state: HoldemState, villainSeat: number): boolean {
+  const v = state.seats.find((s) => s.seatIndex === villainSeat);
+  if (!v) return false;
+  if (state.lastAggressor === villainSeat) return true;
+  const bb = chipsToNumber(state.config.bigBlind);
+  const total = chipsToNumber(v.totalBet);
+  // More than a big blind committed ⇒ opened / raised / called an open.
+  if (total > bb + 0.001) return true;
+  // Postflop with chips already matched beyond blinds is covered above; a
+  // postflop street with lastAggressor null and equal bets may still mean
+  // checked — treat as acted once board is out and they are in the hand.
+  if (state.board.length >= 3 && !v.folded && chipsToNumber(v.bet) >= 0) {
+    // Don't invent a raise; just mark that we're past deal — holding is no
+    // longer uniform once any postflop action exists. Without a log we stay
+    // conservative and only flip when aggressor/bet evidence exists.
+  }
+  return false;
+}
+
+/**
+ * Rebuild an opponent's action-conditioned range from their public line.
+ * Starts from a positional open prior, then narrows with preflop + postflop
+ * evidence and a coarse board reweight.
  */
 export function modelVillainRange(input: {
   villainSeat: number;
   villainPosition: PositionLabel;
   actions: SeatActionLog;
   stats?: OpponentStats | null;
+  board?: Card[];
 }): RangeDistribution {
   const stats = input.stats ?? null;
   let range = openingRangeFor({
@@ -202,17 +260,20 @@ export function modelVillainRange(input: {
     handsObserved: stats?.handsObserved ?? 0,
   });
 
-  const mine = input.actions.filter(
-    (a) => a.seat === input.villainSeat && a.street === "preflop",
-  );
+  const mine = villainActionsFromLog(input.actions, input.villainSeat);
   // Count aggression order so a call after our 3-bet narrows differently from
   // a call of a plain open.
   let raisesSeen = 0;
-  for (const a of mine) {
+  for (const a of mine.filter((x) => x.street === "preflop")) {
     let ev: RangeEvidence | null = null;
     if (a.action === "raise" || a.action === "bet" || a.action === "all_in") {
       raisesSeen += 1;
-      ev = raisesSeen === 1 ? { kind: "open_raise" } : raisesSeen === 2 ? { kind: "three_bet" } : { kind: "four_bet" };
+      ev =
+        raisesSeen === 1
+          ? { kind: "open_raise" }
+          : raisesSeen === 2
+            ? { kind: "three_bet" }
+            : { kind: "four_bet" };
     } else if (a.action === "call") {
       ev = raisesSeen >= 1 ? { kind: "call_vs_three_bet" } : { kind: "call_vs_raise" };
     } else if (a.action === "check") {
@@ -220,7 +281,93 @@ export function modelVillainRange(input: {
     }
     if (ev) range = narrowRange(range, ev);
   }
+
+  for (const a of mine.filter((x) => x.street !== "preflop")) {
+    let ev: RangeEvidence | null = null;
+    if (a.action === "raise" || a.action === "bet" || a.action === "all_in") {
+      ev = { kind: "postflop_aggression" };
+    } else if (a.action === "call") {
+      ev = { kind: "postflop_call" };
+    } else if (a.action === "check") {
+      ev = { kind: "postflop_check" };
+    }
+    if (ev) range = narrowRange(range, ev);
+  }
+
+  if (input.board && input.board.length >= 3) {
+    range = reweightForBoard(range, input.board);
+  }
   return range;
+}
+
+/**
+ * Resolve holding vs predicted-continue vs equity range.
+ *
+ * Before the opponent has taken a voluntary action, equity must be measured
+ * against ~100% dealt holdings. Historical VPIP/open% is a *predicted continue*
+ * model, not their current hole cards.
+ */
+export function resolveOpponentRanges(input: {
+  state: HoldemState;
+  villainSeat: number;
+  villainPosition: PositionLabel;
+  actions: SeatActionLog;
+  stats?: OpponentStats | null;
+}): {
+  holdingRange: RangeDistribution;
+  predictedContinueRange: RangeDistribution;
+  equityRange: RangeDistribution;
+  rangeKind: VillainRangeKind;
+  inferredFromState: boolean;
+} {
+  const holdingRange = fullHoldingRange();
+  const predictedContinueRange = openingRangeFor({
+    position: input.villainPosition,
+    observedOpenPct: input.stats?.openPct ?? null,
+    handsObserved: input.stats?.handsObserved ?? 0,
+  });
+
+  const logged = villainActionsFromLog(input.actions, input.villainSeat);
+  const actedInLog = hasVoluntaryAction(logged);
+  const inferredFromState =
+    !actedInLog && inferVillainActedFromState(input.state, input.villainSeat);
+
+  if (!actedInLog && !inferredFromState) {
+    return {
+      holdingRange,
+      predictedContinueRange,
+      equityRange: holdingRange,
+      rangeKind: "holding",
+      inferredFromState: false,
+    };
+  }
+
+  const equityRange = modelVillainRange({
+    villainSeat: input.villainSeat,
+    villainPosition: input.villainPosition,
+    actions: actedInLog
+      ? input.actions
+      : [
+          // Minimal synthetic open so the positional prior is used when the
+          // table state shows aggression but the log was not supplied.
+          {
+            seat: input.villainSeat,
+            action: "raise",
+            street: "preflop",
+          },
+          ...input.actions,
+        ],
+    stats: input.stats,
+    board: input.state.board,
+  });
+
+  return {
+    holdingRange,
+    predictedContinueRange,
+    equityRange,
+    rangeKind: "action_conditioned",
+    inferredFromState,
+  };
 }
 
 function toBb(chips: number, bb: number): number {
@@ -282,39 +429,66 @@ export function buildDecisionFacts(input: {
     const villain = opponents[0]!;
     const villainPosition = positionOf(state, villain.seatIndex);
     const stats = input.stats?.[villain.seatIndex] ?? null;
-    const range = modelVillainRange({
+    const actions = input.actions ?? [];
+    const resolved = resolveOpponentRanges({
+      state,
       villainSeat: villain.seatIndex,
       villainPosition,
-      actions: input.actions ?? [],
+      actions,
       stats,
     });
 
-    const eq = computeEquityVsRange(hole, state.board, range, {
+    const eq = computeEquityVsRange(hole, state.board, resolved.equityRange, {
       samples: input.equitySamples ?? 2_000,
       seed: input.seed,
     });
 
+    const predictedContinueSummary =
+      resolved.rangeKind === "holding"
+        ? `predicted continue ${describeRangeShort(resolved.predictedContinueRange)} (${villainPosition} prior)`
+        : null;
+
     villainBlock = {
       seat: villain.seatIndex,
       position: villainPosition,
-      rangeSummary: describeRange(range),
-      rangeWidthPct: Math.round(rangeWidth(range) * 1000) / 10,
-      rangeConfidence: Math.round(range.confidence * 100) / 100,
-      rangeEvidence: range.evidence,
+      rangeKind: resolved.rangeKind,
+      rangeSummary:
+        resolved.rangeKind === "holding"
+          ? `holding ≈${describeRangeShort(resolved.holdingRange)}`
+          : describeRangeShort(resolved.equityRange),
+      rangeDetail: describeRange(resolved.equityRange),
+      rangeWidthPct: Math.round(rangeWidth(resolved.equityRange) * 1000) / 10,
+      rangeConfidence: Math.round(resolved.equityRange.confidence * 100) / 100,
+      predictedContinueSummary,
+      predictedContinueWidthPct:
+        resolved.rangeKind === "holding"
+          ? Math.round(rangeWidth(resolved.predictedContinueRange) * 1000) / 10
+          : null,
+      rangeEvidence: resolved.equityRange.evidence,
       handsObserved: stats?.handsObserved ?? 0,
     };
 
     if (eq.combosConsidered > 0) {
       equityVsRange = {
         value: Math.round(eq.equityPct) / 100,
-        confidence: Math.round(range.confidence * 100) / 100,
+        confidence: Math.round(resolved.equityRange.confidence * 100) / 100,
         method: eq.exact ? "exact_enumeration" : `monte_carlo_${eq.trials}`,
       };
     } else {
       caveats.push("range_empty_after_card_removal");
     }
-    if (!input.actions?.length) {
-      caveats.push("no_action_log_supplied_range_is_positional_prior_only");
+    if (!actions.length) {
+      caveats.push(
+        resolved.inferredFromState
+          ? "no_action_log_supplied_range_inferred_from_table_state"
+          : "no_action_log_supplied_using_holding_range",
+      );
+    }
+    if (resolved.rangeKind === "holding") {
+      caveats.push("equity_vs_dealt_holding_not_predicted_continue");
+    }
+    if (state.board.length >= 3 && resolved.rangeKind === "action_conditioned") {
+      caveats.push("postflop_range_uses_coarse_board_reweight");
     }
   } else if (opponents.length > 1) {
     caveats.push("multiway_range_model_not_available");
@@ -341,9 +515,10 @@ export function buildDecisionFacts(input: {
     effectiveStackBb: toBb(effectiveStack, bb),
     effectiveStacksBbBySeat,
     stackDepthRegime: stackDepthRegime(toBb(effectiveStack, bb)),
-    sprAfterCall: toCall > 0 && pot + toCall > 0
-      ? Math.round(((effectiveStack - toCall) / (pot + toCall)) * 100) / 100
-      : null,
+    sprAfterCall:
+      toCall > 0 && pot + toCall > 0
+        ? Math.round(((effectiveStack - toCall) / (pot + toCall)) * 100) / 100
+        : null,
     geometry: {
       callPctPot: toCall > 0 && pot > 0 ? Math.round((toCall / pot) * 1000) / 1000 : null,
       spr: pot > 0 ? Math.round((effectiveStack / pot) * 100) / 100 : null,
@@ -393,7 +568,8 @@ export function buildCandidates(input: {
       amountBb: toBb(amount, bb),
       isAllIn: amount >= stack && stack > 0,
       potAfterBb: toBb(potAfter, bb),
-      breakEvenFoldPct: aggressive && amount > 0 ? Math.round((amount / (amount + pot)) * 1000) / 10 : null,
+      breakEvenFoldPct:
+        aggressive && amount > 0 ? Math.round((amount / (amount + pot)) * 1000) / 10 : null,
       // Price the villain is laid when they face this size.
       priceOfferedPct:
         aggressive && amount > toCall

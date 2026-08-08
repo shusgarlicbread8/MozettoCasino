@@ -2,8 +2,7 @@
 
 import type { CSSProperties } from "react";
 import { color, font, radius, space } from "@/lib/design-tokens";
-import { displaySeat, formatActionLabel } from "@/lib/table/format";
-import { money } from "@/lib/session";
+import { displaySeat, formatActionLabel, formatChipActionLabel, moneyFromChips } from "@/lib/table/format";
 
 export type TimelineEvent = {
   key: string;
@@ -206,7 +205,8 @@ export function eventsFromReplay(data: {
       } else if (type === "BLINDS_POSTED") {
         label = "BLINDS POSTED";
       } else if (type === "PLAYER_ACTED") {
-        const formatted = formatActionLabel(String(p.action || ""), p.amount != null ? Number(p.amount) : undefined);
+        // hand_events payloads store chip units (1 chip = $0.01).
+        const formatted = formatChipActionLabel(String(p.action || ""), p.amount as number | string | null);
         label = seatLabel ? `${seatLabel} · ${formatted.text}` : formatted.text;
         tone = /fold/i.test(String(p.action)) ? "warn" : "accent";
       } else if (type === "STREET_DEALT") {
@@ -223,7 +223,7 @@ export function eventsFromReplay(data: {
       } else if (type === "HAND_SETTLED") {
         const w = firstWinner(p);
         if (w) {
-          label = `Seat ${displaySeat(w.seatIndex)} · WON ${money(w.amount)} · ${formatWinnerLabel(w.label)}`;
+          label = `Seat ${displaySeat(w.seatIndex)} · WON ${moneyFromChips(w.amount)} · ${formatWinnerLabel(w.label)}`;
         } else {
           label = "HAND SETTLED";
         }

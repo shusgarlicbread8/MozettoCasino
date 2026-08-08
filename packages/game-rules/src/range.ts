@@ -241,7 +241,10 @@ export type RangeEvidence =
   | { kind: "call_vs_raise" }
   | { kind: "call_vs_three_bet" }
   | { kind: "check" }
-  | { kind: "limp" };
+  | { kind: "limp" }
+  | { kind: "postflop_aggression" }
+  | { kind: "postflop_call" }
+  | { kind: "postflop_check" };
 
 /**
  * Apply a multiplier per hand class and renormalize nothing — weights stay as
@@ -297,6 +300,35 @@ export function narrowRange(
         break;
       case "limp":
         m = f.premiumPair ? 0.2 : f.smallPair ? 1.2 : f.suited ? 1.1 : 0.9;
+        break;
+      case "postflop_aggression":
+        m = f.premiumPair
+          ? 1
+          : f.bigBroadway
+            ? 0.9
+            : f.mediumPair
+              ? 0.85
+              : f.suitedConnector
+                ? 0.75
+                : f.broadway
+                  ? 0.55
+                  : 0.25;
+        break;
+      case "postflop_call":
+        m = f.premiumPair
+          ? 0.7
+          : f.mediumPair
+            ? 1
+            : f.suitedConnector
+              ? 0.95
+              : f.bigBroadway
+                ? 0.8
+                : f.weakOffsuit
+                  ? 0.2
+                  : 0.55;
+        break;
+      case "postflop_check":
+        m = f.premiumPair ? 0.45 : f.weakOffsuit ? 1.15 : 1;
         break;
     }
     const next = Math.max(0, Math.min(1, w * m));
@@ -362,7 +394,12 @@ export function expandRange(range: RangeDistribution, blocked: Card[]): Weighted
   return out;
 }
 
-/** Top-N classes by weight — for compact, auditable range summaries. */
+/** Width-only label — safe for player-facing AI Activity copy. */
+export function describeRangeShort(range: RangeDistribution): string {
+  return `${(rangeWidth(range) * 100).toFixed(1)}% of hands`;
+}
+
+/** Top-N classes by weight — for compact, auditable / developer range summaries. */
 export function describeRange(range: RangeDistribution, limit = 8): string {
   const entries = Object.entries(range.weights)
     .sort((a, b) => b[1] - a[1] || chenScore(b[0]) - chenScore(a[0]))
@@ -372,4 +409,43 @@ export function describeRange(range: RangeDistribution, limit = 8): string {
   return `${(width * 100).toFixed(1)}% of hands (${parts.join(", ")}${
     Object.keys(range.weights).length > limit ? ", …" : ""
   })`;
+}
+
+/** Uniform dealt holding — every legal starting class equally possible. */
+export function fullHoldingRange(): RangeDistribution {
+  const weights: Record<HandClass, number> = {};
+  for (const hc of allHandClasses()) weights[hc] = 1;
+  return {
+    weights,
+    label: "dealt holding ~100%",
+    confidence: 0.95,
+    evidence: ["uniform_deal"],
+  };
+}
+
+/**
+ * Coarse board reweight: classes that connect with board ranks stay heavier.
+ * Not a solver — confidence must stay low and copy must not overclaim.
+ */
+export function reweightForBoard(range: RangeDistribution, board: Card[]): RangeDistribution {
+  if (board.length < 3) return range;
+  const boardRanks = new Set(board.map((c) => c.rank));
+  const weights: Record<HandClass, number> = {};
+  for (const [hc, w] of Object.entries(range.weights)) {
+    const hi = hc[0] as Card["rank"];
+    const lo = hc[1] as Card["rank"];
+    const isPair = hc.length === 2;
+    let m = 1;
+    const pairedBoard = boardRanks.has(hi) || boardRanks.has(lo);
+    if (pairedBoard) m *= 1.4;
+    if (isPair && boardRanks.has(hi)) m *= 1.55;
+    const next = Math.max(0, Math.min(1, w * m));
+    if (next > 0.005) weights[hc] = Math.round(next * 1000) / 1000;
+  }
+  return {
+    weights,
+    label: `${range.label} → board`,
+    confidence: Math.max(0.12, range.confidence * 0.75),
+    evidence: [...range.evidence, `board_reweight_${board.length}`],
+  };
 }

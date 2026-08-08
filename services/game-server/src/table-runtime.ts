@@ -112,6 +112,15 @@ function hexToBytes(hex: string): Buffer {
   return Buffer.from(h, "hex");
 }
 
+/** Engine money is bigint chips; Postgres JSON / event hashes cannot serialize bigint. */
+function jsonStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, v) => (typeof v === "bigint" ? v.toString() : v));
+}
+
+function jsonSafe<T>(value: T): T {
+  return JSON.parse(jsonStringify(value)) as T;
+}
+
 /** Action clock for human play (seconds). */
 export const TURN_SECONDS = 15;
 const TURN_MS = TURN_SECONDS * 1000;
@@ -131,7 +140,7 @@ const PUBLIC_CADENCE_FLOOR_MS = (() => {
 })();
 
 /**
- * HUMAN_PLAY=1 allows a bound human to override via WS.
+ * HUMAN_PLAY=1 allows a bound human on a non-agent seat to act via WS.
  * Agent seats still use agent-runtime / Groq — Mozetto is AI-played poker.
  * Set HUMAN_PLAY=0 only for fully autonomous golden runs with no human clock.
  */
@@ -337,7 +346,27 @@ export class TableRuntime {
        from hand_events where table_id = $1 order by sequence`,
       [tableId],
     );
-    const tip = recoverActorTip(mapHandEventRows(eventRows.rows));
+    let tip = recoverActorTip(mapHandEventRows(eventRows.rows));
+    // Partial persists (e.g. BigInt stringify failures) burn a sequence number and
+    // leave a gap. Between hands we can truncate the torn suffix and resume.
+    if (!tip.chainOk && tip.issues.some((i) => i.startsWith("sequence_gap"))) {
+      const cut = tip.sequence;
+      const pruned = await query(`delete from hand_events where table_id = $1 and sequence > $2`, [
+        tableId,
+        cut,
+      ]);
+      console.warn(
+        "[table-runtime] pruned torn hand_events after durable tip",
+        tableId,
+        { tipSequence: cut, deleted: pruned.rowCount, issues: tip.issues },
+      );
+      const repairedRows = await query(
+        `select sequence, event_type, event_hash, prev_event_hash, hand_id, payload, timestamp
+         from hand_events where table_id = $1 order by sequence`,
+        [tableId],
+      );
+      tip = recoverActorTip(mapHandEventRows(repairedRows.rows));
+    }
     rt.sequence = tip.sequence;
     rt.prevHash = tip.prevHash;
     rt.durableChainOk = tip.chainOk;
@@ -551,8 +580,8 @@ export class TableRuntime {
   isBotSeat(seatIndex: number): boolean {
     if (!HUMAN_PLAY) return true;
     const seat = this.state.seats.find((s) => s.seatIndex === seatIndex);
-    // Agent / profile seats are AI-controlled (Groq via agent-runtime).
-    // Pure human test seats (no agent) still wait on the WS clock.
+    // Mozetto is AI-played: agent / profile seats use agent-runtime on the clock.
+    // Pure human test seats (no agent) wait on the WS action clock.
     if (seat?.agentId || this.agentProfiles.has(seatIndex)) return true;
     return false;
   }
@@ -752,7 +781,7 @@ export class TableRuntime {
               encoded.eventHash,
               encoded.previousEventHash,
               eventType,
-              JSON.stringify(publicPayload),
+              jsonStringify(publicPayload),
               privatePayloadCommitment ?? null,
               Date.now(),
               this.state.handNumber ?? 0,
@@ -767,7 +796,7 @@ export class TableRuntime {
             `insert into public_event_payloads (event_hash, payload)
              values ($1, $2::jsonb)
              on conflict (event_hash) do nothing`,
-            [encoded.eventHash, JSON.stringify(publicPayload)],
+            [encoded.eventHash, jsonStringify(publicPayload)],
           ).catch(() => null);
         } catch (err) {
           console.warn("canonical_game_events poker_event_v1 insert failed", this.tableId, err);
@@ -800,7 +829,7 @@ export class TableRuntime {
           eventHash,
           canonical.previousEventHash,
           eventType,
-          JSON.stringify(publicPayload),
+          jsonStringify(publicPayload),
           privatePayloadCommitment ?? null,
           canonical.timestampMs,
         ],
@@ -809,7 +838,7 @@ export class TableRuntime {
         `insert into public_event_payloads (event_hash, payload)
          values ($1, $2::jsonb)
          on conflict (event_hash) do nothing`,
-        [eventHash, JSON.stringify(publicPayload)],
+        [eventHash, jsonStringify(publicPayload)],
       ).catch(() => null);
     } catch (err) {
       console.warn("canonical_game_events insert failed", this.tableId, err);
@@ -1086,7 +1115,7 @@ export class TableRuntime {
     if (energy != null) this.lastAiEnergy.set(seatIndex, energy);
     else energy = this.lastAiEnergy.get(seatIndex) ?? null;
     const thinkingLog = Array.isArray(status.publicThinkingLog)
-      ? status.publicThinkingLog.filter((l) => typeof l === "string" && l.trim()).slice(-12)
+      ? status.publicThinkingLog.filter((l) => typeof l === "string" && l.trim()).slice(-24)
       : null;
     const frame = {
       type: "ai_cognition",
@@ -1116,22 +1145,25 @@ export class TableRuntime {
   }
 
   async persistEvent(eventType: string, payload: Record<string, unknown>, visibility: "public" | "owner_private" | "system" = "public") {
-    this.sequence += 1;
+    // Advance the tip only after a durable write succeeds — failed persists must
+    // not burn sequence numbers (that creates sequence_gap on restart).
+    const nextSequence = this.sequence + 1;
+    const prevEventHash = this.prevHash;
+    const safePayload = jsonSafe(payload);
     const body = {
       tableId: this.tableId,
       handId: this.state.handId,
-      sequence: this.sequence,
+      sequence: nextSequence,
       eventType,
       timestamp: new Date().toISOString(),
-      payload,
-      prevEventHash: this.prevHash,
+      payload: safePayload,
+      prevEventHash,
     };
-    const eventHash = createHash("sha256").update(JSON.stringify(body)).digest("hex");
-    this.prevHash = eventHash;
+    const eventHash = createHash("sha256").update(jsonStringify(body)).digest("hex");
     const full: TableEvent = { ...body, eventHash, visibility };
 
     const sessionId = this.onchainSessionId ?? this.tableId;
-    const schemaKind: SchemaKind = canUsePokerEventV1(eventType, this.schemaKindPrefer, payload)
+    const schemaKind: SchemaKind = canUsePokerEventV1(eventType, this.schemaKindPrefer, safePayload)
       ? "poker_event_v1"
       : "legacy_json";
 
@@ -1139,122 +1171,127 @@ export class TableRuntime {
     // then broadcast, then mark published.
     const useMemoryOutbox = this.outboxStore instanceof MemoryOutboxStore;
 
-    if (useMemoryOutbox) {
-      await persistThenBroadcast({
-        store: this.outboxStore,
-        durableWrite: async () => {
-          await query(
-            `insert into hand_events (table_id, hand_id, sequence, event_type, timestamp, payload, visibility, prev_event_hash, event_hash)
-             values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-            [
-              this.tableId,
-              this.state.handId,
-              this.sequence,
-              eventType,
-              body.timestamp,
-              JSON.stringify(payload),
-              visibility,
-              body.prevEventHash,
-              eventHash,
-            ],
-          );
-          if (this.arenaMode === "onchain" && visibility !== "owner_private") {
-            await this.persistCanonicalEvent(eventType, payload);
-          }
-        },
-        outbox: {
-          sessionId,
-          tableId: this.tableId,
-          sequence: this.sequence,
-          eventHash,
-          channel: `table:${this.tableId}:public`,
-          payload: full as unknown as Record<string, unknown>,
-          schemaKind,
-          visibility,
-        },
-        publish: async () => {
-          this.broadcast(full);
-        },
-      });
-      if (visibility === "public") {
-        void this.notifyAiObservation(eventType, payload, this.sequence, eventHash);
-      }
-      return full;
-    }
-
-    await persistThenBroadcast({
-      store: this.outboxStore,
-      durableWrite: async () => {
-        /* atomicPersist below owns the write */
-      },
-      outbox: {
-        sessionId,
-        tableId: this.tableId,
-        sequence: this.sequence,
-        eventHash,
-        channel: `table:${this.tableId}:public`,
-        payload: full as unknown as Record<string, unknown>,
-        schemaKind,
-        visibility,
-      },
-      atomicPersist: async () => {
-        const { outbox } = await persistWithOutbox({
+    try {
+      if (useMemoryOutbox) {
+        await persistThenBroadcast({
+          store: this.outboxStore,
+          durableWrite: async () => {
+            await query(
+              `insert into hand_events (table_id, hand_id, sequence, event_type, timestamp, payload, visibility, prev_event_hash, event_hash)
+               values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+              [
+                this.tableId,
+                this.state.handId,
+                nextSequence,
+                eventType,
+                body.timestamp,
+                jsonStringify(safePayload),
+                visibility,
+                prevEventHash,
+                eventHash,
+              ],
+            );
+            if (this.arenaMode === "onchain" && visibility !== "owner_private") {
+              await this.persistCanonicalEvent(eventType, safePayload);
+            }
+          },
           outbox: {
             sessionId,
             tableId: this.tableId,
-            sequence: this.sequence,
+            sequence: nextSequence,
             eventHash,
             channel: `table:${this.tableId}:public`,
             payload: full as unknown as Record<string, unknown>,
             schemaKind,
             visibility,
           },
-          write: async (client) => {
-            await client.query(
-              `insert into hand_events (table_id, hand_id, sequence, event_type, timestamp, payload, visibility, prev_event_hash, event_hash)
-               values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-              [
-                this.tableId,
-                this.state.handId,
-                this.sequence,
-                eventType,
-                body.timestamp,
-                JSON.stringify(payload),
-                visibility,
-                body.prevEventHash,
-                eventHash,
-              ],
-            );
-            if (this.arenaMode === "onchain" && visibility !== "owner_private") {
-              await this.persistCanonicalEvent(eventType, payload, null, client);
-            }
+          publish: async () => {
+            this.broadcast(full);
           },
         });
-        return {
-          id: outbox.id,
-          sessionId: outbox.sessionId,
-          tableId: outbox.tableId,
-          epoch: outbox.epoch,
-          sequence: outbox.sequence,
-          eventHash: outbox.eventHash,
-          channel: outbox.channel,
-          payload: outbox.payload,
-          schemaKind: outbox.schemaKind,
-          visibility: outbox.visibility,
-          status: outbox.status,
-          attempts: outbox.attempts,
-          lastError: outbox.lastError,
-          createdAtMs: Date.parse(outbox.createdAt) || Date.now(),
-          publishedAtMs: outbox.publishedAt ? Date.parse(outbox.publishedAt) : null,
-        };
-      },
-      publish: async () => {
-        this.broadcast(full);
-      },
-    });
+      } else {
+        await persistThenBroadcast({
+          store: this.outboxStore,
+          durableWrite: async () => {
+            /* atomicPersist below owns the write */
+          },
+          outbox: {
+            sessionId,
+            tableId: this.tableId,
+            sequence: nextSequence,
+            eventHash,
+            channel: `table:${this.tableId}:public`,
+            payload: full as unknown as Record<string, unknown>,
+            schemaKind,
+            visibility,
+          },
+          atomicPersist: async () => {
+            const { outbox } = await persistWithOutbox({
+              outbox: {
+                sessionId,
+                tableId: this.tableId,
+                sequence: nextSequence,
+                eventHash,
+                channel: `table:${this.tableId}:public`,
+                payload: full as unknown as Record<string, unknown>,
+                schemaKind,
+                visibility,
+              },
+              write: async (client) => {
+                await client.query(
+                  `insert into hand_events (table_id, hand_id, sequence, event_type, timestamp, payload, visibility, prev_event_hash, event_hash)
+                   values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+                  [
+                    this.tableId,
+                    this.state.handId,
+                    nextSequence,
+                    eventType,
+                    body.timestamp,
+                    jsonStringify(safePayload),
+                    visibility,
+                    prevEventHash,
+                    eventHash,
+                  ],
+                );
+                if (this.arenaMode === "onchain" && visibility !== "owner_private") {
+                  await this.persistCanonicalEvent(eventType, safePayload, null, client);
+                }
+              },
+            });
+            return {
+              id: outbox.id,
+              sessionId: outbox.sessionId,
+              tableId: outbox.tableId,
+              epoch: outbox.epoch,
+              sequence: outbox.sequence,
+              eventHash: outbox.eventHash,
+              channel: outbox.channel,
+              payload: outbox.payload,
+              schemaKind: outbox.schemaKind,
+              visibility: outbox.visibility,
+              status: outbox.status,
+              attempts: outbox.attempts,
+              lastError: outbox.lastError,
+              createdAtMs: Date.parse(outbox.createdAt) || Date.now(),
+              publishedAtMs: outbox.publishedAt ? Date.parse(outbox.publishedAt) : null,
+            };
+          },
+          publish: async () => {
+            this.broadcast(full);
+          },
+        });
+      }
+    } catch (err) {
+      // Tip unchanged — next persist retries the same sequence.
+      throw err;
+    }
+
+    this.sequence = nextSequence;
+    this.prevHash = eventHash;
+
     // WP-107: fan out public events to agent-runtime cognition (no hole cards / CoT).
     if (visibility === "public") {
-      void this.notifyAiObservation(eventType, payload, this.sequence, eventHash);
+      void this.notifyAiObservation(eventType, safePayload, nextSequence, eventHash);
     }
     return full;
   }
@@ -1290,6 +1327,8 @@ export class TableRuntime {
         energyPerHand: 100,
         signalSource: "energy",
         handId,
+        publicNarrative: "── New hand",
+        publicThinkingLog: ["── New hand"],
       });
     }
   }
@@ -1318,6 +1357,23 @@ export class TableRuntime {
       typeof payload.rake === "number" || typeof payload.rake === "string"
         ? payload.rake
         : null;
+    // Prefer immutable event-time pot. Never narrate this.state.pot after a
+    // settle/reset — checks that end a hand would otherwise show $0.00.
+    const potUsdFromPayload = (key: "potAfter" | "potBefore" | "pot"): number | null => {
+      const raw = payload[key];
+      if (typeof raw === "number" || typeof raw === "string") {
+        const n = Number(raw);
+        if (Number.isFinite(n)) return chipsToUsd(BigInt(Math.trunc(n)));
+      }
+      return null;
+    };
+    const eventPotUsd =
+      potUsdFromPayload("potAfter") ??
+      potUsdFromPayload("pot") ??
+      (eventType === "HAND_SETTLED" || eventType === "HAND_COMPLETE"
+        ? null
+        : chipsToUsd(this.state.pot));
+
     const statuses = await notifyAgentRuntimeObserve({
       sessionId: this.sessionIdForAi(),
       handId,
@@ -1327,13 +1383,14 @@ export class TableRuntime {
         cursor,
         eventId,
         eventType,
-        street: this.state.street,
+        street:
+          typeof payload.street === "string" ? payload.street : this.state.street,
         actorSeat,
         amount:
           typeof payload.amount === "number" || typeof payload.amount === "string"
             ? payload.amount
             : null,
-        pot: chipsToUsd(this.state.pot),
+        pot: eventPotUsd ?? chipsToUsd(this.state.pot),
         rake,
         boardCardCount: this.state.board.length,
         activeSeats: this.state.seats
@@ -1348,29 +1405,63 @@ export class TableRuntime {
     // WP-126: forward public cognition phases + Energy to seat owners only.
     for (const st of statuses) {
       if (typeof st.seat !== "number" || !st.phase) continue;
+      // Background observe must not clobber the live action-clock pipeline
+      // (ANALYSING → DECISION_READY → ACTING) for the seat that is to act.
+      if (
+        this.state.actingIndex === st.seat &&
+        this.actionDeadlineAt != null &&
+        (st.phase === "OBSERVING" ||
+          st.phase === "ANALYSING" ||
+          st.phase === "UPDATING_OPPONENT_MODEL")
+      ) {
+        continue;
+      }
       const patternRead = st.phase === "UPDATING_OPPONENT_MODEL";
       const action = String(payload.action ?? "").toUpperCase();
-      const amount =
+      // Engine payloads carry chip units ($0.01); narrate dollars for owners.
+      const amountChips =
         typeof payload.amount === "number" || typeof payload.amount === "string"
           ? Number(payload.amount)
           : null;
+      const amountUsd =
+        amountChips != null && Number.isFinite(amountChips)
+          ? chipsToUsd(BigInt(Math.trunc(amountChips)))
+          : null;
+      const potUsd = eventPotUsd ?? 0;
+      const money = (n: number) =>
+        n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       const actorLabel = actorSeat == null ? "The table" : `Seat ${actorSeat + 1}`;
       let observation: string | undefined;
       if (eventType === "HAND_STARTED") {
-        observation = `New hand: tracking position, effective stacks, and the opening price.`;
+        observation = `── Hand · position, stacks, opening price`;
       } else if (eventType === "BLINDS_POSTED") {
-        observation = `Blinds posted; the starting pot is $${this.state.pot}.`;
+        observation = `Blinds posted · pot $${money(potUsd)}`;
       } else if (eventType === "STREET_DEALT") {
         const street = String(payload.street ?? this.state.street);
-        observation = `${street[0]?.toUpperCase() ?? ""}${street.slice(1)} dealt; recalculating made-hand strength, draws, and range advantage.`;
+        observation = `${street[0]?.toUpperCase() ?? ""}${street.slice(1)} dealt · recalculating strength and range`;
+      } else if (eventType === "HAND_SETTLED") {
+        const winners = Array.isArray(payload.winners)
+          ? (payload.winners as Array<{ seatIndex?: number; amount?: number | string }>)
+          : [];
+        if (winners.length === 1 && winners[0]?.seatIndex != null) {
+          const wAmt =
+            winners[0].amount != null
+              ? chipsToUsd(BigInt(Math.trunc(Number(winners[0].amount))))
+              : 0;
+          observation = `── Hand complete · Seat ${Number(winners[0].seatIndex) + 1} wins $${money(wAmt)}`;
+        } else {
+          observation = `── Hand complete`;
+        }
       } else if (eventType === "PLAYER_ACTED" && action) {
-        const sized = amount != null && amount > 0 ? ` $${amount}` : "";
+        const sized = amountUsd != null && amountUsd > 0 ? ` $${money(amountUsd)}` : "";
         observation =
           actorSeat === st.seat
-            ? `My ${action}${sized} is in; watching how the opponent responds to the new $${this.state.pot} pot.`
-            : `${actorLabel} chose ${action}${sized}; updating their likely range and the price of continuing.`;
+            ? amountUsd != null && amountUsd > 0
+              ? `My ${action}${sized} is in · pot $${money(potUsd)}`
+              : `My ${action} is in · pot $${money(potUsd)}`
+            : `${actorLabel} ${action}${sized} · updating range`;
       } else if (patternRead) {
-        observation = "Updating the opponent range from observed bet sizes, checks, calls, and folds.";
+        observation = "Opponent range updated from bets, checks, calls, and folds.";
       }
       this.sendOwnerAiCognition(st.seat, {
         phase: st.phase,
@@ -1993,13 +2084,15 @@ export class TableRuntime {
     this.clearLease();
   }
 
-  resetToWaiting() {
+  resetToWaiting(opts?: { restoreStacks?: Map<number, bigint> }) {
+    const orphanHandId = this.state.handId;
     this.clearPendingHuman();
     this.actionDeadlineAt = null;
     this.equity = null;
     this.runoutRevealed = {};
     this.runoutRevealPublished = false;
     this.privateEquityCache.clear();
+    const restore = opts?.restoreStacks;
     this.state = {
       ...this.state,
       street: "waiting",
@@ -2012,13 +2105,19 @@ export class TableRuntime {
       deck: [],
       seats: this.state.seats.map((s) => ({
         ...s,
+        stack: restore?.get(s.seatIndex) ?? s.stack,
         bet: 0n,
         totalBet: 0n,
         hole: undefined,
-        folded: s.sitOut || !s.playerId || s.stack <= 0n,
+        folded: s.sitOut || !s.playerId || (restore?.get(s.seatIndex) ?? s.stack) <= 0n,
         allIn: false,
       })),
     };
+    if (orphanHandId) {
+      void query(`update hands set status = 'void', settled_at = now() where id = $1 and status = 'running'`, [
+        orphanHandId,
+      ]).catch(() => null);
+    }
   }
 
   async publishRunoutEquity(revealCards: boolean) {
@@ -2145,7 +2244,21 @@ export class TableRuntime {
         } catch {
           /* ignore */
         }
-        this.resetToWaiting();
+        // Prefer DB stacks after a failed deal — in-memory blinds must not stick.
+        try {
+          const rows = await query<{ seat_index: number; stack: string }>(
+            `select seat_index, stack::text from table_seats where table_id = $1 and status = 'occupied'`,
+            [this.tableId],
+          );
+          const fromDb = new Map<number, bigint>();
+          for (const r of rows.rows) {
+            fromDb.set(Number(r.seat_index), usdToChips(Number(r.stack)));
+          }
+          if (fromDb.size > 0) this.resetToWaiting({ restoreStacks: fromDb });
+          else this.resetToWaiting();
+        } catch {
+          this.resetToWaiting();
+        }
         this.broadcastSnapshots();
         await sleep(1500);
       }
@@ -2280,18 +2393,28 @@ export class TableRuntime {
     this.handOpeningStacks = new Map(
       this.state.seats.filter((s) => s.playerId).map((s) => [s.seatIndex, chipsToUsd(s.stack)]),
     );
-    const { state, events } = startHand(this.state, seed, handId);
+    // startHand deducts blinds in memory before events are durable — keep a restore point.
+    const stacksBeforeDeal = new Map(this.state.seats.map((s) => [s.seatIndex, s.stack]));
+    try {
+      const { state, events } = startHand(this.state, seed, handId);
 
-    // Persist hand row BEFORE exposing handId to event writers.
-    await query(
-      `insert into hands (id, table_id, hand_number, status, button_seat, board, pot, street, seed_commit)
-       values ($1,$2,$3,'running',$4,'[]'::jsonb,0,'preflop',$5)`,
-      [handId, this.tableId, state.handNumber, state.button, state.seedCommit],
-    );
-    this.state = state;
-    await markEpochActive(this.tableId, state.handNumber);
-    void this.notifyAiHandBegin(handId);
-    for (const ev of events) await this.emitEngine(ev);
+      // Persist hand row BEFORE exposing handId to event writers.
+      await query(
+        `insert into hands (id, table_id, hand_number, status, button_seat, board, pot, street, seed_commit)
+         values ($1,$2,$3,'running',$4,'[]'::jsonb,0,'preflop',$5)`,
+        [handId, this.tableId, state.handNumber, state.button, state.seedCommit],
+      );
+      this.state = state;
+      await markEpochActive(this.tableId, state.handNumber);
+      await this.refreshSessionEquityDisplay().catch(() => null);
+      void this.notifyAiHandBegin(handId);
+      for (const ev of events) await this.emitEngine(ev);
+    } catch (err) {
+      console.error("beginHand failed — restoring stacks", this.tableId, handId, err);
+      this.state = { ...this.state, handId };
+      this.resetToWaiting({ restoreStacks: stacksBeforeDeal });
+      throw err;
+    }
   }
 
   /**
@@ -2585,6 +2708,8 @@ export class TableRuntime {
         equityBasis,
         equityConfidence: rangeEquity?.confidence ?? null,
         rangeSummary: facts.villain?.rangeSummary ?? null,
+        rangeKind: facts.villain?.rangeKind ?? null,
+        predictedContinueSummary: facts.villain?.predictedContinueSummary ?? null,
         handLabel,
         opponents,
       };
@@ -2805,6 +2930,9 @@ export class TableRuntime {
       decided.amount != null ? usdToChips(decided.amount) : undefined,
     );
     this.state = state;
+    await this.refreshSessionEquityDisplay().catch((err) => {
+      console.warn("refreshSessionEquityDisplay failed", this.tableId, err);
+    });
     try {
       await query(
         `insert into agent_decisions (hand_id, agent_id, sequence, legal_actions, action, amount, reason_code, compute_used)
@@ -2813,7 +2941,7 @@ export class TableRuntime {
           this.state.handId,
           seat.agentId,
           this.sequence + 1,
-          JSON.stringify(legal),
+          jsonStringify(legal),
           decided.action,
           decided.amount ?? null,
           decided.reasonCode,
@@ -3107,6 +3235,22 @@ export class TableRuntime {
     // Seat-order for leaf hash alignment with buildBalanceRoot.
     out.sort((a, b) => a.seat - b.seat);
     return out;
+  }
+
+  /**
+   * Mid-hand display sync: `table_sessions.stack` = seat equity (stack + street bet)
+   * so wallet "At Tables" / LOCKED matches chips still belonging to the player,
+   * including money already in the pot. Does NOT touch escrow (buy-in stays locked
+   * until settle / leave).
+   */
+  async refreshSessionEquityDisplay() {
+    for (const s of this.state.seats) {
+      if (!s.playerId) continue;
+      const sessionId = this.sessions.get(s.playerId);
+      if (!sessionId) continue;
+      const equityUsd = chipsToUsd(s.stack + s.bet);
+      await query(`update table_sessions set stack=$1 where id=$2`, [equityUsd, sessionId]);
+    }
   }
 
   async syncStacks() {

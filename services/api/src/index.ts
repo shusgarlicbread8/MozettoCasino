@@ -2,7 +2,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import { randomUUID } from "node:crypto";
-import { CITIES, cityDisplay, resolveCityId, usdcToAtoms } from "@mozetto/game-rules";
+import { CITIES, chipsToUsd, cityDisplay, resolveCityId, usdcToAtoms } from "@mozetto/game-rules";
 import {
   query,
   getActiveTableStackBalance,
@@ -65,7 +65,11 @@ app.get("/health", async () => ({
   ok: true,
   // Matchmaking mode is process-level env, so tooling (WP-106) can detect a
   // stale API still running the other path instead of failing deep in a run.
-  sealAndFundV3: process.env.SEAL_AND_FUND_V3 === "1",
+  // Interactive HUMAN_PLAY always uses progressive fill (never pair-wait).
+  sealAndFundV3:
+    process.env.HUMAN_PLAY === "0" &&
+    (process.env.SEAL_AND_FUND_V3 === "1" || process.env.MOZETTO_GOLDEN === "1"),
+  progressiveFill: process.env.HUMAN_PLAY !== "0",
   legacyOpenTopUp: process.env.LEGACY_OPEN_TOPUP === "1",
 }));
 
@@ -783,8 +787,9 @@ app.get("/v1/replays", async () => {
        coalesce(
          nullif(h.pot, 0),
          (
+           -- Winner amounts in hand_events are chips (1 chip = $0.01).
            select coalesce(
-             (select sum((w->>'amount')::numeric) from jsonb_array_elements(he.payload->'winners') w),
+             (select sum((w->>'amount')::numeric) / 100.0 from jsonb_array_elements(he.payload->'winners') w),
              0
            )
            from hand_events he
@@ -796,7 +801,8 @@ app.get("/v1/replays", async () => {
        ) as pot,
        coalesce(
          (
-           select coalesce((he.payload->>'rake')::numeric, 0)
+           -- Rake on HAND_SETTLED payloads is also in chips.
+           select coalesce((he.payload->>'rake')::numeric, 0) / 100.0
            from hand_events he
            where he.hand_id = h.id and he.event_type = 'HAND_SETTLED'
            order by he.sequence desc
@@ -1208,19 +1214,23 @@ app.get("/v1/sessions", async (req, reply) => {
   );
   // Platform fees are winner/profit-only: session losers see $0 even if they
   // briefly owed hand-winner tabs that were waived at leave.
+  // assessed_rake sums rakeTabs[].amount from HAND_SETTLED — those are chips.
   const sessions = rows.rows.map((row) => {
     const buyIn = Number(row.buy_in ?? 0);
     const cashOut = Number(row.stack ?? 0);
-    const assessed = Number(row.assessed_rake ?? 0);
+    const assessedChips = Number(row.assessed_rake ?? 0);
+    const assessedUsd =
+      Number.isFinite(assessedChips) && assessedChips > 0
+        ? chipsToUsd(BigInt(Math.round(assessedChips)))
+        : 0;
     const platformFees =
-      Number.isFinite(assessed) &&
       Number.isFinite(buyIn) &&
       Number.isFinite(cashOut) &&
       cashOut > buyIn &&
-      assessed > 0
-        ? assessed
+      assessedUsd > 0
+        ? assessedUsd
         : 0;
-    return { ...row, platform_fees: platformFees };
+    return { ...row, assessed_rake: assessedUsd, platform_fees: platformFees };
   });
   return { sessions };
 });

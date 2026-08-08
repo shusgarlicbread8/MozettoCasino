@@ -353,6 +353,9 @@ export async function claimOpenOnchainSession(opts: {
       return null;
     }
 
+    // Pool identity is the city's 40BB floor, not this player's chosen buy-in.
+    // Matching on $50 would miss every Porto table whose min_buy_in is $20.
+    const cityFloor = stakesForCity(opts.leagueId).minBuyIn;
     const candidateRes = await client.query(
       `select os.session_id, os.table_id, t.name as table_name, t.max_seats,
               array(
@@ -394,7 +397,7 @@ export async function claimOpenOnchainSession(opts: {
        ) desc, os.created_at asc, random()
        limit 12
        for update of os skip locked`,
-      [opts.chainId, opts.leagueId, opts.buyInUsdc, opts.profileId, cfg.maxSeats, cfg.variantId],
+      [opts.chainId, opts.leagueId, cityFloor, opts.profileId, cfg.maxSeats, cfg.variantId],
     );
     const candidates = candidateRes.rows as Array<{
       session_id: string;

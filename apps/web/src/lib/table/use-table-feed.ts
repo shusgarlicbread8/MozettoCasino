@@ -10,7 +10,13 @@ import {
   parseAiCognitionMessage,
   type AiCognitionStatus,
 } from "@/lib/ai-cognition";
-import { displaySeat, formatActionLabel, type LogRow } from "@/lib/table/format";
+import {
+  displaySeat,
+  formatChipActionLabel,
+  moneyFromChips,
+  usdFromChips,
+  type LogRow,
+} from "@/lib/table/format";
 import type { LiveTableState, SeatActionFx, SeatMeta, TableMeta, WinFx } from "@/lib/table/types";
 import { parseServerWsData, WS_CLIENT } from "@/lib/table/ws-client";
 import { presentationFromTableAction } from "@/lib/table-presentation";
@@ -231,12 +237,26 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
           }
           setOwnerCognition((prev) => {
             const incoming = cog.publicThinkingLog ?? [];
+            const handChanged =
+              Boolean(cog.handId) && Boolean(prev.handId) && cog.handId !== prev.handId;
+            // New hand: keep a boundary from the settled hand, then start fresh.
+            if (handChanged) {
+              const boundary = (prev.publicThinkingLog ?? []).filter((l) => l.startsWith("──")).slice(-1);
+              const seed = [...boundary, ...incoming].slice(-24);
+              return {
+                ...cog,
+                energyRemaining: cog.energyRemaining ?? prev.energyRemaining,
+                seat: cog.seat ?? prev.seat,
+                publicThinkingLog: seed.length > 0 ? seed : null,
+                publicNarrative: cog.publicNarrative ?? prev.publicNarrative,
+              };
+            }
             const mergedLog =
               incoming.length > 0
                 ? [
                     ...(prev.publicThinkingLog ?? []).filter((l) => !incoming.includes(l)),
                     ...incoming,
-                  ].slice(-12)
+                  ].slice(-24)
                 : prev.publicThinkingLog ?? null;
             return {
               ...cog,
@@ -395,12 +415,21 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
             onMetaRefresh?.();
           }
           if (et === "PLAYER_ACTED" && p.seatIndex != null) {
-            const label = formatActionLabel(String(p.action || ""), p.amount as number | undefined);
+            // WS event payloads carry chip units; snapshots are already USD.
+            const label = formatChipActionLabel(String(p.action || ""), p.amount as number | string | null);
+            const amountUsd =
+              p.amount != null && Number(p.amount) > 0 ? usdFromChips(p.amount) : undefined;
+            const potUsd =
+              p.potAfter != null
+                ? usdFromChips(p.potAfter)
+                : p.pot != null
+                  ? usdFromChips(p.pot)
+                  : undefined;
             // WP-132: table action → avatar presentation token (no art; Plan 20B later).
             const presentation = presentationFromTableAction({
               action: String(p.action || ""),
-              amount: typeof p.amount === "number" ? p.amount : undefined,
-              pot: typeof p.pot === "number" ? p.pot : undefined,
+              amount: amountUsd,
+              pot: potUsd,
               bigBlind: typeof p.bigBlind === "number" ? p.bigBlind : undefined,
               profileKey:
                 typeof p.profileKey === "string"
@@ -482,18 +511,18 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
           if (et === "HAND_SETTLED") {
             const winners = (Array.isArray(p.winners) ? p.winners : []) as WinFx["winners"];
             const foldWin = winners.some((w) => /without showdown/i.test(w.label || ""));
-            const total = winners.reduce((s, w) => s + Number(w.amount || 0), 0);
+            const totalUsd = winners.reduce((s, w) => s + usdFromChips(w.amount), 0);
             const handName = winners[0]?.label && !foldWin ? winners[0].label : null;
             setWinFx((prev) => ({
               key: Date.now(),
               kind: foldWin ? "fold" : "showdown",
               title: foldWin ? "POT WON" : handName ? `~ ${handName.toUpperCase()} ~` : winners.length > 1 ? "SPLIT POT" : "WINNER",
               subtitle: foldWin
-                ? total
-                  ? `Won ${money(total)} without showdown`
+                ? totalUsd
+                  ? `Won ${money(totalUsd)} without showdown`
                   : "Won without showdown"
                 : winners.length
-                  ? `Won ${money(total)}${handName ? ` with ${handName}` : ""}`
+                  ? `Won ${money(totalUsd)}${handName ? ` with ${handName}` : ""}`
                   : "Hand settled",
               winners,
               revealed: prev?.revealed ?? {},
@@ -553,12 +582,13 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
                                       const handLabel = /^won without showdown$/i.test(raw)
                                         ? "WITHOUT SHOWDOWN"
                                         : raw.toUpperCase();
-                                      return `WON ${money(w.amount)} · ${handLabel}`;
+                                      return `WON ${moneyFromChips(w.amount)} · ${handLabel}`;
                                     })()
                                   : "HAND SETTLED"
                                 : et === "HAND_COMPLETE"
                                   ? "NEXT HAND"
-                                  : formatActionLabel(String(p.action || ""), p.amount as number | undefined).text;
+                                  : formatChipActionLabel(String(p.action || ""), p.amount as number | string | null)
+                                      .text;
             const name =
               et === "PLAYER_ACTED" && p.seatIndex != null
                 ? `SEAT ${displaySeat(p.seatIndex)}`
@@ -573,7 +603,7 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
                 : et === "HAND_SETTLED" || et === "SHOWDOWN_REVEALED"
                   ? "#3DDC8A"
                   : et === "PLAYER_ACTED"
-                    ? formatActionLabel(String(p.action || ""), p.amount as number | undefined).color
+                    ? formatChipActionLabel(String(p.action || ""), p.amount as number | string | null).color
                     : "#6A6A6A";
             // Start a fresh hand-local log so prior-hand step numbers don't interleave.
             if (et === "HAND_STARTED") {

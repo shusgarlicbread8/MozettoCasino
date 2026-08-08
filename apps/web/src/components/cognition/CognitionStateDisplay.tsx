@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { color, font, radius, space } from "@/lib/design-tokens";
 import {
   PHASE_HINTS,
@@ -36,16 +37,37 @@ function displayModelName(modelId?: string | null): string | null {
 
 /**
  * WP-126 — public cognition state machine (no CoT / private reasoning).
+ * Feed is sanitized telemetry ("Live Analysis"), not the model's private thoughts.
  */
 export function CognitionStateDisplay({ status, compact = false }: Props) {
   const active = status.phase;
   const accent = PHASE_COLOR[active];
   const modelName = displayModelName(status.modelId);
+  const logRef = useRef<HTMLOListElement | null>(null);
+  const logLen = status.publicThinkingLog?.length ?? 0;
+  const lastLine = status.publicThinkingLog?.[logLen - 1] ?? "";
+
+  useEffect(() => {
+    const el = logRef.current;
+    if (!el || logLen === 0) return;
+    // Keep the latest activity visible whenever the feed grows or updates.
+    const stick = () => {
+      el.scrollTop = el.scrollHeight;
+      const rail = el.closest("[data-ai-activity-rail]");
+      if (rail instanceof HTMLElement) {
+        rail.scrollTop = rail.scrollHeight;
+      }
+    };
+    stick();
+    // Double-rAF covers layout after font/line wrapping settles.
+    const id = requestAnimationFrame(() => requestAnimationFrame(stick));
+    return () => cancelAnimationFrame(id);
+  }, [logLen, lastLine, status.phase, status.publicNarrative]);
 
   return (
     <div
       aria-live="polite"
-      aria-atomic="true"
+      aria-atomic="false"
       style={{ display: "flex", flexDirection: "column", gap: compact ? space[2] : space[3] }}
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
@@ -58,7 +80,7 @@ export function CognitionStateDisplay({ status, compact = false }: Props) {
             fontWeight: 500,
           }}
         >
-          AI STATE{modelName ? ` · ${modelName}` : ""}
+          LIVE ANALYSIS{modelName ? ` · ${modelName}` : ""}
         </span>
         <span
           style={{
@@ -146,11 +168,11 @@ export function CognitionStateDisplay({ status, compact = false }: Props) {
                 fontFamily: font.mono,
                 fontSize: 9,
                 letterSpacing: "0.08em",
-                color: color.accent,
+                color: status.fallbackUsed ? color.warn : color.accent,
                 marginBottom: 6,
               }}
             >
-              {status.fallbackUsed ? "FALLBACK" : "DECISION"}
+              {status.fallbackUsed ? "DEGRADED FALLBACK" : "DECISION"}
               {status.intentAction
                 ? ` · ${status.intentAction.toUpperCase()}${
                     status.intentAmount != null && status.intentAmount > 0
@@ -165,7 +187,8 @@ export function CognitionStateDisplay({ status, compact = false }: Props) {
           ) : null}
           {status.publicThinkingLog && status.publicThinkingLog.length > 0 ? (
             <ol
-              aria-label="Public thinking log"
+              ref={logRef}
+              aria-label="AI activity log"
               style={{
                 listStyle: "none",
                 margin: 0,
@@ -173,21 +196,26 @@ export function CognitionStateDisplay({ status, compact = false }: Props) {
                 display: "flex",
                 flexDirection: "column",
                 gap: 7,
-                maxHeight: compact ? 120 : 180,
+                maxHeight: compact ? 160 : 240,
                 overflowY: "auto",
+                scrollBehavior: "smooth",
               }}
             >
               {status.publicThinkingLog.map((line, i) => {
                 const latest = i === status.publicThinkingLog!.length - 1;
+                const boundary = line.startsWith("──");
                 return (
                   <li
-                    key={`${i}-${line.slice(0, 24)}`}
+                    key={`${i}-${line.slice(0, 32)}`}
                     style={{
                       fontFamily: font.sans,
                       fontSize: compact ? 11.5 : 12.5,
                       lineHeight: 1.5,
-                      color: latest ? color.text : color.textMuted,
-                      opacity: latest ? 1 : 0.72,
+                      color: boundary ? color.accent : latest ? color.text : color.textMuted,
+                      opacity: latest || boundary ? 1 : 0.72,
+                      fontWeight: boundary ? 600 : 400,
+                      paddingTop: boundary && i > 0 ? 6 : 0,
+                      borderTop: boundary && i > 0 ? `1px solid ${color.line}` : undefined,
                     }}
                   >
                     <span

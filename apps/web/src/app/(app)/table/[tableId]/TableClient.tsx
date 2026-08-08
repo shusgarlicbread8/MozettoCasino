@@ -93,6 +93,10 @@ export default function TableClient() {
       : myMetaSeat != null
         ? Number(myMetaSeat.stack || 0)
         : 0;
+  // Chips already put into the current pot (blinds/bets) are not in `stack`.
+  const myBet = myLiveSeat != null ? Number(myLiveSeat.bet || 0) : 0;
+  /** Total equity still at this table = stack behind + street contribution. */
+  const myTableEquity = myStack + myBet;
   const needTopUp = Boolean(amSeated && myStack <= 0);
   // Sitting out keeps the seat and the stack — it only stops you being dealt in.
   // Distinct from Leave, which settles the stack and gives the seat up.
@@ -325,11 +329,17 @@ export default function TableClient() {
     0;
   const session = [
     {
-      k: "TABLE BALANCE",
+      k: "TABLE STACK",
       v: amSeated ? money(myStack) : "—",
       color: color.text,
     },
-    { k: "AT TABLES", v: money(balances.displayLocked), color: color.warn },
+    {
+      // While seated, show live equity (stack + bet). Locked/DB can lag mid-hand
+      // because chips in the pot have left the seat stack but are still yours.
+      k: "AT TABLES",
+      v: money(amSeated ? myTableEquity : balances.displayLocked),
+      color: color.warn,
+    },
     { k: "SEATED", v: `${seatedCount}/${Number(meta?.max_seats ?? 0) || "—"}`, color: color.text },
     { k: "WALLET LEFT", v: money(balances.displayWallet), color: color.textMuted },
   ];

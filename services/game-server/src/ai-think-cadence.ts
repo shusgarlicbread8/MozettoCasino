@@ -2,6 +2,8 @@
  * Public AI think-time scheduling for the table clock.
  * Easy spots (check / obvious fold) resolve faster; tough spots hold longer.
  * Never exposes private CoT — only cadence + owner-safe narrative lines.
+ *
+ * Copy distinguishes: objective facts → model estimates → strategic conclusion.
  */
 
 export const THINK_CADENCE_MIN_MS = 5_000;
@@ -13,13 +15,6 @@ const PROFILE_TEMPO: Record<string, number> = {
   fox: 60,
   professor: 30,
   machine: 50,
-};
-
-const PROFILE_BRIEF: Record<string, string> = {
-  shark: "The aggressive profile prefers pressure when equity and fold leverage support it.",
-  fox: "The adaptive profile mixes value and deceptive lines based on this table’s betting pattern.",
-  professor: "The selective profile protects marginal holdings and spends more time on later-street value.",
-  machine: "The balanced profile weighs expected value, pot odds, and stack preservation evenly.",
 };
 
 export type LegalLike = { action: string; minAmount?: number; maxAmount?: number };
@@ -67,6 +62,47 @@ export function computeThinkCadenceMs(opts: {
   return Math.max(THINK_CADENCE_MIN_MS, Math.min(THINK_CADENCE_MAX_MS, Math.min(turnMs - 250, ms)));
 }
 
+function confidenceLabel(confidence: number | null | undefined): "low" | "medium" | "high" | null {
+  if (confidence == null || !Number.isFinite(confidence)) return null;
+  if (confidence < 0.4) return "low";
+  if (confidence < 0.65) return "medium";
+  return "high";
+}
+
+function showdownBand(equity: number | null): "none" | "low" | "medium" | "high" | null {
+  if (equity == null) return null;
+  if (equity < 12) return "none";
+  if (equity < 35) return "low";
+  if (equity < 55) return "medium";
+  return "high";
+}
+
+function profileStrategyLine(profileKey: string, conf: "low" | "medium" | "high" | null): string {
+  const profile = profileKey in PROFILE_TEMPO ? profileKey : "machine";
+  if (conf === "low") {
+    switch (profile) {
+      case "fox":
+        return "Low-confidence read — Fox stays closer to baseline than a sharp exploit.";
+      case "shark":
+        return "Low-confidence read — Shark still pressures, but sizes stay closer to baseline.";
+      case "professor":
+        return "Low-confidence read — Professor avoids thin exploits until the model firms up.";
+      default:
+        return "Low-confidence read — Machine leans on pot odds and baseline strategy.";
+    }
+  }
+  switch (profile) {
+    case "shark":
+      return "Shark prefers pressure when equity and fold leverage support it.";
+    case "fox":
+      return "Fox mixes value and deceptive lines from this table’s betting pattern.";
+    case "professor":
+      return "Professor protects marginal holdings and spends more time on later-street value.";
+    default:
+      return "Machine weighs expected value, pot odds, and stack preservation evenly.";
+  }
+}
+
 /** Owner-safe progressive lines — never private CoT or hole cards. */
 export function buildPublicThinkingLines(opts: {
   profileKey: string;
@@ -87,18 +123,22 @@ export function buildPublicThinkingLines(opts: {
   equityBasis?: "range" | "random" | null;
   /** Range-model confidence 0..1, when the estimate came from a range. */
   equityConfidence?: number | null;
-  /** Compact description of the modelled range, e.g. "20.8% of hands (…)". */
+  /** Compact description of the modelled range (prefer width-only). */
   rangeSummary?: string | null;
+  /** holding ≈ dealt cards; action_conditioned = narrowed by line. */
+  rangeKind?: "holding" | "action_conditioned" | null;
+  /** Predicted continue / open model when equity still uses holding. */
+  predictedContinueSummary?: string | null;
   handLabel?: string | null;
   opponents?: number;
 }): string[] {
-  const profile = opts.profileKey in PROFILE_BRIEF ? opts.profileKey : "machine";
-  const brief = PROFILE_BRIEF[profile] ?? PROFILE_BRIEF.machine!;
+  const profile = opts.profileKey in PROFILE_TEMPO ? opts.profileKey : "machine";
   const street = String(opts.street ?? "preflop");
+  const action = String(opts.action ?? "").toLowerCase();
   const intent =
     opts.amount != null && opts.amount > 0
-      ? `${opts.action.toUpperCase()} ${opts.amount}`
-      : opts.action.toUpperCase();
+      ? `${action.toUpperCase()} ${opts.amount}`
+      : action.toUpperCase();
   const pot = Number.isFinite(Number(opts.pot)) ? Math.max(0, Number(opts.pot)) : 0;
   const toCall = Number.isFinite(Number(opts.toCall)) ? Math.max(0, Number(opts.toCall)) : 0;
   const stack = Number.isFinite(Number(opts.stack)) ? Math.max(0, Number(opts.stack)) : null;
@@ -108,66 +148,117 @@ export function buildPublicThinkingLines(opts: {
       : null;
   const breakEven = toCall > 0 ? (toCall / (pot + toCall)) * 100 : 0;
   const hand = opts.handLabel ? opts.handLabel.toLowerCase() : "current holding";
+  const conf = confidenceLabel(opts.equityConfidence);
+  const sd = showdownBand(equity);
   const pressure =
     opts.amount != null && opts.amount > 0 && pot > 0
-      ? `${Math.round((opts.amount / pot) * 100)}% of the current pot`
+      ? `${Math.round((opts.amount / pot) * 100)}% of pot`
       : null;
 
+  const streetLabel = `${street[0]!.toUpperCase()}${street.slice(1)}`;
   const spotLine =
     toCall > 0
-      ? `${street[0]!.toUpperCase()}${street.slice(1)}: ${money(pot)} in the pot and ${money(toCall)} to call — break-even is ${breakEven.toFixed(0)}%.`
-      : `${street[0]!.toUpperCase()}${street.slice(1)}: ${money(pot)} in the pot and no price to continue.`;
+      ? `${streetLabel} · pot ${money(pot)} · ${money(toCall)} to call · pot odds ${breakEven.toFixed(0)}%`
+      : `${streetLabel} · pot ${money(pot)} · no price to continue`;
+
   const estimateLine = buildEstimateLine({
     hand,
     equity,
-    // Unlabelled equity comes from the legacy vs-random path. Default to
-    // "random" rather than "range" so the copy can never overstate the read.
     basis: opts.equityBasis ?? (equity != null ? "random" : null),
     confidence: opts.equityConfidence ?? null,
     rangeSummary: opts.rangeSummary ?? null,
+    rangeKind: opts.rangeKind ?? null,
+    predictedContinueSummary: opts.predictedContinueSummary ?? null,
     opponents: opts.opponents ?? 1,
   });
 
-  let decisionLine: string;
-  if (opts.action === "check") {
-    decisionLine = `Decision: CHECK — realize the hand’s equity for free and avoid inflating ${money(pot)} with a marginal value edge.`;
-  } else if (opts.action === "fold") {
-    decisionLine =
-      equity != null && toCall > 0
-        ? `Decision: FOLD — ${equity.toFixed(0)}% estimated equity does not justify the ${breakEven.toFixed(0)}% price once range strength and future risk are included.`
-        : `Decision: FOLD — preserve the remaining ${stack == null ? "stack" : money(stack)} rather than pay into an unfavorable range.`;
-  } else if (opts.action === "call") {
-    decisionLine =
-      equity != null
-        ? `Decision: CALL ${money(opts.amount ?? toCall)} — ${equity.toFixed(0)}% estimated equity compares favorably with the ${breakEven.toFixed(0)}% immediate price.`
-        : `Decision: CALL ${money(opts.amount ?? toCall)} — the price keeps enough showdown and improvement value in range.`;
-  } else {
-    // `amount` is chips-added, not raise-to. Say that plainly, and name an
-    // all-in as an all-in rather than as a percentage of the pot.
-    const allIn = stack != null && opts.amount != null && opts.amount >= stack;
-    const sizing = allIn
-      ? `this commits the remaining ${money(stack!)} — all-in`
-      : pressure
-        ? `it adds ${money(opts.amount ?? 0)}, ${pressure}`
-        : "apply pressure while staying inside the legal range";
-    decisionLine = `Decision: ${intent} — ${sizing}.`;
+  // Analysing phase: facts + estimate only.
+  if (action === "think") {
+    return [spotLine, estimateLine];
   }
 
-  return [
-    spotLine,
-    estimateLine,
-    brief,
-    opts.fallbackUsed
-      ? `The model response missed the deadline, so the safe legal fallback is ${intent}.`
-      : decisionLine,
-    `Committing ${intent}.`,
-  ];
+  const strategyLine = profileStrategyLine(profile, conf);
+  const decisionLine = buildDecisionLine({
+    action,
+    intent,
+    equity,
+    sd,
+    toCall,
+    breakEven,
+    pot,
+    stack,
+    amount: opts.amount ?? null,
+    pressure,
+  });
+
+  const lines = [spotLine, estimateLine, strategyLine];
+  if (opts.fallbackUsed) {
+    lines.push(`Provider timeout → degraded fallback ${intent} (not a profile decision).`);
+  } else {
+    lines.push(decisionLine);
+  }
+  lines.push(`Committing ${intent}.`);
+  return lines;
+}
+
+function buildDecisionLine(input: {
+  action: string;
+  intent: string;
+  equity: number | null;
+  sd: "none" | "low" | "medium" | "high" | null;
+  toCall: number;
+  breakEven: number;
+  pot: number;
+  stack: number | null;
+  amount: number | null;
+  pressure: string | null;
+}): string {
+  const { action, intent, equity, sd, toCall, breakEven, pot, stack, amount, pressure } = input;
+
+  if (action === "check") {
+    if (sd === "none") {
+      return `Decision: CHECK — near-zero showdown value; take free showdown rather than bluff ${money(pot)}.`;
+    }
+    if (sd === "low") {
+      return `Decision: CHECK — weak showdown value; pot-control instead of thin value or a bluff.`;
+    }
+    return `Decision: CHECK — realize equity for free; no need to inflate ${money(pot)}.`;
+  }
+
+  if (action === "fold") {
+    return equity != null && toCall > 0
+      ? `Decision: FOLD — ~${Math.round(equity)}% equity does not clear the ${breakEven.toFixed(0)}% price.`
+      : `Decision: FOLD — preserve ${stack == null ? "stack" : money(stack)} vs an unfavorable price.`;
+  }
+
+  if (action === "call") {
+    return equity != null
+      ? `Decision: CALL ${money(amount ?? toCall)} — ~${Math.round(equity)}% equity vs ${breakEven.toFixed(0)}% pot odds.`
+      : `Decision: CALL ${money(amount ?? toCall)} — price keeps enough showdown / improvement value.`;
+  }
+
+  if (action === "bet" || action === "raise" || action === "all_in") {
+    const allIn = stack != null && amount != null && amount >= stack;
+    if (sd === "none" || sd === "low") {
+      const sizing = allIn
+        ? `all-in ${money(stack!)}`
+        : pressure
+          ? `${money(amount ?? 0)} (${pressure})`
+          : money(amount ?? 0);
+      return `Decision: ${intent} — bluff / denial line (${sizing}); needs folds often enough.`;
+    }
+    if (allIn) {
+      return `Decision: ${intent} — commits remaining ${money(stack!)} (all-in).`;
+    }
+    const sizing = pressure ? `adds ${money(amount ?? 0)}, ${pressure}` : `adds ${money(amount ?? 0)}`;
+    return `Decision: ${intent} — ${sizing}; value / pressure line.`;
+  }
+
+  return `Decision: ${intent}.`;
 }
 
 /**
  * Equity copy that never overstates what was measured.
- * A range estimate names the range and its confidence; a vs-random estimate
- * says "random hands" explicitly so it cannot read as a range read.
  */
 function buildEstimateLine(input: {
   hand: string;
@@ -175,22 +266,31 @@ function buildEstimateLine(input: {
   basis: "range" | "random" | null;
   confidence: number | null;
   rangeSummary: string | null;
+  rangeKind: "holding" | "action_conditioned" | null;
+  predictedContinueSummary: string | null;
   opponents: number;
 }): string {
-  const { hand, equity, basis, confidence, rangeSummary, opponents } = input;
+  const { hand, equity, basis, confidence, rangeSummary, rangeKind, predictedContinueSummary, opponents } =
+    input;
   if (equity == null || basis == null) {
-    return `I’m comparing the ${hand}, board texture, legal sizes, and effective stack before acting.`;
+    return `Comparing ${hand}, board, legal sizes, and effective stack.`;
   }
+
+  const approx = `~${Math.round(equity)}%`;
+  const conf = confidenceLabel(confidence);
+  const confBit = conf ? ` · ${conf} confidence` : "";
+
   if (basis === "range") {
-    const conf =
-      confidence == null
-        ? ""
-        : ` Range confidence is ${confidence < 0.4 ? "low" : confidence < 0.65 ? "medium" : "high"}.`;
-    const against = rangeSummary ? `their estimated range — ${rangeSummary}` : "their estimated range";
-    return `My ${hand} runs about ${equity.toFixed(0)}% against ${against}.${conf}`;
+    if (rangeKind === "holding") {
+      const predict = predictedContinueSummary ? ` · ${predictedContinueSummary}` : "";
+      return `${hand} ≈ ${approx} vs dealt holding (~100%)${predict}${confBit}`;
+    }
+    const against = rangeSummary ? `vs ${rangeSummary}` : "vs action-conditioned range";
+    return `${hand} ≈ ${approx} ${against}${confBit}`;
   }
+
   const plural = opponents === 1 ? "" : "s";
-  return `No range read yet, so ${hand} is only measured at ${equity.toFixed(0)}% against ${opponents} random hand${plural} — an upper bound, not a read.`;
+  return `No range read yet — ${hand} ≈ ${approx} vs ${opponents} random hand${plural} (upper bound)`;
 }
 
 function money(amount: number): string {

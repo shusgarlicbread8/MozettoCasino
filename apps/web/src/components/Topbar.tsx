@@ -148,13 +148,13 @@ export function Topbar() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ font: `400 9px ${font.mono}`, letterSpacing: ".1em", color: color.textFaint }}>
-              LOCKED
+              AT TABLES
             </div>
             <div
               title={
                 balances.pendingSettlement > 0
-                  ? `Live at tables. ${balances.pendingSettlement.toFixed(0)} still unlocking on-chain.`
-                  : "Live chips at your active seats"
+                  ? `Chips at active seats (stack + pot contribution). ${balances.pendingSettlement.toFixed(0)} still unlocking on-chain.`
+                  : "Chips at your active seats — stack plus anything already in the pot"
               }
               style={{ font: `500 13px ${font.mono}`, color: color.warn }}
             >

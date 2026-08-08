@@ -122,7 +122,64 @@ test("SPR and effective stack are computed from the shorter stack", () => {
 
 test("missing an action log is reported as a caveat, not hidden", () => {
   const facts = buildDecisionFacts({ state: tracedState(), seatIndex: 2, equitySamples: 200 });
-  assert.ok(facts.caveats.includes("no_action_log_supplied_range_is_positional_prior_only"));
+  // Table state shows a raise (lastAggressor / bet size) so we infer, not invent silence.
+  assert.ok(
+    facts.caveats.includes("no_action_log_supplied_range_inferred_from_table_state") ||
+      facts.caveats.includes("no_action_log_supplied_using_holding_range"),
+  );
+  assert.equal(facts.villain?.rangeKind, "action_conditioned");
+});
+
+test("before villain acts, equity uses dealt holding (~100%), not predicted continue", () => {
+  // HU blinds only: hero BTN/SB faces BB who has not acted voluntarily.
+  const state: HoldemState = {
+    config: { tableId: "t1", smallBlind: 5n, bigBlind: 10n, rakePct: 0, rakeCap: null },
+    handId: "h2",
+    handNumber: 2,
+    street: "preflop",
+    button: 1,
+    deck: [],
+    board: [],
+    pot: 15n,
+    seats: [
+      seat({
+        seatIndex: 1,
+        stack: 95n,
+        bet: 5n,
+        totalBet: 5n,
+        hole: [parseCard("Ah"), parseCard("Tc")],
+      }),
+      seat({ seatIndex: 2, stack: 90n, bet: 10n, totalBet: 10n }),
+    ],
+    actingIndex: 1,
+    currentBet: 10n,
+    minRaise: 10n,
+    lastAggressor: null,
+    firstToAct: 1,
+    serverSeed: null,
+    seedCommit: null,
+    winners: [],
+    rake: 0,
+    actedThisStreet: new Set(),
+    lastRaiseComplete: true,
+  } as unknown as HoldemState;
+
+  const facts = buildDecisionFacts({
+    state,
+    seatIndex: 1,
+    actions: [],
+    equitySamples: 1500,
+    seed: 7,
+  });
+  assert.equal(facts.villain?.rangeKind, "holding");
+  assert.ok((facts.villain?.rangeWidthPct ?? 0) > 95, "holding should be ~100%");
+  assert.ok(facts.villain?.predictedContinueSummary, "predicted continue should be labelled separately");
+  assert.ok(facts.caveats.includes("equity_vs_dealt_holding_not_predicted_continue"));
+  assert.ok(facts.heroEquityVsRange, "expected equity vs holding");
+  assert.ok(
+    facts.heroEquityVsRange!.value > 0.48 && facts.heroEquityVsRange!.value < 0.68,
+    `ATo vs ~100% should be roughly mid-50s, got ${facts.heroEquityVsRange!.value}`,
+  );
 });
 
 test("multiway spots refuse to fake a range model", () => {

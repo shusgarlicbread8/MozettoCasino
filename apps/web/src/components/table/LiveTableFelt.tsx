@@ -5,6 +5,7 @@ import { color, font, radius } from "@/lib/design-tokens";
 import { boardLabel, CARD_BACK, CARD_SLOT, engineCard, type CardView } from "@/lib/table/cards";
 import { deriveSeatCognition } from "@/lib/table/cognition";
 import { money } from "@/lib/session";
+import { moneyFromChips } from "@/lib/table/format";
 import type { LiveTableState, SeatActionFx, SeatMeta, TableMeta, WinFx } from "@/lib/table/types";
 
 const SEAT_POS_6 = [
@@ -181,7 +182,7 @@ export function LiveTableFelt({
         status: !occupied
           ? ""
           : winnerLabel
-            ? `+${money(winnerLabel.amount)}`
+            ? `+${moneyFromChips(winnerLabel.amount)}`
             : showOdds
               ? `${eq!.equityPct.toFixed(2)}% ODDS`
               : seatAct

@@ -75,9 +75,23 @@ export type HoldemState = {
 
 export type EngineEvent =
   | { type: "HAND_STARTED"; handId: string; handNumber: number; seedCommit: string; button: number }
-  | { type: "BLINDS_POSTED"; posts: { seatIndex: number; amount: Chips; kind: "sb" | "bb" }[] }
+  | {
+      type: "BLINDS_POSTED";
+      posts: { seatIndex: number; amount: Chips; kind: "sb" | "bb" }[];
+      potAfter: Chips;
+    }
   | { type: "HOLE_CARDS_DEALT"; private: { seatIndex: number; cards: Card[] }[] }
-  | { type: "PLAYER_ACTED"; seatIndex: number; action: PokerAction; amount?: Chips }
+  | {
+      type: "PLAYER_ACTED";
+      seatIndex: number;
+      action: PokerAction;
+      amount?: Chips;
+      /** Pot after this action's chips are applied — immutable for narration. */
+      potAfter: Chips;
+      /** Pot immediately before this action. */
+      potBefore: Chips;
+      street: string;
+    }
   | { type: "STREET_DEALT"; street: string; cards: Card[] }
   | { type: "POT_UPDATED"; pot: Chips }
   | {
@@ -389,7 +403,7 @@ export function startHand(state: HoldemState, serverSeed: string, handId: string
   posts.push({ seatIndex: bb, amount: bbPaid, kind: "bb" });
   next.pot = sbPaid + bbPaid;
   next.lastAggressor = bb;
-  events.push({ type: "BLINDS_POSTED", posts });
+  events.push({ type: "BLINDS_POSTED", posts, potAfter: next.pot });
   events.push({ type: "POT_UPDATED", pot: next.pot });
 
   const privateCards: { seatIndex: number; cards: Card[] }[] = [];
@@ -939,7 +953,15 @@ export function applyAction(
   }
 
   acted.add(seat.seatIndex);
-  events.push({ type: "PLAYER_ACTED", seatIndex: seat.seatIndex, action, amount: paid || undefined });
+  events.push({
+    type: "PLAYER_ACTED",
+    seatIndex: seat.seatIndex,
+    action,
+    amount: paid || undefined,
+    potBefore: state.pot,
+    potAfter: pot,
+    street: String(state.street),
+  });
   events.push({ type: "POT_UPDATED", pot });
 
   let next: HoldemState = {

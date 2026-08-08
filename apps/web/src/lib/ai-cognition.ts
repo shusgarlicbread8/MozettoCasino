@@ -124,7 +124,7 @@ export function parseAiCognitionMessage(msg: unknown): AiCognitionStatus | null 
         : Number(m.intentAmount),
     publicNarrative: typeof m.publicNarrative === "string" ? m.publicNarrative : null,
     publicThinkingLog: Array.isArray(m.publicThinkingLog)
-      ? m.publicThinkingLog.filter((l): l is string => typeof l === "string" && l.trim().length > 0).slice(-12)
+      ? m.publicThinkingLog.filter((l): l is string => typeof l === "string" && l.trim().length > 0).slice(-24)
       : null,
     fallbackUsed: Boolean(m.fallbackUsed),
   };

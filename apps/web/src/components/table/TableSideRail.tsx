@@ -237,6 +237,7 @@ export function TableSideRail({
 
       {/* Cognition sits between the action log and the live-engine/trust footer. */}
       <div
+        data-ai-activity-rail
         style={{
           flex: "none",
           borderTop: `1px solid ${color.line}`,
@@ -251,11 +252,11 @@ export function TableSideRail({
         ) : (
           <>
             <div className="mz-mono" style={{ fontSize: 10, letterSpacing: ".12em", color: color.accent, marginBottom: 8 }}>
-              AI COGNITION
+              AI ACTIVITY
             </div>
             <div className="mz-mono" style={{ fontSize: 11.5, lineHeight: 1.7, color: color.textMuted }}>
               {cognitionNote ??
-                "Your agent analyses each spot on Groq. Public cognition states appear here — never private chain-of-thought."}
+                "Your agent analyses each spot on Groq. Live analysis appears here — never private chain-of-thought."}
             </div>
           </>
         )}

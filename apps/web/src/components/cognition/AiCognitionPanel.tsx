@@ -41,7 +41,7 @@ export function AiCognitionPanel({
             fontWeight: 500,
           }}
         >
-          AI COGNITION
+          AI ACTIVITY
         </div>
         <p
           style={{
@@ -52,7 +52,7 @@ export function AiCognitionPanel({
             color: color.textFaint,
           }}
         >
-          Seat to see your AI Energy and public cognition state. Opponent private reasoning is never
+          Seat to see your AI Energy and live analysis feed. Opponent private reasoning is never
           shown.
         </p>
       </div>
@@ -61,7 +61,7 @@ export function AiCognitionPanel({
 
   return (
     <section
-      aria-label="Your AI cognition"
+      aria-label="Your AI activity"
       style={{
         display: "flex",
         flexDirection: "column",
