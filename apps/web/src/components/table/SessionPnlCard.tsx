@@ -7,7 +7,6 @@ import type { SessionEconomics } from "@/lib/table/types";
 
 type Props = {
   economics: SessionEconomics | null | undefined;
-  leaveQueued?: boolean;
 };
 
 function fmtSigned(n: number): string {
@@ -21,7 +20,7 @@ function fmtSigned(n: number): string {
  * Bottom-left floating session fee / P&L tracker.
  * Stacks are already net of per-hand rake; feesPaid is what the pot took.
  */
-export function SessionPnlCard({ economics, leaveQueued }: Props) {
+export function SessionPnlCard({ economics }: Props) {
   const [open, setOpen] = useState(true);
   if (!economics) return null;
 
@@ -75,23 +74,6 @@ export function SessionPnlCard({ economics, leaveQueued }: Props) {
 
       {open ? (
         <div style={{ padding: "0 12px 12px", borderTop: `1px solid ${color.line}` }}>
-          {leaveQueued ? (
-            <div
-              className="mz-mono"
-              style={{
-                marginTop: 8,
-                padding: "6px 8px",
-                borderRadius: 6,
-                background: "rgba(232,184,74,.1)",
-                border: "1px solid rgba(232,184,74,.28)",
-                fontSize: 10,
-                color: color.warn,
-              }}
-            >
-              Leaving after this hand — AI finishes, then results.
-            </div>
-          ) : null}
-
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
             <MiniStat label="BUY-IN" value={money(economics.buyIn)} />
             <MiniStat label="STACK" value={money(economics.stack)} />

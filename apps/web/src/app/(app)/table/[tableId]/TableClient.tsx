@@ -36,7 +36,7 @@ export default function TableClient() {
   const { tableId } = useParams<{ tableId: string }>();
   const { me, refresh } = useSession();
   const balances = useMozettoBalances();
-  const { setSeatedTable, confirmLeave } = useLeaveGuard();
+  const { setSeatedTable, confirmLeave, bypassLeaveGuard } = useLeaveGuard();
   const [pro, setPro] = useState(false);
   const [fair, setFair] = useState(true);
   const [joinOpen, setJoinOpen] = useState(false);
@@ -191,7 +191,7 @@ export default function TableClient() {
     if (handsFromEconomics > sessionHandsPlayed) setSessionHandsPlayed(handsFromEconomics);
   }, [handsFromEconomics, sessionHandsPlayed]);
   useEffect(() => {
-    if (live?.leaveQueued) setLeaveQueued(true);
+    if (typeof live?.leaveQueued === "boolean") setLeaveQueued(live.leaveQueued);
   }, [live?.leaveQueued]);
   useEffect(() => {
     if (amSeated) hadSeatedRef.current = true;
@@ -203,6 +203,7 @@ export default function TableClient() {
     if (!hadSeatedRef.current || amSeated) return;
     const played = Math.max(sessionHandsPlayed, handsFromEconomics);
     navigatedAfterLeaveRef.current = true;
+    bypassLeaveGuard();
     void refresh();
     balances.refetch();
     if (played >= 1) {
@@ -213,16 +214,28 @@ export default function TableClient() {
       // Brief WS flicker before first sit — allow retry if we get seated again.
       navigatedAfterLeaveRef.current = false;
     }
-  }, [leaveQueued, amSeated, sessionHandsPlayed, handsFromEconomics, tableId, refresh, balances]);
+  }, [
+    leaveQueued,
+    amSeated,
+    sessionHandsPlayed,
+    handsFromEconomics,
+    tableId,
+    refresh,
+    balances,
+    bypassLeaveGuard,
+  ]);
 
   async function leaveTable(mode: "afterHand" | "now") {
     const wasSeated = amSeated;
     const ok = await confirmLeave(
       wasSeated
         ? mode === "afterHand"
-          ? "Leave after this hand. Your AI finishes under its locked strategy, then your stack settles — results open next."
-          : "Leave now. Mid-hand you may fold this pot; remaining stack settles back to your Arena Account."
+          ? "Your AI finishes this hand under its locked strategy. After the hand, your stack settles and results open — you can cancel anytime before then."
+          : "Leave immediately. Mid-hand you may fold this pot; remaining stack settles back to your Arena Account."
         : "Any on-chain buy-in will settle back to your Arena Account; you can find a new match after.",
+      mode === "afterHand"
+        ? { title: "Leave after this hand?", confirmLabel: "Leave after hand" }
+        : { title: "Leave now?", confirmLabel: "Leave now" },
     );
     if (!ok) return;
     if (mode === "now") setSeatedTable(null);
@@ -240,7 +253,7 @@ export default function TableClient() {
       // Between hands: leave applies immediately (fall through to results).
       if (leaveRes?.queued) {
         setLeaveQueued(true);
-        setActionError("Leaving after this hand — your AI finishes, then results open.");
+        setLive((prev) => (prev ? { ...prev, leaveQueued: true } : prev));
         if (tableId) setSeatedTable(tableId);
         return;
       }
@@ -250,6 +263,7 @@ export default function TableClient() {
       );
       // No hands dealt → lobby. Results whenever you actually played.
       if (!wasSeated || handsPlayed < 1) {
+        bypassLeaveGuard();
         await refresh();
         balances.refetch();
         window.location.href = "/poker";
@@ -287,6 +301,7 @@ export default function TableClient() {
       // Effect also navigates; set flag so we don't double-hit if effect races.
       if (!navigatedAfterLeaveRef.current) {
         navigatedAfterLeaveRef.current = true;
+        bypassLeaveGuard();
         await refresh();
         balances.refetch();
         window.location.href = `/result/${encodeURIComponent(String(tableId))}`;
@@ -296,6 +311,17 @@ export default function TableClient() {
       if (wasSeated && tableId) setSeatedTable(tableId);
       setActionError(e instanceof Error ? e.message : "Leave failed — try again");
       return;
+    }
+  }
+
+  async function stayAtTable() {
+    if (!leaveQueued) return;
+    try {
+      await api(`/v1/tables/${tableId}/cancel-leave`, { method: "POST", body: "{}" });
+      setLeaveQueued(false);
+      setLive((prev) => (prev ? { ...prev, leaveQueued: false } : prev));
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Could not cancel leave — try again");
     }
   }
 
@@ -557,9 +583,7 @@ export default function TableClient() {
           }}
         >
           <PublicActionCard log={log} />
-          {mySeated ? (
-            <SessionPnlCard economics={economics} leaveQueued={leaveQueued || Boolean(live?.leaveQueued)} />
-          ) : null}
+          {mySeated ? <SessionPnlCard economics={economics} /> : null}
           <LiveTableFelt
             meta={meta}
             seatMeta={seatMeta}
@@ -721,6 +745,27 @@ export default function TableClient() {
                   {sittingOut ? "Sit back in" : "Sit out"}
                 </Button>
               ) : null}
+              {mySeated && leaveQueued ? (
+                <>
+                  <span
+                    className="mz-mono"
+                    style={{
+                      fontSize: 10,
+                      letterSpacing: ".08em",
+                      color: color.warn,
+                      padding: "6px 10px",
+                      borderRadius: radius.md,
+                      border: `1px solid rgba(232,184,74,.28)`,
+                      background: "rgba(232,184,74,.08)",
+                    }}
+                  >
+                    LEAVE AFTER HAND
+                  </span>
+                  <Button size="sm" variant="secondary" onClick={() => void stayAtTable()}>
+                    Stay
+                  </Button>
+                </>
+              ) : null}
               {mySeated && !leaveQueued ? (
                 <Button size="sm" variant="secondary" onClick={() => void leaveTable("afterHand")}>
                   Leave after hand
@@ -732,7 +777,7 @@ export default function TableClient() {
                 disabled={leaveQueued}
                 onClick={() => void leaveTable("now")}
               >
-                {leaveQueued ? "Leaving…" : "Leave now"}
+                Leave now
               </Button>
             </div>
           </div>

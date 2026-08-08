@@ -175,7 +175,8 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
     }
 
     function pushLog(row: LogRow) {
-      setLog((prev) => [row, ...prev].slice(0, 40));
+      // Chronological: earliest at top, latest at bottom (card scrolls down).
+      setLog((prev) => [...prev, row].slice(-40));
     }
 
     async function connect() {
@@ -343,6 +344,9 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
 
           if (et === "LEAVE_QUEUED" && ownerUserId && String(p.userId || "") === ownerUserId) {
             setLive((prev) => (prev ? { ...prev, leaveQueued: true } : prev));
+          }
+          if (et === "LEAVE_CANCELLED" && ownerUserId && String(p.userId || "") === ownerUserId) {
+            setLive((prev) => (prev ? { ...prev, leaveQueued: false } : prev));
           }
 
           // WP-126 honest fallback when ai_cognition frames are missing.

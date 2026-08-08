@@ -20,16 +20,23 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 const DEFAULT_MSG =
   "You're still seated at a poker table. Leaving may fold your hand and cash you out. Leave the table anyway?";
 
+type LeaveConfirmOpts = {
+  title?: string;
+  confirmLabel?: string;
+};
+
 type LeaveGuardApi = {
   /** Register that this tab is seated at a table (null = clear). */
   setSeatedTable: (tableId: string | null) => void;
   /** Confirm leave for intentional actions (Leave button). Returns false if cancelled. */
-  confirmLeave: (message?: string) => Promise<boolean>;
+  confirmLeave: (message?: string, opts?: LeaveConfirmOpts) => Promise<boolean>;
   /**
    * If seated, confirm + cash out. Returns false if the user cancelled.
    * Use before Sign out or other non-link navigations.
    */
   leaveIfSeated: (message?: string) => Promise<boolean>;
+  /** Skip unload beacons before in-app navigations (e.g. results redirect). */
+  bypassLeaveGuard: () => void;
   /** True while seated on a live table. */
   seated: boolean;
 };
@@ -38,6 +45,7 @@ const LeaveGuardContext = createContext<LeaveGuardApi>({
   setSeatedTable: () => undefined,
   confirmLeave: async () => true,
   leaveIfSeated: async () => true,
+  bypassLeaveGuard: () => undefined,
   seated: false,
 });
 
@@ -47,17 +55,26 @@ export function useLeaveGuard() {
 
 type PendingAsk = {
   message: string;
+  title: string;
+  confirmLabel: string;
   resolve: (ok: boolean) => void;
 };
 
+const DEFAULT_TITLE = "Cash out and leave?";
+const DEFAULT_CONFIRM = "Leave table";
+
 function LeaveConfirmDialog({
   open,
+  title,
   message,
+  confirmLabel,
   onStay,
   onLeave,
 }: {
   open: boolean;
+  title: string;
   message: string;
+  confirmLabel: string;
   onStay: () => void;
   onLeave: () => void;
 }) {
@@ -145,7 +162,7 @@ function LeaveConfirmDialog({
             lineHeight: 1.2,
           }}
         >
-          Cash out and leave?
+          {title}
         </h2>
         <p
           style={{
@@ -170,7 +187,7 @@ function LeaveConfirmDialog({
             Stay seated
           </Button>
           <Button size="md" variant="danger" onClick={onLeave} autoFocus>
-            Leave table
+            {confirmLabel}
           </Button>
         </div>
       </div>
@@ -190,14 +207,18 @@ export function LeaveGuardProvider({ children }: { children: React.ReactNode }) 
     setTableId(id);
   }, []);
 
-  const askConfirm = useCallback((message?: string) => {
+  const askConfirm = useCallback((message?: string, opts?: LeaveConfirmOpts) => {
     if (!tableIdRef.current) return Promise.resolve(true);
+    const title = opts?.title ?? DEFAULT_TITLE;
+    const confirmLabel = opts?.confirmLabel ?? DEFAULT_CONFIRM;
     // Collapse concurrent asks into one dialog.
     if (pendingRef.current) {
       return new Promise<boolean>((resolve) => {
         const prev = pendingRef.current!;
         pendingRef.current = {
           message: message ?? prev.message,
+          title: opts?.title ?? prev.title,
+          confirmLabel: opts?.confirmLabel ?? prev.confirmLabel,
           resolve: (ok) => {
             prev.resolve(ok);
             resolve(ok);
@@ -207,7 +228,12 @@ export function LeaveGuardProvider({ children }: { children: React.ReactNode }) 
       });
     }
     return new Promise<boolean>((resolve) => {
-      const ask: PendingAsk = { message: message ?? DEFAULT_MSG, resolve };
+      const ask: PendingAsk = {
+        message: message ?? DEFAULT_MSG,
+        title,
+        confirmLabel,
+        resolve,
+      };
       pendingRef.current = ask;
       setPending(ask);
     });
@@ -221,9 +247,14 @@ export function LeaveGuardProvider({ children }: { children: React.ReactNode }) 
   }, []);
 
   const confirmLeave = useCallback(
-    (message?: string) => askConfirm(message),
+    (message?: string, opts?: LeaveConfirmOpts) => askConfirm(message, opts),
     [askConfirm],
   );
+
+  const bypassLeaveGuard = useCallback(() => {
+    bypassRef.current = true;
+    setTableId(null);
+  }, []);
 
   const cashOut = useCallback(async () => {
     const id = tableIdRef.current;
@@ -281,8 +312,8 @@ export function LeaveGuardProvider({ children }: { children: React.ReactNode }) 
     };
   }, [tableId]);
 
-  // Browser close / refresh: warn, and fire an immediate leave so the seat is
-  // not sticky for the next Find Match. Mid-hand leave folds/queues server-side.
+  // Tab close / refresh: silent keepalive leave — no browser "Leave site?" dialog.
+  // In-app leave always uses the platform confirm modal instead.
   useEffect(() => {
     if (!tableId) return;
     const leaveBeacon = () => {
@@ -303,11 +334,8 @@ export function LeaveGuardProvider({ children }: { children: React.ReactNode }) 
         /* best-effort — game-server WS disconnect leave is the backstop */
       }
     };
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (bypassRef.current) return;
+    const onBeforeUnload = () => {
       leaveBeacon();
-      e.preventDefault();
-      e.returnValue = "";
     };
     const onPageHide = () => {
       leaveBeacon();
@@ -365,9 +393,10 @@ export function LeaveGuardProvider({ children }: { children: React.ReactNode }) 
       setSeatedTable,
       confirmLeave,
       leaveIfSeated,
+      bypassLeaveGuard,
       seated: Boolean(tableId),
     }),
-    [setSeatedTable, confirmLeave, leaveIfSeated, tableId],
+    [setSeatedTable, confirmLeave, leaveIfSeated, bypassLeaveGuard, tableId],
   );
 
   return (
@@ -375,7 +404,9 @@ export function LeaveGuardProvider({ children }: { children: React.ReactNode }) 
       {children}
       <LeaveConfirmDialog
         open={Boolean(pending)}
+        title={pending?.title ?? DEFAULT_TITLE}
         message={pending?.message ?? DEFAULT_MSG}
+        confirmLabel={pending?.confirmLabel ?? DEFAULT_CONFIRM}
         onStay={() => settleAsk(false)}
         onLeave={() => settleAsk(true)}
       />

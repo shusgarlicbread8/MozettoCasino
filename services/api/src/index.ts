@@ -553,6 +553,30 @@ app.post("/v1/tables/:id/sit-out", async (req, reply) => {
   }
 });
 
+app.post("/v1/tables/:id/cancel-leave", async (req, reply) => {
+  const session = await requireUser(req, reply);
+  if (!session) return;
+  const id = (req.params as { id: string }).id;
+  const auth = req.headers.authorization;
+  const cookie = req.headers.cookie;
+  try {
+    const res = await fetch(`${GAME_HTTP}/v1/tables/${id}/cancel-leave`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(auth ? { authorization: auth } : {}),
+        ...(cookie ? { cookie } : {}),
+      },
+      body: "{}",
+      signal: AbortSignal.timeout(8_000),
+    });
+    const data = await res.json().catch(() => ({}));
+    return reply.code(res.status).send(data);
+  } catch (e) {
+    return reply.code(502).send({ error: "game_server_unreachable", message: e instanceof Error ? e.message : "error" });
+  }
+});
+
 app.get("/v1/wallet", async (req, reply) => {
   const session = await requireUser(req, reply);
   if (!session) return;

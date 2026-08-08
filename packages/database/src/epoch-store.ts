@@ -107,6 +107,22 @@ export async function listPendingLeaveOwnerIds(tableId: string): Promise<Set<str
   return new Set(pending.filter((c) => c.changeType === "leave").map((c) => c.ownerId));
 }
 
+/** Cancel a pending leave so the owner stays for the next hand. */
+export async function cancelPendingLeave(tableId: string, ownerId: string): Promise<{
+  cancelled: boolean;
+  reason?: string;
+}> {
+  const r = await query<{ id: string }>(
+    `update queued_seat_changes
+     set status = 'cancelled', applied_at = now(), reject_reason = 'cancelled_by_owner'
+     where table_id = $1 and owner_id = $2 and change_type = 'leave' and status = 'pending'
+     returning id`,
+    [tableId, ownerId],
+  ).catch(() => ({ rows: [] as { id: string }[] }));
+  if (!r.rows.length) return { cancelled: false, reason: "no_pending_leave" };
+  return { cancelled: true };
+}
+
 export type EnqueueSeatChangeInput = {
   tableId: string;
   changeType: SeatChangeType;

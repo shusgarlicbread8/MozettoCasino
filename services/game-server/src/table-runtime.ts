@@ -56,6 +56,7 @@ import {
   markEpochActive,
   listPendingLeaveOwnerIds,
   listPendingSeatChanges,
+  cancelPendingLeave,
   postRake,
   type EpochParticipant,
   type DbClient,
@@ -1828,6 +1829,22 @@ export class TableRuntime {
     return this.withSeatLock(() => this.leaveUnlocked(userId, opts));
   }
 
+  /** Cancel a queued leave-after-hand so the player stays for the next deal. */
+  async cancelLeave(userId: string) {
+    return this.withSeatLock(async () => {
+      const result = await cancelPendingLeave(this.tableId, userId);
+      this.pendingLeaveOwners.delete(userId);
+      if (result.cancelled) {
+        await this.persistEvent("LEAVE_CANCELLED", { userId }).catch(() => null);
+      }
+      this.pendingLeaveOwners = await listPendingLeaveOwnerIds(this.tableId).catch(
+        () => this.pendingLeaveOwners,
+      );
+      this.broadcastSnapshots();
+      return { ok: true, ...result };
+    });
+  }
+
   async leaveUnlocked(userId: string, opts?: { forceImmediate?: boolean }) {
     const seat = this.state.seats.find((s) => s.playerId === userId);
     if (!seat || !seat.playerId) {
@@ -2002,17 +2019,19 @@ export class TableRuntime {
       this.resetToWaiting();
     }
 
-    // On-chain HU/cash: one leaver must not leave the opponent (often AI) alone
-    // holding everyone's activeGames slot forever. Cash out leftovers and settle.
+    // Cash tables: remaining seated players keep their seats (wait for a fill).
+    // Only close custody when the table is empty — never force-cash the other human.
     const seatedAfter = this.state.seats.filter((s) => s.playerId);
-    if (this.arenaMode === "onchain" && seatedAfter.length < 2) {
-      await this.closeOnchainTableAfterUndermannedLeave("opponent_left").catch((err) =>
+    if (this.arenaMode === "onchain" && seatedAfter.length === 0) {
+      await this.closeOnchainTableAfterUndermannedLeave("table_empty").catch((err) =>
         console.error("closeOnchainTableAfterUndermannedLeave failed", this.tableId, err),
       );
-    } else if (this.arenaMode === "onchain" && this.onchainSessionId) {
-      await markOnchainSessionReadyForSettlement(this.onchainSessionId).catch((err) =>
-        console.error("markOnchainSessionReadyForSettlement failed", this.tableId, err),
-      );
+    } else if (seatedAfter.length > 0) {
+      await this.persistEvent("OPPONENT_LEFT", {
+        userId,
+        remaining: seatedAfter.length,
+        message: "A player left — table stays open for seated players.",
+      }).catch(() => null);
     }
 
     // Always push a fresh snapshot so every client flips the seat to SEAT OPEN.

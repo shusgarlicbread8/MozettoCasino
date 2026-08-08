@@ -261,6 +261,22 @@ app.post("/v1/tables/:id/leave", async (req, reply) => {
   }
 });
 
+app.post("/v1/tables/:id/cancel-leave", async (req, reply) => {
+  const player = await resolvePlayer(req);
+  if (!player) return reply.code(401).send({ error: "unauthenticated" });
+  const tableId = (req.params as { id: string }).id;
+  try {
+    const rt = await getRuntime(tableId, { allowBrokenChain: true });
+    requireLease(tableId);
+    const result = await rt.cancelLeave(player.profileId);
+    return { ok: true, ...result };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "cancel_leave_failed";
+    const code = message.includes("lease") ? 409 : 400;
+    return reply.code(code).send({ error: "cancel_leave_failed", message });
+  }
+});
+
 app.post("/v1/tables/:id/action", async (req, reply) => {
   const player = await resolvePlayer(req);
   if (!player) return reply.code(401).send({ error: "unauthenticated", message: "Sign in to act." });
