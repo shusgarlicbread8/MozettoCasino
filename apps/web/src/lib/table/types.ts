@@ -56,6 +56,9 @@ export type LiveTableState = {
   feesOnTab: number;
   sessionEconomics?: SessionEconomics | null;
   leaveQueued?: boolean;
+  /** Server bust-rebuy deadline (epoch ms); null when not in a rebuy window. */
+  rebuyDeadlineAt?: number | null;
+  rebuyRemainingMs?: number | null;
 };
 
 export type SeatActionFx = {

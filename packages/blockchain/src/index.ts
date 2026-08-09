@@ -846,6 +846,32 @@ export const arenaVaultV2Abi = [
   },
   {
     type: "function",
+    name: "rebuySession",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "sessionId", type: "bytes32" },
+      {
+        name: "ticket",
+        type: "tuple",
+        components: [
+          { name: "player", type: "address" },
+          { name: "gameTemplateId", type: "bytes32" },
+          { name: "buyIn", type: "uint256" },
+          { name: "controllerHash", type: "bytes32" },
+          { name: "agentProfileHash", type: "bytes32" },
+          { name: "expiresAt", type: "uint64" },
+          { name: "nonce", type: "uint256" },
+          { name: "matchmakingPool", type: "bytes32" },
+          { name: "leagueBit", type: "uint32" },
+          { name: "rated", type: "bool" },
+        ],
+      },
+      { name: "signature", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
     name: "sessions",
     stateMutability: "view",
     inputs: [{ name: "sessionId", type: "bytes32" }],

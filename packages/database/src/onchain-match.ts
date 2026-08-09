@@ -822,6 +822,24 @@ export async function getOnchainSessionForTable(tableId: string) {
   return res.rows[0] ?? null;
 }
 
+/** Mid-sit Instant rebuy: bump the same player's buy_in_raw (never a new row). */
+export async function incrementOnchainSessionPlayerBuyIn(
+  sessionId: string,
+  profileId: string,
+  deltaRaw: bigint,
+) {
+  if (deltaRaw <= 0n) return;
+  const res = await query(
+    `update onchain_session_players
+     set buy_in_raw = buy_in_raw + $3
+     where session_id = $1 and profile_id = $2`,
+    [sessionId, profileId, deltaRaw.toString()],
+  );
+  if ((res.rowCount ?? 0) < 1) {
+    throw new Error("onchain_session_player_missing");
+  }
+}
+
 export async function getActiveOnchainTableForProfile(
   profileId: string,
   chainId: number,
@@ -1072,8 +1090,8 @@ export async function forceLeaveTableSession(opts: {
   try {
     await client.query("begin");
 
-    const activeSess = await client.query<{ id: string; stack: string }>(
-      `select id, stack::text as stack from table_sessions
+    const activeSess = await client.query<{ id: string; stack: string; owner_id: string }>(
+      `select id, stack::text as stack, owner_id::text as owner_id from table_sessions
        where table_id = $1 and owner_id = $2 and status = 'active'`,
       [opts.tableId, opts.profileId],
     );
@@ -1123,8 +1141,47 @@ export async function forceLeaveTableSession(opts: {
       [opts.tableId],
     );
 
+    const tableMeta = await client.query<{ max_seats: number; variant_id: string }>(
+      `select max_seats::int as max_seats, variant_id::text as variant_id from tables where id = $1`,
+      [opts.tableId],
+    );
+    const isHu =
+      Number(tableMeta.rows[0]?.max_seats ?? 0) === 2 ||
+      String(tableMeta.rows[0]?.variant_id ?? "").includes("nlhe_hu");
+
+    // HU: one leave makes the match over — cash remaining active seats and settle
+    // so ArenaAccount.activeGames can release (maxConcurrentGames is usually 1).
+    if (isHu && sessionId && Number(remaining.rows[0]?.n ?? 0) > 0) {
+      const leftover = await client.query<{ id: string; stack: string; owner_id: string }>(
+        `select id, stack::text as stack, owner_id::text as owner_id
+         from table_sessions where table_id = $1 and status = 'active'`,
+        [opts.tableId],
+      );
+      for (const row of leftover.rows) {
+        activeSess.rows.push(row);
+      }
+      await client.query(
+        `update table_sessions
+         set status = 'completed', ended_at = coalesce(ended_at, now())
+         where table_id = $1 and status = 'active'`,
+        [opts.tableId],
+      );
+      await client.query(
+        `update table_seats
+         set status = 'empty', agent_id = null, owner_id = null, stack = 0, updated_at = now()
+         where table_id = $1 and status = 'occupied'`,
+        [opts.tableId],
+      );
+    }
+
+    const remainingAfter = await client.query<{ n: string }>(
+      `select count(*)::text as n from table_sessions
+       where table_id = $1 and status = 'active'`,
+      [opts.tableId],
+    );
+
     let settling = false;
-    if (sessionId && Number(remaining.rows[0]?.n ?? 0) === 0) {
+    if (sessionId && Number(remainingAfter.rows[0]?.n ?? 0) === 0) {
       await client.query(
         `update onchain_sessions
          set status = 'settling'
@@ -1135,7 +1192,12 @@ export async function forceLeaveTableSession(opts: {
     }
 
     let tableClosed = false;
-    if (Number(occupied.rows[0]?.n ?? 0) === 0 && Number(remaining.rows[0]?.n ?? 0) === 0) {
+    const occupiedAfter = await client.query<{ n: string }>(
+      `select count(*)::text as n from table_seats
+       where table_id = $1 and status = 'occupied'`,
+      [opts.tableId],
+    );
+    if (Number(occupiedAfter.rows[0]?.n ?? 0) === 0 && Number(remainingAfter.rows[0]?.n ?? 0) === 0) {
       const queued = sessionId
         ? await client.query(
             `select 1 from seat_tickets
@@ -1157,7 +1219,7 @@ export async function forceLeaveTableSession(opts: {
       const stack = Number(row.stack);
       if (stack > 0) {
         try {
-          await releaseSession(opts.profileId, stack, row.id, "onchain");
+          await releaseSession(row.owner_id, stack, row.id, "onchain");
         } catch {
           // Settlement / prior leave may already have cleared escrow.
         }

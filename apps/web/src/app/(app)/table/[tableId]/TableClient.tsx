@@ -104,16 +104,52 @@ export default function TableClient() {
   const myBet = myLiveSeat != null ? Number(myLiveSeat.bet || 0) : 0;
   /** Total equity still at this table = stack behind + street contribution. */
   const myTableEquity = myStack + myBet;
-  const needTopUp = Boolean(amSeated && myStack <= 0);
   // Sitting out keeps the seat and the stack — it only stops you being dealt in.
   // Distinct from Leave, which settles the stack and gives the seat up.
   const sittingOut = Boolean(myLiveSeat?.sitOut);
+  // Hand is live (including all-in runout): chips may sit in pot with stack=0 — that is NOT a bust.
+  const handInProgress = Boolean(
+    live?.handId && live.street !== "waiting" && live.street !== "settlement",
+  );
+  // Top-up only after the hand resolves and the server sits you out (or waiting with $0 equity).
+  // Never open mid-hand just because an all-in moved chips off `stack`.
+  const needTopUp = Boolean(
+    amSeated &&
+      myTableEquity <= 0 &&
+      !handInProgress &&
+      (sittingOut || live?.street === "waiting" || live == null),
+  );
 
   // Busted: keep you at the table and open the top-up sheet (spectate until rebuy).
   useEffect(() => {
     if (!needTopUp || leaveQueued) return;
     setJoinOpen(true);
   }, [needTopUp, leaveQueued]);
+
+  const rebuyDeadlineAt = live?.rebuyDeadlineAt ?? null;
+  const [rebuySecsLeft, setRebuySecsLeft] = useState<number | null>(null);
+  useEffect(() => {
+    if (!needTopUp || rebuyDeadlineAt == null) {
+      setRebuySecsLeft(null);
+      return;
+    }
+    const tick = () => {
+      setRebuySecsLeft(Math.max(0, Math.ceil((rebuyDeadlineAt - Date.now()) / 1000)));
+    };
+    tick();
+    const id = window.setInterval(tick, 250);
+    return () => window.clearInterval(id);
+  }, [needTopUp, rebuyDeadlineAt]);
+
+  // Rebuy countdown hit 0 and server cleared the seat → lobby.
+  useEffect(() => {
+    if (amSeated || navigatedAfterLeaveRef.current) return;
+    if (rebuySecsLeft !== 0) return;
+    navigatedAfterLeaveRef.current = true;
+    bypassLeaveGuard();
+    window.location.replace("/play");
+  }, [amSeated, rebuySecsLeft, bypassLeaveGuard]);
+
   const myTurn = mySeatIndex != null && live?.actingIndex === mySeatIndex;
   const [sitOutBusy, setSitOutBusy] = useState(false);
   async function toggleSitOut() {
@@ -148,10 +184,40 @@ export default function TableClient() {
     return () => setSeatedTable(null);
   }, [amSeated, tableId, setSeatedTable]);
 
+  // Reload / tab close = leave. If we remount after an unload beacon, finish cash-out
+  // and bounce to Play so Find Match is not blocked by a zombie concurrent_games slot.
+  const reloadLeaveHandled = useRef(false);
+  useEffect(() => {
+    if (!tableId || reloadLeaveHandled.current) return;
+    let leftAt = 0;
+    try {
+      leftAt = Number(sessionStorage.getItem(`mozetto:left:${tableId}`) || 0);
+    } catch {
+      leftAt = 0;
+    }
+    if (!leftAt || !Number.isFinite(leftAt) || Date.now() - leftAt > 120_000) return;
+    reloadLeaveHandled.current = true;
+    try {
+      sessionStorage.removeItem(`mozetto:left:${tableId}`);
+    } catch {
+      /* ignore */
+    }
+    bypassLeaveGuard();
+    void api(`/v1/tables/${tableId}/leave`, {
+      method: "POST",
+      body: JSON.stringify({ forceImmediate: true }),
+    })
+      .catch(() => null)
+      .finally(() => {
+        window.location.replace("/play");
+      });
+  }, [tableId, bypassLeaveGuard]);
+
   // If Find Match opened custody but join failed, seat the account holder once.
   const autoJoinAttempted = useRef<string | null>(null);
   useEffect(() => {
     if (!tableId || !me?.profile?.id || amSeated || !meta) return;
+    if (reloadLeaveHandled.current) return;
     // Do not wait on WS "connecting" — REST meta is enough to join.
     if (autoJoinAttempted.current === tableId) return;
     const buyIn = Number(meta.min_buy_in || 0);
@@ -589,7 +655,7 @@ export default function TableClient() {
           }}
         >
           <PublicActionCard log={log} />
-          {mySeated ? <SessionPnlCard economics={economics} /> : null}
+          {mySeated || economics ? <SessionPnlCard economics={economics} /> : null}
           <LiveTableFelt
             meta={meta}
             seatMeta={seatMeta}
@@ -724,7 +790,10 @@ export default function TableClient() {
                   lineHeight: 1.45,
                 }}
               >
-                You&apos;re busted — still at the table. Top up to buy back in for the next hands.
+                You&apos;re busted — still at the table.
+                {rebuySecsLeft != null
+                  ? ` Rebuy in ${rebuySecsLeft}s or you leave to the lobby.`
+                  : " Top up to buy back in for the next hands."}
               </div>
             ) : mySeated ? (
               <div className="mz-mono" style={{ fontSize: 11, color: color.textFaint }}>
@@ -806,7 +875,9 @@ export default function TableClient() {
       <TableSideRail
         seatedLabel={
           needTopUp
-            ? "● BUSTED · TOP UP"
+            ? rebuySecsLeft != null
+              ? `● BUSTED · REBUY ${rebuySecsLeft}s`
+              : "● BUSTED · TOP UP"
             : mySeated
               ? "● YOU · SEATED"
               : connecting && !meta
@@ -837,9 +908,11 @@ export default function TableClient() {
           table={joinTable}
           wallet={me?.available ?? 0}
           mode={mySeated || needTopUp ? "topup" : "join"}
+          rebuySecsLeft={needTopUp ? rebuySecsLeft : null}
           onClose={() => setJoinOpen(false)}
           onJoined={() => {
             setJoinOpen(false);
+            // Successful rebuy stays on the same table/session — no remount-as-new-join.
             void refresh();
             void refreshMeta();
             if (!(mySeated || needTopUp)) window.location.reload();

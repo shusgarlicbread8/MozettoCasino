@@ -32,7 +32,11 @@ import {
 import { getChainConfig } from "@mozetto/blockchain";
 import { corsOriginCheck } from "@mozetto/server-env";
 import { readSession, registerAuthRoutes, requireUser, requireDemoUser } from "./auth.js";
-import { handleOnchainFindMatch, registerArenaOnchainRoutes } from "./arena-onchain.js";
+import {
+  executeOnchainTableRebuy,
+  handleOnchainFindMatch,
+  registerArenaOnchainRoutes,
+} from "./arena-onchain.js";
 import { registerAdminRoutes } from "./admin.js";
 import { registerVerifyRoutes } from "./verify.js";
 import { registerPlan19Routes } from "./plan19-routes.js";
@@ -506,6 +510,26 @@ app.post("/v1/tables/:id/top-up", async (req, reply) => {
   const session = await requireUser(req, reply);
   if (!session) return;
   const id = (req.params as { id: string }).id;
+  const amount = Number((req.body as { amount?: number } | undefined)?.amount);
+  if (!(amount > 0)) {
+    return reply.code(400).send({ error: "invalid_amount", message: "Top-up amount must be positive." });
+  }
+
+  // Instant: lock rebuy on the existing vault session before mutating table stacks.
+  const modeRow = await query<{ arena_mode: string }>(`select arena_mode from tables where id = $1`, [id]).catch(
+    () => ({ rows: [] as { arena_mode: string }[] }),
+  );
+  if (modeRow.rows[0]?.arena_mode === "onchain") {
+    const rebuy = await executeOnchainTableRebuy({
+      profileId: session.profileId,
+      tableId: id,
+      amountUsdc: amount,
+    });
+    if (!rebuy.ok) {
+      return reply.code(rebuy.status).send({ error: rebuy.error, message: rebuy.message });
+    }
+  }
+
   const auth = req.headers.authorization;
   const cookie = req.headers.cookie;
   try {
@@ -515,6 +539,7 @@ app.post("/v1/tables/:id/top-up", async (req, reply) => {
         "content-type": "application/json",
         ...(auth ? { authorization: auth } : {}),
         ...(cookie ? { cookie } : {}),
+        ...(modeRow.rows[0]?.arena_mode === "onchain" ? { "x-mozetto-onchain-rebuy": "1" } : {}),
       },
       body: JSON.stringify(req.body ?? {}),
     });

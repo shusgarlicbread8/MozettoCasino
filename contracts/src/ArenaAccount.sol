@@ -85,6 +85,7 @@ contract ArenaAccount is Initializable, ReentrancyGuard, EIP712 {
     error InsufficientBalance();
     error UnknownSession();
     error SessionAlreadyOpen();
+    error SessionNotOpen();
     error NoPendingOwner();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -285,6 +286,40 @@ contract ArenaAccount is Initializable, ReentrancyGuard, EIP712 {
         auth.activeGames += 1;
         sessionExposure[sessionId] = buyIn;
         sessionVault[sessionId] = msg.sender;
+
+        token.safeTransfer(msg.sender, buyIn);
+        emit BuyInPulled(sessionId, msg.sender, buyIn);
+        return buyIn;
+    }
+
+    /// @notice Vault-only: add chips to an already-open session (mid-sit rebuy).
+    /// @dev Does not increment activeGames — same concurrent seat for the whole sit.
+    function increaseBuyIn(bytes32 sessionId, uint256 buyIn, bytes32 gameTemplateId, uint32 leagueBit, bool rated)
+        external
+        nonReentrant
+        returns (uint256)
+    {
+        if (buyIn == 0) revert ZeroAmount();
+        if (sessionExposure[sessionId] == 0) revert SessionNotOpen();
+        if (sessionVault[sessionId] != msg.sender) revert WrongVault();
+
+        GameAuth storage auth = gameAuth;
+        if (!auth.enabled) revert PermissionInactive();
+        if (block.timestamp > auth.validUntil) revert PermissionExpired();
+        if (msg.sender != auth.vault) revert WrongVault();
+        if (gameTemplateId != auth.gameTemplateId) revert TemplateNotAllowed();
+        if (leagueBit == 0 || (auth.leagueMask & leagueBit) == 0) revert LeagueNotAllowed();
+        if (auth.ratedOnly && !rated) revert RatedRequired();
+        if (buyIn > auth.maxSingleBuyIn) revert BuyInTooHigh();
+        if (auth.lifetimeCommitted + buyIn > auth.lifetimeCommittedCap) revert LifetimeCapExceeded();
+        if (auth.activeAtRisk + buyIn > auth.maxTotalAtRisk) revert AtRiskCapExceeded();
+
+        IERC20 token = IERC20(auth.usdc);
+        if (token.balanceOf(address(this)) < buyIn) revert InsufficientBalance();
+
+        auth.lifetimeCommitted += buyIn;
+        auth.activeAtRisk += buyIn;
+        sessionExposure[sessionId] += buyIn;
 
         token.safeTransfer(msg.sender, buyIn);
         emit BuyInPulled(sessionId, msg.sender, buyIn);

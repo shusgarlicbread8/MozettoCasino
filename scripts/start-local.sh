@@ -12,7 +12,16 @@ if [[ "${1:-}" == "--redeploy" ]]; then REDEPLOY=1; fi
 if ! curl -sf -X POST "$ANVIL_RPC" -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' >/dev/null; then
   echo "Starting Anvil…"
-  nohup anvil --host 127.0.0.1 --port 8545 --chain-id 31337 --block-time 1 >/tmp/mozetto-anvil.log 2>&1 &
+  # Default: automine (no empty blocks when idle — matches Base Sepolia).
+  # Opt into timed mining with ANVIL_BLOCK_TIME=1 if a drill needs wall-clock blocks.
+  ANVIL_ARGS=(--host 127.0.0.1 --port 8545 --chain-id 31337)
+  if [[ -n "${ANVIL_BLOCK_TIME:-}" ]]; then
+    ANVIL_ARGS+=(--block-time "$ANVIL_BLOCK_TIME")
+    echo "  ANVIL_BLOCK_TIME=${ANVIL_BLOCK_TIME} (interval mining)"
+  else
+    echo "  automine on (blocks only when txs land)"
+  fi
+  nohup anvil "${ANVIL_ARGS[@]}" >/tmp/mozetto-anvil.log 2>&1 &
   sleep 2
   REDEPLOY=1
 fi

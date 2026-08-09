@@ -110,9 +110,10 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
           allInRunout: false,
           myHand: null,
           myEquity: null,
-          feesOnTab: 0,
-          sessionEconomics: null,
-          leaveQueued: false,
+          feesOnTab: prev?.feesOnTab ?? 0,
+          // Keep last session P&L when opponent leaves / table returns to waiting.
+          sessionEconomics: prev?.sessionEconomics ?? null,
+          leaveQueued: prev?.leaveQueued ?? false,
         };
       });
       onMetaRefreshRef.current?.();
@@ -378,6 +379,18 @@ export function useTableFeed({ tableId, role, ownerUserId, onMetaRefresh }: Opti
                   ? (state.sessionEconomics as LiveTableState["sessionEconomics"])
                   : prev?.sessionEconomics ?? null,
               leaveQueued: Boolean(state.leaveQueued ?? prev?.leaveQueued ?? false),
+              rebuyDeadlineAt:
+                typeof state.rebuyDeadlineAt === "number"
+                  ? state.rebuyDeadlineAt
+                  : state.rebuyDeadlineAt === null
+                    ? null
+                    : prev?.rebuyDeadlineAt ?? null,
+              rebuyRemainingMs:
+                typeof state.rebuyRemainingMs === "number"
+                  ? state.rebuyRemainingMs
+                  : state.rebuyRemainingMs === null
+                    ? null
+                    : prev?.rebuyRemainingMs ?? null,
             };
           });
         }

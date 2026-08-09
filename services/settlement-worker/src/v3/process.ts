@@ -37,7 +37,55 @@ const ARENA_VAULT_SESSION_ABI = [
       { name: "emergencyExitAfter", type: "uint64" },
     ],
   },
+  {
+    type: "function",
+    name: "lockedBySession",
+    stateMutability: "view",
+    inputs: [
+      { name: "sessionId", type: "bytes32" },
+      { name: "player", type: "address" },
+    ],
+    outputs: [{ name: "", type: "uint256" }],
+  },
 ] as const;
+
+/**
+ * When off-chain top-ups inflate stacks past vault locks, scale ending balances
+ * so sum(end) + intendedRake == chainOpening (vault settle invariant).
+ * Exported for unit tests.
+ */
+export function repairEndingBalancesForVaultLocks(input: {
+  players: { startLocked: bigint; endBalance: bigint }[];
+  /** Sum of table_sessions.buy_in (raw). Used only to preserve rake when possible. */
+  dbOpeningRaw: bigint;
+}): { repaired: boolean; targetEnding: bigint } {
+  const opening = input.players.reduce((a, p) => a + p.startLocked, 0n);
+  const ending = input.players.reduce((a, p) => a + p.endBalance, 0n);
+  if (ending <= opening) {
+    return { repaired: false, targetEnding: ending };
+  }
+  let intendedRake = 0n;
+  if (input.dbOpeningRaw >= ending) {
+    intendedRake = input.dbOpeningRaw - ending;
+  }
+  const targetEnding = opening > intendedRake ? opening - intendedRake : opening;
+  if (ending === 0n) {
+    // Should not happen when ending > opening; refund equally is not needed.
+    return { repaired: false, targetEnding: ending };
+  }
+  let allocated = 0n;
+  for (let i = 0; i < input.players.length; i++) {
+    const p = input.players[i]!;
+    if (i === input.players.length - 1) {
+      p.endBalance = targetEnding - allocated;
+    } else {
+      const scaled = (p.endBalance * targetEnding) / ending;
+      p.endBalance = scaled;
+      allocated += scaled;
+    }
+  }
+  return { repaired: true, targetEnding };
+}
 
 /** True when the configured vault has no record of this session id. */
 async function isUnknownOnChain(session: { session_id: string }): Promise<boolean> {
@@ -56,6 +104,33 @@ async function isUnknownOnChain(session: { session_id: string }): Promise<boolea
   } catch {
     // Never void on a transport error — only on a definite on-chain answer.
     return false;
+  }
+}
+
+/** Per-player vault lock for a session; null when the vault cannot be read. */
+async function readVaultLockedBySession(
+  sessionId: string,
+  accounts: Address[],
+): Promise<Map<string, bigint> | null> {
+  const vault = process.env.ARENA_VAULT_ADDRESS as Hex | undefined;
+  const pk = process.env.SETTLEMENT_PRIVATE_KEY as Hex | undefined;
+  if (!vault || !pk || accounts.length === 0) return null;
+  try {
+    const { publicClient } = chainClients(pk);
+    const sid = sessionIdToBytes32(sessionId);
+    const out = new Map<string, bigint>();
+    for (const account of accounts) {
+      const locked = (await publicClient.readContract({
+        address: vault,
+        abi: ARENA_VAULT_SESSION_ABI,
+        functionName: "lockedBySession",
+        args: [sid, account],
+      })) as bigint;
+      out.set(account.toLowerCase(), locked);
+    }
+    return out;
+  } catch {
+    return null;
   }
 }
 
@@ -182,6 +257,38 @@ export async function buildProposalV3FromDb(
       endBalance,
     };
   });
+
+  // Vault settle requires startLocked == lockedBySession. Off-chain rebuys can
+  // inflate table_sessions.buy_in/stack without a matching vault lock (ArenaAccount
+  // forbids a second lockBuyIn on the same sessionId). Prefer chain locks.
+  const vaultLocks = await readVaultLockedBySession(
+    session.session_id,
+    players.map((p) => p.user),
+  );
+  if (vaultLocks) {
+    for (const p of players) {
+      const locked = vaultLocks.get(p.user.toLowerCase());
+      if (locked != null && locked > 0n) {
+        p.startLocked = locked;
+        if (noPlay) p.endBalance = locked;
+      }
+    }
+  }
+
+  const dbOpeningRaw = stacks.reduce((a, row) => {
+    const fromBuyIn = BigInt(Math.floor(Number(row.buy_in) * 1e6));
+    const fromRaw = BigInt(row.buy_in_raw);
+    return a + (fromBuyIn > fromRaw ? fromBuyIn : fromRaw);
+  }, 0n);
+  const repair = repairEndingBalancesForVaultLocks({ players, dbOpeningRaw });
+  if (repair.repaired) {
+    console.warn(
+      "[settlement-worker:v3] scaled end balances to vault locks (off-chain top-up / conservation repair)",
+      session.session_id,
+      "targetEnding",
+      repair.targetEnding.toString(),
+    );
+  }
 
   let roots;
   try {

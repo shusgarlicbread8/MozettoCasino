@@ -85,7 +85,16 @@ pkill -f '[a]nvil --host 127.0.0.1 --port 8545' 2>/dev/null || true
 sleep 1
 
 echo "Starting fresh Anvil (chain 31337)…"
-nohup anvil --host 127.0.0.1 --port 8545 --chain-id 31337 --block-time 1 >/tmp/mozetto-anvil.log 2>&1 &
+# Default: automine (no empty blocks when idle — matches Base Sepolia).
+# Opt into timed mining with ANVIL_BLOCK_TIME=1 if needed.
+ANVIL_ARGS=(--host 127.0.0.1 --port 8545 --chain-id 31337)
+if [[ -n "${ANVIL_BLOCK_TIME:-}" ]]; then
+  ANVIL_ARGS+=(--block-time "$ANVIL_BLOCK_TIME")
+  echo "  ANVIL_BLOCK_TIME=${ANVIL_BLOCK_TIME} (interval mining)"
+else
+  echo "  automine on (blocks only when txs land)"
+fi
+nohup anvil "${ANVIL_ARGS[@]}" >/tmp/mozetto-anvil.log 2>&1 &
 sleep 2
 
 if ! curl -sf -X POST "$ANVIL_RPC" -H 'content-type: application/json' \

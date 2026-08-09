@@ -320,6 +320,12 @@ export function LeaveGuardProvider({ children }: { children: React.ReactNode }) 
       if (bypassRef.current) return;
       const id = tableIdRef.current;
       if (!id) return;
+      // Persist intent so a fast reload cannot auto-rejoin / resurrect the seat.
+      try {
+        sessionStorage.setItem(`mozetto:left:${id}`, String(Date.now()));
+      } catch {
+        /* private mode */
+      }
       const headers: Record<string, string> = { "content-type": "application/json" };
       if (tokenRef.current) headers.Authorization = `Bearer ${tokenRef.current}`;
       try {

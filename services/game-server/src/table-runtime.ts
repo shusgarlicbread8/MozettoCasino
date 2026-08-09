@@ -279,6 +279,12 @@ export class TableRuntime {
   >();
   /** On-chain session id for canonical events + dealer seeds (when arenaMode=onchain). */
   onchainSessionId: string | null = null;
+  /**
+   * Bust rebuy window: userId → deadline epoch ms. After expiry the seat is
+   * force-left (no indefinite Instant spectate without chips).
+   */
+  rebuyDeadlineByUser = new Map<string, number>();
+  static readonly REBUY_WINDOW_MS = 30_000;
   canonicalPrevHash: Hex = GENESIS_EVENT_HASH;
   canonicalSequence = 0;
   seatControllers = new Map<number, SeatController>();
@@ -1107,6 +1113,14 @@ export class TableRuntime {
       feesOnTab: economics?.feesPaid ?? 0,
       sessionEconomics: economics,
       leaveQueued: Boolean(client.userId && this.pendingLeaveOwners.has(client.userId)),
+      rebuyDeadlineAt:
+        client.userId && this.rebuyDeadlineByUser.has(client.userId)
+          ? this.rebuyDeadlineByUser.get(client.userId)!
+          : null,
+      rebuyRemainingMs:
+        client.userId && this.rebuyDeadlineByUser.has(client.userId)
+          ? Math.max(0, this.rebuyDeadlineByUser.get(client.userId)! - Date.now())
+          : null,
     };
   }
 
@@ -1908,6 +1922,7 @@ export class TableRuntime {
   }
 
   async leaveUnlocked(userId: string, opts?: { forceImmediate?: boolean }) {
+    this.rebuyDeadlineByUser.delete(userId);
     const seat = this.state.seats.find((s) => s.playerId === userId);
     if (!seat || !seat.playerId) {
       // Still close any orphaned DB session so the lobby doesn't think we're seated.
@@ -2081,11 +2096,17 @@ export class TableRuntime {
       this.resetToWaiting();
     }
 
-    // Cash tables: remaining seated players keep their seats (wait for a fill).
-    // Only close custody when the table is empty — never force-cash the other human.
+    // Cash tables: 6-max can wait for a fill. Heads-up must settle when one seat
+    // remains — otherwise ArenaAccount.activeGames stays burned and Find Match
+    // returns concurrent_games ("previous match is still settling").
     const seatedAfter = this.state.seats.filter((s) => s.playerId);
-    if (this.arenaMode === "onchain" && seatedAfter.length === 0) {
-      await this.closeOnchainTableAfterUndermannedLeave("table_empty").catch((err) =>
+    if (
+      this.arenaMode === "onchain" &&
+      (seatedAfter.length === 0 || (this.isHeadsUpTable() && seatedAfter.length < 2))
+    ) {
+      await this.closeOnchainTableAfterUndermannedLeave(
+        seatedAfter.length === 0 ? "table_empty" : "hu_undermanned",
+      ).catch((err) =>
         console.error("closeOnchainTableAfterUndermannedLeave failed", this.tableId, err),
       );
     } else if (seatedAfter.length > 0) {
@@ -2390,9 +2411,48 @@ export class TableRuntime {
     }
   }
 
+  /** Force-leave busted seats whose 30s Instant rebuy window expired. */
+  async enforceExpiredRebuys() {
+    const now = Date.now();
+    const expired: string[] = [];
+    for (const [userId, deadline] of this.rebuyDeadlineByUser) {
+      if (deadline > now) continue;
+      const seat = this.state.seats.find((s) => s.playerId === userId);
+      if (!seat || seat.stack > 0n) {
+        this.rebuyDeadlineByUser.delete(userId);
+        continue;
+      }
+      expired.push(userId);
+    }
+    for (const userId of expired) {
+      this.rebuyDeadlineByUser.delete(userId);
+      await this.persistEvent("REBUY_WINDOW_EXPIRED", { userId }).catch(() => null);
+      await this.leave(userId, { forceImmediate: true }).catch((err) =>
+        console.error("rebuy window leave failed", this.tableId, userId, err),
+      );
+    }
+  }
+
   async loop() {
     while (this.running) {
       try {
+        await this.enforceExpiredRebuys();
+        // Wait-for-BB seats must be considered before the <2 gate. Otherwise a HU
+        // rebuy stays sit-out forever (releaseSeatsAwaitingBigBlind only runs inside
+        // beginHand, which we never reach when seated.length < 2).
+        if (this.state.street === "waiting" || this.state.street === "settlement" || !this.state.handId) {
+          this.releaseSeatsAwaitingBigBlind();
+          if (this.isHeadsUpTable() && this.awaitingBigBlind.size > 0) {
+            for (const seatIndex of [...this.awaitingBigBlind]) {
+              const seat = this.state.seats.find((s) => s.seatIndex === seatIndex);
+              if (seat?.playerId && seat.stack > 0n) {
+                this.awaitingBigBlind.delete(seatIndex);
+                this.state = setSitOut(this.state, seatIndex, false);
+              }
+            }
+          }
+        }
+
         const seated = this.state.seats.filter((s) => !s.sitOut && s.playerId && s.stack > 0n);
         if (seated.length < 2) {
           if (this.state.street !== "waiting" && this.state.street !== "settlement") {
@@ -2407,7 +2467,13 @@ export class TableRuntime {
           continue;
         }
         if (this.state.street === "waiting" || this.state.street === "settlement" || !this.state.handId) {
+          const beforeHand = this.state.handId;
           await this.beginHand();
+          // Custody / pause / lock blockers: avoid busy-spinning the event loop.
+          if (!this.state.handId || this.state.handId === beforeHand) {
+            await sleep(1500);
+            continue;
+          }
         }
         while (this.state.actingIndex !== null && this.state.street !== "settlement") {
           await this.actForCurrent();
@@ -2445,12 +2511,19 @@ export class TableRuntime {
           const needTopUp = this.state.seats
             .filter((x) => x.playerId && x.stack <= 0n)
             .map((x) => x.playerId!);
+          const deadlineAt = Date.now() + TableRuntime.REBUY_WINDOW_MS;
+          for (const userId of needTopUp) {
+            if (!this.rebuyDeadlineByUser.has(userId)) {
+              this.rebuyDeadlineByUser.set(userId, deadlineAt);
+            }
+          }
           await this.persistEvent("HAND_COMPLETE", {
             seated: this.state.seats.filter((x) => x.playerId && !x.sitOut && x.stack > 0).length,
             needTopUp,
+            rebuyDeadlineAt: needTopUp.length ? deadlineAt : null,
           }).catch(() => null);
           // Hold for win / reveal animations. Busted seats stay occupied (sit-out)
-          // so players can spectate and top up — do not force-leave or close the match.
+          // for the rebuy window — enforceExpiredRebuys force-leaves after 30s.
           await sleep(2800);
           this.broadcastSnapshots();
           await this.withSeatLock(async () => {
@@ -2853,10 +2926,24 @@ export class TableRuntime {
   }
 
   /** Add chips to a seated (possibly busted) player mid-session. */
-  async topUp(userId: string, amount: number, opts?: { forceImmediate?: boolean }) {
+  async topUp(
+    userId: string,
+    amount: number,
+    opts?: { forceImmediate?: boolean; onchainRebuyDone?: boolean },
+  ) {
     if (!(amount > 0)) throw new Error("Invalid top-up");
     const seat = this.state.seats.find((s) => s.playerId === userId);
     if (!seat) throw new Error("Not seated");
+
+    // Instant: API must have called vault.rebuySession on the same sessionId first.
+    if (this.arenaMode === "onchain" && !opts?.onchainRebuyDone) {
+      throw new Error("Instant rebuy must go through the API custody path.");
+    }
+    // Continuity: never open a second on-chain session or reset hand counters here.
+    if (this.arenaMode === "onchain") {
+      if (!this.onchainSessionId) await this.loadOnchainSession();
+      if (!this.onchainSessionId) throw new Error("No on-chain session for this table");
+    }
 
     // Never top up above the city's 100BB entry cap via fresh funds.
     const tableRow = await query<{ league_id: string; big_blind: string | number }>(
@@ -2876,8 +2963,10 @@ export class TableRuntime {
     }
 
     // WP-042: mid-hand top-ups queue for the next epoch (stack mutation deferred).
+    // Instant: API already called vault.rebuySession before this — never queue or the
+    // stack would lag the on-chain lock until epoch apply (and re-entry lacks the header).
     const phase = this.currentHandPhase();
-    if (phase === "hand_active" && !opts?.forceImmediate) {
+    if (phase === "hand_active" && !opts?.forceImmediate && this.arenaMode !== "onchain") {
       const enqueued = await enqueueSeatChange({
         tableId: this.tableId,
         changeType: "top_up",
@@ -2911,7 +3000,10 @@ export class TableRuntime {
       if (!sessionId) throw new Error("No active session");
       this.sessions.set(userId, sessionId);
     }
-    await lockBuyIn(userId, amount, `${sessionId}-topup-${Date.now()}`, this.arenaMode);
+    // Demo: ledger escrow. Instant: vault.rebuySession already pulled USDC.
+    if (this.arenaMode !== "onchain") {
+      await lockBuyIn(userId, amount, `${sessionId}-topup-${Date.now()}`, this.arenaMode);
+    }
     const chipAmount = usdToChips(amount);
     const nextStack = seat.stack + chipAmount;
     this.state = {
@@ -2924,6 +3016,8 @@ export class TableRuntime {
     };
     this.stackBaseline.set(userId, (this.stackBaseline.get(userId) ?? 0) + amount);
     this.sessionBuyIn.set(userId, (this.sessionBuyIn.get(userId) ?? 0) + amount);
+    // Same sit — clear rebuy timer only; never reset sessionStartHand / handNumber.
+    this.rebuyDeadlineByUser.delete(userId);
     const nextUsd = chipsToUsd(nextStack);
     const wasBusted = seat.stack <= 0n;
     await query(`update table_seats set stack=$1, updated_at=now() where table_id=$2 and seat_index=$3`, [
@@ -2932,24 +3026,36 @@ export class TableRuntime {
       seat.seatIndex,
     ]);
     await query(`update table_sessions set stack=$1, buy_in = buy_in + $2 where id=$3`, [nextUsd, amount, sessionId]);
-    // Busted rebuy between hands: wait for natural BB before dealing back in.
+    // Busted rebuy between hands: wait for natural BB before dealing back in —
+    // except on HU / undermanned tables where wait-for-BB can never rotate.
+    let awaitingBigBlind = false;
     if (wasBusted && this.state.street === "waiting") {
-      this.awaitingBigBlind.add(seat.seatIndex);
-      this.state = {
-        ...this.state,
-        seats: this.state.seats.map((s) =>
-          s.seatIndex === seat.seatIndex
-            ? { ...s, stack: nextStack, sitOut: true, folded: true, hole: undefined }
-            : s,
-        ),
-      };
+      const otherActive = this.state.seats.filter(
+        (s) =>
+          s.seatIndex !== seat.seatIndex && s.playerId && !s.sitOut && s.stack > 0n,
+      ).length;
+      if (this.isHeadsUpTable() || otherActive < 2) {
+        this.awaitingBigBlind.delete(seat.seatIndex);
+        // Already sitOut:false from the stack update above — deal next hand immediately.
+      } else {
+        awaitingBigBlind = true;
+        this.awaitingBigBlind.add(seat.seatIndex);
+        this.state = {
+          ...this.state,
+          seats: this.state.seats.map((s) =>
+            s.seatIndex === seat.seatIndex
+              ? { ...s, stack: nextStack, sitOut: true, folded: true, hole: undefined }
+              : s,
+          ),
+        };
+      }
     }
     await this.persistEvent("PLAYER_TOP_UP", {
       seatIndex: seat.seatIndex,
       userId,
       amount,
       stack: nextUsd,
-      awaitingBigBlind: wasBusted && this.state.street === "waiting",
+      awaitingBigBlind,
     });
     this.broadcastSnapshots();
     this.ensureLoop();

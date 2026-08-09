@@ -39,6 +39,7 @@ import {
 } from "@mozetto/game-rules";
 import { SessionSealCoordinator } from "@mozetto/session-seal";
 import {
+  query,
   assertLeague,
   blockFailedOnchainSession,
   claimOpenOnchainSession,
@@ -48,8 +49,10 @@ import {
   createMatchmakingBatch,
   createOnchainArenaTable,
   createOnchainSessionPending,
+  forceLeaveTableSession,
   getActiveOnchainTableForProfile,
   getOnchainSessionForTable,
+  incrementOnchainSessionPlayerBuyIn,
   getAgentProfileHash,
   getPendingMatchForProfile,
   getQueuedTicketForProfile,
@@ -2250,12 +2253,28 @@ async function createAutomaticSeamlessTicket(opts: {
     };
   }
   if (Number(gameAuth[12]) + 1 > Number(gameAuth[11])) {
+    // Best-effort: vacate a sticky HU seat so settlement can release activeGames.
+    try {
+      const sticky = await getActiveOnchainTableForProfile(
+        opts.session.profileId,
+        opts.chainId,
+        opts.format ?? "hu",
+      );
+      if (sticky?.table_id) {
+        await forceLeaveTableSession({
+          profileId: opts.session.profileId,
+          tableId: sticky.table_id,
+        });
+      }
+    } catch {
+      /* settlement worker still owns hard release */
+    }
     return {
       ok: false,
-      status: 400,
+      status: 409,
       error: "concurrent_games",
       message:
-        "A previous match is still settling on-chain and holds your game slot. Wait a moment for settlement, then try Find Match again.",
+        "A previous match was still holding your game slot. We kicked that seat toward settlement — wait a few seconds, then Find Match again.",
     };
   }
   if (balance < buyInRaw) {
@@ -2360,5 +2379,118 @@ async function createAutomaticSeamlessTicket(opts: {
   } catch (e) {
     const msg = e instanceof Error ? e.message : "store_failed";
     return { ok: false, status: 500, error: "store_failed", message: msg };
+  }
+}
+
+/**
+ * Mid-sit Instant rebuy: increase vault lock on the existing sessionId (same seat).
+ * Does not open a new onchain_sessions row or bump activeGames.
+ */
+export async function executeOnchainTableRebuy(opts: {
+  profileId: string;
+  tableId: string;
+  amountUsdc: number;
+}): Promise<{ ok: true; sessionId: string; txHash: Hex; buyInRaw: string } | { ok: false; status: number; error: string; message: string }> {
+  if (!(opts.amountUsdc > 0)) {
+    return { ok: false, status: 400, error: "invalid_amount", message: "Rebuy amount must be positive." };
+  }
+
+  const table = await query<{
+    arena_mode: string;
+    league_id: string;
+    chain_id: number | null;
+  }>(`select arena_mode, league_id, chain_id from tables where id = $1`, [opts.tableId]).catch(() => ({
+    rows: [] as { arena_mode: string; league_id: string; chain_id: number | null }[],
+  }));
+  const t = table.rows[0];
+  if (!t) return { ok: false, status: 404, error: "table_not_found", message: "Table not found." };
+  if (t.arena_mode !== "onchain") {
+    return { ok: false, status: 400, error: "not_onchain", message: "Table is not Instant custody." };
+  }
+
+  const os = await getOnchainSessionForTable(opts.tableId);
+  if (!os?.session_id) {
+    return { ok: false, status: 409, error: "no_session", message: "No on-chain session for this table." };
+  }
+  if (os.status === "settled" || os.status === "settling") {
+    return { ok: false, status: 409, error: "session_closing", message: "Match is already settling." };
+  }
+
+  const player = await query<{
+    wallet_address: string;
+    arena_account_address: string | null;
+    agent_profile_hash: string;
+    controller_hash: string;
+    buy_in_raw: string;
+  }>(
+    `select wallet_address, arena_account_address, agent_profile_hash, controller_hash, buy_in_raw::text as buy_in_raw
+     from onchain_session_players
+     where session_id = $1 and profile_id = $2
+     limit 1`,
+    [os.session_id, opts.profileId],
+  ).catch(() => ({ rows: [] as never[] }));
+  const seat = player.rows[0];
+  if (!seat) {
+    return { ok: false, status: 403, error: "not_participant", message: "You are not in this on-chain session." };
+  }
+
+  const chainId = Number(t.chain_id ?? process.env.CHAIN_ID ?? 31337);
+  const chainCfg = getChainConfig(resolveChainEnv(chainId));
+  const vault = chainCfg.contracts.arenaVault as Address | undefined;
+  if (!vault) return { ok: false, status: 503, error: "vault_not_deployed", message: "Vault not configured." };
+
+  const relayerPk = process.env.SESSION_RELAYER_PRIVATE_KEY as Hex | undefined;
+  const signer = sessionSignerAccount();
+  if (!relayerPk || !signer) {
+    return { ok: false, status: 503, error: "relayer_not_configured", message: "Instant rebuy relayer/signer missing." };
+  }
+
+  const arena = (seat.arena_account_address ?? seat.wallet_address).toLowerCase() as Address;
+  const buyInRaw = BigInt(Math.round(opts.amountUsdc * 10 ** USDC_DECIMALS));
+  const bit = leagueBit(t.league_id);
+  const rated = leagueIsRated(t.league_id);
+  const templateId = cityTemplateId(t.league_id);
+  const pool = matchmakingPool(chainId, t.league_id);
+  const nonce = await suggestTicketNonce(arena, chainId);
+  const expiresAt = BigInt(Math.floor(Date.now() / 1000) + TICKET_TTL_SEC);
+  const ticket = {
+    player: arena,
+    gameTemplateId: templateId,
+    buyIn: buyInRaw,
+    controllerHash: (seat.controller_hash || CONTROLLER_HASH) as Hex,
+    agentProfileHash: seat.agent_profile_hash as Hex,
+    expiresAt,
+    nonce,
+    matchmakingPool: pool,
+    leagueBit: bit,
+    rated,
+  };
+  const signature = await signer.signTypedData({
+    domain: seatTicketV2Domain(chainId, vault),
+    types: SEAT_TICKET_V2_TYPES,
+    primaryType: "SeatTicket",
+    message: ticket,
+  });
+
+  const chain = chainFromId(chainId);
+  const account = privateKeyToAccount(relayerPk);
+  const wallet = createWalletClient({ account, chain, transport: http(rpcForChain(chainId)) });
+  const publicClient = createPublicClient({ chain, transport: http(rpcForChain(chainId)) });
+
+  try {
+    const hash = await wallet.writeContract({
+      address: vault,
+      abi: arenaVaultV2Abi,
+      functionName: "rebuySession",
+      args: [os.session_id as Hex, ticket, signature],
+      chain,
+      account,
+    } as never);
+    await publicClient.waitForTransactionReceipt({ hash });
+    await incrementOnchainSessionPlayerBuyIn(os.session_id, opts.profileId, buyInRaw);
+    return { ok: true, sessionId: os.session_id, txHash: hash, buyInRaw: buyInRaw.toString() };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, status: 502, error: "rebuy_failed", message: msg };
   }
 }

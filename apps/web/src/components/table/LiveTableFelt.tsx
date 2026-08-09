@@ -99,7 +99,17 @@ export function LiveTableFelt({
       // Keep busted seats visible (sit-out / top-up) — never hide as empty ghosts.
       const occupied = Boolean(rawId);
       const you = occupied && isMe && !spectator;
-      const busted = occupied && Number(ls?.stack ?? sm?.stack ?? 0) <= 0;
+      const stackNum = Number(ls?.stack ?? sm?.stack ?? 0);
+      const betNum = Number(ls?.bet ?? 0);
+      const handLive =
+        Boolean(live?.handId) && live?.street !== "waiting" && live?.street !== "settlement";
+      // All-in mid-hand (stack 0, chips in bet/pot) is not a bust — only post-hand sit-out / waiting $0.
+      const busted =
+        occupied &&
+        stackNum <= 0 &&
+        betNum <= 0 &&
+        !handLive &&
+        (Boolean(ls?.sitOut) || live?.street === "waiting" || live == null);
       const active = occupied && !busted && live?.actingIndex === idx;
       const agentColor = String(sm?.agent_color || "").trim() || (you ? color.accent : "#6EA8FF");
       const name = (
@@ -109,8 +119,6 @@ export function LiveTableFelt({
       )
         .toString()
         .toUpperCase();
-      const stackNum = Number(ls?.stack ?? sm?.stack ?? 0);
-      const betNum = Number(ls?.bet ?? 0);
       const seatedLive = (live?.seats || []).filter((x) => x.playerId && !x.sitOut && Number(x.stack) > 0);
       const headsUp = seatedLive.length === 2;
       let posLabel = occupied ? `SEAT ${idx + 1}` : "";

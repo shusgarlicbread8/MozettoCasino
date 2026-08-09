@@ -104,7 +104,7 @@ describe("custody ABI conformance (compensates for `as never` casts)", () => {
   it("exposes every custody function the API calls", () => {
     // If a contract is redeployed without one of these, fail here rather than
     // at the moment a player's money is being locked.
-    for (const name of ["openSession", "topUpSession"]) {
+    for (const name of ["openSession", "topUpSession", "rebuySession"]) {
       fn(arenaVaultV2Abi as readonly unknown[], name);
     }
     fn(arenaAccountAbi as readonly unknown[], "setGamePermission");
@@ -132,5 +132,12 @@ describe("custody ABI conformance (compensates for `as never` casts)", () => {
     const components = (ticket as { components?: { name: string; type: string }[] }).components ?? [];
     const buyIn = components.find((c) => c.name === "buyIn");
     assert.equal(buyIn?.type, "uint256", "ticket must carry the top-up amount as buyIn");
+  });
+
+  it("rebuySession mirrors topUpSession shape for existing participants", () => {
+    const entry = fn(arenaVaultV2Abi as readonly unknown[], "rebuySession");
+    assert.equal(entry.inputs[0]?.type, "bytes32", "first arg is sessionId");
+    assert.equal(entry.inputs[1]?.type, "tuple", "second arg is the seat ticket");
+    assert.equal(entry.inputs[2]?.type, "bytes", "third arg is signature");
   });
 });

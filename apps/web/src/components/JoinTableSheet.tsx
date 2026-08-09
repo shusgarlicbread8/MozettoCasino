@@ -81,6 +81,7 @@ export function JoinTableSheet({
   onClose,
   onJoined,
   mode = "join",
+  rebuySecsLeft = null,
 }: {
   table: JoinTableData;
   wallet: number;
@@ -88,6 +89,8 @@ export function JoinTableSheet({
   onJoined?: (tableId: string) => void;
   /** "topup" adds chips to an existing seat without leaving. */
   mode?: "join" | "topup";
+  /** Bust rebuy countdown from the table server (seconds). */
+  rebuySecsLeft?: number | null;
 }) {
   const t = table ?? {};
   const w = wallet ?? 0;
@@ -279,6 +282,18 @@ export function JoinTableSheet({
             </div>
           </div>
           <h2 style={{ margin: "14px 0 0", fontSize: 26, fontWeight: 600, letterSpacing: "-.035em" }}>{tableName}</h2>
+          {mode === "topup" && rebuySecsLeft != null ? (
+            <div
+              style={{
+                marginTop: 10,
+                font: `500 12px ${MONO}`,
+                letterSpacing: ".04em",
+                color: rebuySecsLeft <= 5 ? "#FF5252" : "#E8B84A",
+              }}
+            >
+              Rebuy in {rebuySecsLeft}s or you leave this seat
+            </div>
+          ) : null}
           <div style={{ display: "flex", gap: 22, marginTop: 12 }}>
             {facts.map((f) => (
               <div key={f.k}>

@@ -44,8 +44,9 @@ ensure_anvil() {
     return
   fi
   echo "Starting Anvil..."
-  nohup anvil --host 127.0.0.1 --port 8545 --chain-id 31337 --block-time 1 \
-    >/tmp/mozetto-anvil-wp106.log 2>&1 &
+  ANVIL_ARGS=(--host 127.0.0.1 --port 8545 --chain-id 31337)
+  if [[ -n "${ANVIL_BLOCK_TIME:-}" ]]; then ANVIL_ARGS+=(--block-time "$ANVIL_BLOCK_TIME"); fi
+  nohup anvil "${ANVIL_ARGS[@]}" >/tmp/mozetto-anvil-wp106.log 2>&1 &
   for _ in $(seq 1 30); do
     if curl -sf -X POST "$ANVIL_RPC" -H 'content-type: application/json' \
       -d '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' >/dev/null; then

@@ -598,6 +598,76 @@ contract ArenaAccountV2Test is Test {
         vault.openSession(_config(keccak256("nonce-b")), tickets, sigs);
     }
 
+    function testRebuySessionIncreasesLockSameParticipant() public {
+        bytes32 sid = keccak256("rebuy-happy");
+        ArenaVaultV2.SeatTicket[] memory tickets = new ArenaVaultV2.SeatTicket[](2);
+        bytes[] memory sigs = new bytes[](2);
+        tickets[0] = _ticket(aliceAccount, 50 * ONE, 90, LEAGUE_MICRO, true);
+        tickets[1] = _ticket(bobAccount, 50 * ONE, 91, LEAGUE_MICRO, true);
+        sigs[0] = _signSeatTicket(tickets[0], sessionSignerPk);
+        sigs[1] = _signSeatTicket(tickets[1], sessionSignerPk);
+        vault.openSession(_config(sid), tickets, sigs);
+
+        (,,,,,,,,,,,, uint16 gamesBefore,,) = ArenaAccount(aliceAccount).gameAuth();
+        assertEq(gamesBefore, 1);
+        assertEq(vault.sessionParticipantCount(sid), 2);
+
+        ArenaVaultV2.SeatTicket memory rebuy = _ticket(aliceAccount, 50 * ONE, 92, LEAGUE_MICRO, true);
+        vault.rebuySession(sid, rebuy, _signSeatTicket(rebuy, sessionSignerPk));
+
+        assertEq(vault.lockedBySession(sid, aliceAccount), 100 * ONE);
+        assertEq(ArenaAccount(aliceAccount).sessionExposure(sid), 100 * ONE);
+        assertEq(vault.sessionParticipantCount(sid), 2);
+        (,,,,,,,,,,,, uint16 gamesAfter,,) = ArenaAccount(aliceAccount).gameAuth();
+        assertEq(gamesAfter, 1);
+        assertEq(usdc.balanceOf(address(vault)), 150 * ONE);
+    }
+
+    function testRebuySessionThenSettleConserves() public {
+        bytes32 sid = keccak256("rebuy-settle");
+        ArenaVaultV2.SeatTicket[] memory tickets = new ArenaVaultV2.SeatTicket[](2);
+        bytes[] memory sigs = new bytes[](2);
+        tickets[0] = _ticket(aliceAccount, 50 * ONE, 93, LEAGUE_MICRO, true);
+        tickets[1] = _ticket(bobAccount, 50 * ONE, 94, LEAGUE_MICRO, true);
+        sigs[0] = _signSeatTicket(tickets[0], sessionSignerPk);
+        sigs[1] = _signSeatTicket(tickets[1], sessionSignerPk);
+        vault.openSession(_config(sid), tickets, sigs);
+
+        ArenaVaultV2.SeatTicket memory rebuy = _ticket(aliceAccount, 20 * ONE, 95, LEAGUE_MICRO, true);
+        vault.rebuySession(sid, rebuy, _signSeatTicket(rebuy, sessionSignerPk));
+
+        // opening 70+50=120; alice ends 99.25, bob 20, rake 0.75
+        ArenaVaultV2.SettlementPlayer[] memory players = new ArenaVaultV2.SettlementPlayer[](2);
+        players[0] = ArenaVaultV2.SettlementPlayer(aliceAccount, 70 * ONE, 99_250_000);
+        players[1] = ArenaVaultV2.SettlementPlayer(bobAccount, 50 * ONE, 20 * ONE);
+        uint256 rake = 750_000;
+        _settle(sid, players, rake, 2);
+
+        assertEq(ArenaAccount(aliceAccount).sessionExposure(sid), 0);
+        assertEq(vault.lockedBySession(sid, aliceAccount), 0);
+        (,,,,,,,,,,,, uint16 gamesAfter,,) = ArenaAccount(aliceAccount).gameAuth();
+        assertEq(gamesAfter, 0);
+    }
+
+    function testRebuySessionRejectsNonParticipant() public {
+        bytes32 sid = keccak256("rebuy-stranger");
+        ArenaVaultV2.SeatTicket[] memory tickets = new ArenaVaultV2.SeatTicket[](1);
+        bytes[] memory sigs = new bytes[](1);
+        tickets[0] = _ticket(aliceAccount, 50 * ONE, 96, LEAGUE_MICRO, true);
+        sigs[0] = _signSeatTicket(tickets[0], sessionSignerPk);
+        vault.openSession(_config(sid), tickets, sigs);
+
+        ArenaVaultV2.SeatTicket memory stranger = _ticket(bobAccount, 50 * ONE, 97, LEAGUE_MICRO, true);
+        vm.expectRevert(ArenaVaultV2.UnknownParticipant.selector);
+        vault.rebuySession(sid, stranger, _signSeatTicket(stranger, sessionSignerPk));
+    }
+
+    function testIncreaseBuyInRejectsWithoutOpenSession() public {
+        vm.prank(address(vault));
+        vm.expectRevert(ArenaAccount.SessionNotOpen.selector);
+        ArenaAccount(aliceAccount).increaseBuyIn(keccak256("nope"), 10 * ONE, templateId, LEAGUE_MICRO, true);
+    }
+
     // --- helpers ---
 
     function _config(bytes32 sid) internal view returns (ArenaVaultV2.SessionConfig memory) {

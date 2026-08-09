@@ -475,4 +475,23 @@ describe("WP-108 resolveSettlementRoots", () => {
     assert.equal(roots.usedStub, true);
     assert.match(roots.finalEventRoot, /^0x[0-9a-f]{64}$/i);
   });
+
+  it("scales inflated off-chain stacks down to vault locks", async () => {
+    const { repairEndingBalancesForVaultLocks } = await import("./v3/process.js");
+    const players = [
+      { startLocked: 50_000_000n, endBalance: 99_250_000n },
+      { startLocked: 50_000_000n, endBalance: 20_000_000n },
+    ];
+    const { repaired, targetEnding } = repairEndingBalancesForVaultLocks({
+      players,
+      dbOpeningRaw: 120_000_000n,
+    });
+    assert.equal(repaired, true);
+    assert.equal(targetEnding, 99_250_000n);
+    assert.equal(
+      players.reduce((a, p) => a + p.endBalance, 0n),
+      99_250_000n,
+    );
+    assert.equal(players.reduce((a, p) => a + p.startLocked, 0n) - targetEnding, 750_000n);
+  });
 });

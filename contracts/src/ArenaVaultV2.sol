@@ -187,6 +187,7 @@ contract ArenaVaultV2 is Ownable, Pausable, ReentrancyGuard, EIP712 {
         bytes32 indexed sessionId, bytes32 indexed templateId, bytes32 participantRoot, uint256 playerCount
     );
     event SessionToppedUp(bytes32 indexed sessionId, address indexed player, uint256 amount);
+    event SessionRebuy(bytes32 indexed sessionId, address indexed player, uint256 amount);
     event BuyInLocked(bytes32 indexed sessionId, address indexed player, uint256 amount);
     event CheckpointApplied(bytes32 indexed sessionId, uint64 sequence, bytes32 balanceRoot, bytes32 eventRoot);
     event SessionSettled(bytes32 indexed sessionId, uint256 rake, uint256 playerCount);
@@ -455,6 +456,23 @@ contract ArenaVaultV2 is Ownable, Pausable, ReentrancyGuard, EIP712 {
 
         _lockFromTicket(sessionId, session.templateId, ticket, signature);
         emit SessionToppedUp(sessionId, ticket.player, ticket.buyIn);
+    }
+
+    /// @notice Mid-sit rebuy for an existing participant (same sessionId; not a new seat).
+    function rebuySession(bytes32 sessionId, SeatTicket calldata ticket, bytes calldata signature)
+        external
+        onlyRelayerOrSettlement
+        nonReentrant
+        whenNotPaused
+    {
+        Session storage session = sessions[sessionId];
+        if (session.openedAt == 0) revert UnknownSession();
+        if (session.settled) revert AlreadySettled();
+        if (sessionSealedV3[sessionId]) revert SessionSealedImmutable();
+        if (!sessionParticipants[sessionId][ticket.player]) revert UnknownParticipant();
+
+        _rebuyFromTicket(sessionId, session.templateId, ticket, signature);
+        emit SessionRebuy(sessionId, ticket.player, ticket.buyIn);
     }
 
     function applyCheckpoint(bytes32 sessionId, uint64 sequence, bytes32 balanceRoot, bytes32 eventRoot)
@@ -850,6 +868,60 @@ contract ArenaVaultV2 is Ownable, Pausable, ReentrancyGuard, EIP712 {
         totalLocked[ticket.player] += ticket.buyIn;
         sessionParticipants[sessionId][ticket.player] = true;
         sessionParticipantCount[sessionId] += 1;
+        emit BuyInLocked(sessionId, ticket.player, ticket.buyIn);
+    }
+
+    /// @dev Existing participant only — increases lock via ArenaAccount.increaseBuyIn.
+    function _rebuyFromTicket(
+        bytes32 sessionId,
+        bytes32 expectedTemplateId,
+        SeatTicket calldata ticket,
+        bytes calldata signature
+    ) internal {
+        if (ticket.buyIn == 0) revert ZeroAmount();
+        if (ticket.gameTemplateId != expectedTemplateId) revert TemplateMismatch();
+        if (block.timestamp > ticket.expiresAt) revert TicketExpired();
+        _requireBuyInWithinBand(ticket.gameTemplateId, ticket.buyIn);
+        if (usedNonces[ticket.player][ticket.nonce]) revert NonceUsed();
+
+        address accountOwner = factory.ownerOf(ticket.player);
+        if (accountOwner == address(0)) revert NotArenaAccount();
+
+        ArenaAccount account = ArenaAccount(ticket.player);
+        (
+            address sessionSigner,
+            ,
+            address authVault,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            bool enabled
+        ) = account.gameAuth();
+
+        if (!enabled || authVault != address(this)) revert PermissionInactive();
+
+        bytes32 digest = _hashSeatTicket(ticket);
+        bool ownerSigned = SignatureChecker.isValidSignatureNow(accountOwner, digest, signature);
+        if (!ownerSigned) {
+            if (!SignatureChecker.isValidSignatureNow(sessionSigner, digest, signature)) {
+                revert BadSignature();
+            }
+        }
+
+        usedNonces[ticket.player][ticket.nonce] = true;
+
+        account.increaseBuyIn(sessionId, ticket.buyIn, ticket.gameTemplateId, ticket.leagueBit, ticket.rated);
+
+        lockedBySession[sessionId][ticket.player] += ticket.buyIn;
+        totalLocked[ticket.player] += ticket.buyIn;
         emit BuyInLocked(sessionId, ticket.player, ticket.buyIn);
     }
 

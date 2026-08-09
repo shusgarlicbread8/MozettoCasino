@@ -300,10 +300,11 @@ app.post("/v1/tables/:id/top-up", async (req, reply) => {
   if (!player) return reply.code(401).send({ error: "unauthenticated", message: "Sign in to top up." });
   const tableId = (req.params as { id: string }).id;
   const amount = Number((req.body as { amount?: number }).amount ?? 0);
+  const onchainRebuyDone = String(req.headers["x-mozetto-onchain-rebuy"] ?? "") === "1";
   try {
     const rt = await getRuntime(tableId);
     requireLease(tableId);
-    const result = await rt.topUp(player.profileId, amount);
+    const result = await rt.topUp(player.profileId, amount, { onchainRebuyDone });
     return { ok: true, ...result };
   } catch (e) {
     const message = e instanceof Error ? e.message : "top_up_failed";
@@ -365,8 +366,10 @@ app.post("/v1/tables/:id/sit-out", async (req, reply) => {
   }
 });
 
-/** After the last player WS for a seat drops, cash them out (fold mid-hand). */
-const DISCONNECT_LEAVE_GRACE_MS = Number(process.env.DISCONNECT_LEAVE_GRACE_MS ?? 8_000);
+/** After the last player WS for a seat drops, cash them out (fold mid-hand).
+ * Keep short so a page reload counts as leave (beacon + disconnect) instead of
+ * reconnecting within a long grace and resurrecting the prior seat/slot. */
+const DISCONNECT_LEAVE_GRACE_MS = Number(process.env.DISCONNECT_LEAVE_GRACE_MS ?? 1_500);
 
 app.get("/ws", { websocket: true }, (socket, req) => {
   let identity: Awaited<ReturnType<typeof resolvePlayerFromToken>> = null;
