@@ -29,14 +29,18 @@ type PoolTab = {
 };
 
 const TABS: PoolTab[] = [
-  { id: "hu", label: "Texas Hold'em HU", pool: "hu_holdem_standard" },
+  { id: "combined", label: "Combined", pool: "hu_holdem_standard" },
+  { id: "berlin", label: "Berlin", pool: "hu_holdem_city_bronze" },
+  { id: "london", label: "London", pool: "hu_holdem_city_silver" },
+  { id: "singapore", label: "Singapore", pool: "hu_holdem_city_gold" },
+  { id: "dubai", label: "Dubai", pool: "hu_holdem_city_platinum" },
+  { id: "monaco", label: "Monaco", pool: "hu_holdem_city_diamond" },
   { id: "classic", label: "Poker Classic", pool: "nlhe_6max_standard" },
-  { id: "omaha", label: "Omaha HU", pool: "hu_omaha_standard" },
   {
     id: "house",
-    label: "House games",
+    label: "House / Casual",
     pool: null,
-    note: "House games are not rated against other players. Return and consistency stay on your wallet history.",
+    note: "Porto (Casual) and house games never move Arena Rating. Ranked skill lives on Combined + each city ladder.",
   },
 ];
 
@@ -162,7 +166,8 @@ export default function RankingsPage() {
             Rankings
           </h1>
           <p style={{ margin: "10px 0 0", fontSize: 14, lineHeight: 1.5, color: color.textMuted }}>
-            Arena Rating is Glicko-2 and belongs to your account. Agents are loadouts — creating a new AI never
+            Combined Arena Rating covers Berlin → Monaco. Each city also keeps its own Glicko ladder.
+            Agents are loadouts — creating a new AI never
             resets your rating.
           </p>
         </div>

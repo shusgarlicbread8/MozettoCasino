@@ -59,8 +59,13 @@ function microToUsd(raw: string | null | undefined): string {
   }
 }
 
-function statusFor(value: string | null | undefined): ControlHealth {
-  return value == null || value === "" ? "UNAVAILABLE" : "HEALTHY";
+function statusFor(
+  value: string | null | undefined,
+  kind: "live" | "hypothesis" = "live",
+): ControlHealth {
+  if (value == null || value === "") return "UNAVAILABLE";
+  // Season-1 COGS use unit-economics hypotheses — never paint as HEALTHY.
+  return kind === "hypothesis" ? "PENDING" : "HEALTHY";
 }
 
 function moneyCell(field: MoneyField): React.ReactNode {
@@ -128,56 +133,63 @@ export default async function EconomicsPage() {
         <ControlMetricCard
           label="Gross rake"
           value={microToUsd(rev?.grossRake)}
+          comparison="settled proposals (live)"
           source="settlement_proposals"
           lastUpdated={at}
-          status={statusFor(rev?.grossRake)}
+          status={statusFor(rev?.grossRake, "live")}
         />
         <ControlMetricCard
           label="AI COGS"
           value={microToUsd(rev?.aiCogs ?? null)}
-          source="agent-runtime"
+          comparison="ESTIMATED · Season-1 Groq rates"
+          source="agent-runtime + unit-economics"
           lastUpdated={at}
-          status={statusFor(rev?.aiCogs ?? null)}
+          status={statusFor(rev?.aiCogs ?? null, "hypothesis")}
         />
         <ControlMetricCard
           label="Chain COGS"
           value={microToUsd(rev?.chainCogs ?? null)}
+          comparison="ESTIMATED · gas/VRF placeholders"
           source="unit-economics"
           lastUpdated={at}
-          status={statusFor(rev?.chainCogs ?? null)}
+          status={statusFor(rev?.chainCogs ?? null, "hypothesis")}
         />
         <ControlMetricCard
           label="Infra COGS"
           value={microToUsd(rev?.infrastructureCogs ?? null)}
+          comparison="ESTIMATED · cloud placeholders"
           source="unit-economics"
           lastUpdated={at}
-          status={statusFor(rev?.infrastructureCogs ?? null)}
+          status={statusFor(rev?.infrastructureCogs ?? null, "hypothesis")}
         />
         <ControlMetricCard
           label="Contribution"
           value={microToUsd(rev?.contribution ?? null)}
+          comparison="rake − estimated COGS (not calibrated)"
           source="rake − COGS"
           lastUpdated={at}
-          status={statusFor(rev?.contribution ?? null)}
+          status={statusFor(rev?.contribution ?? null, "hypothesis")}
         />
         <ControlMetricCard
           label="Fee vault accrued"
           value={microToUsd(rev?.feeVaultAccrued ?? null)}
-          source="on-chain"
+          comparison="on-chain fee vault"
+          source="chain RPC"
           lastUpdated={at}
-          status={statusFor(rev?.feeVaultAccrued ?? null)}
+          status={statusFor(rev?.feeVaultAccrued ?? null, "live")}
         />
         <ControlMetricCard
           label="Locked player funds"
           value={microToUsd(rev?.lockedPlayerFunds)}
-          comparison="≠ revenue"
+          comparison="≠ revenue · vault mirror"
           source="vault mirror"
           lastUpdated={at}
-          status={statusFor(rev?.lockedPlayerFunds)}
+          status={statusFor(rev?.lockedPlayerFunds, "live")}
         />
         <ControlMetricCard
           label="Schedule"
           value={snap?.scheduleStatus ?? "—"}
+          comparison="hypothesis until calibrated"
           source="unit-economics"
           lastUpdated={at}
           status={snap ? "PENDING" : "UNAVAILABLE"}

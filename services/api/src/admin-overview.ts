@@ -12,7 +12,6 @@ import { buildSolvencySnapshot } from "./admin-solvency.js";
 import {
   classifyAiHealth,
   classifyRandomnessEpoch,
-  latencyPercentiles,
 } from "./admin-ops.js";
 import {
   INDEXER_LAG_WARN_BLOCKS,
@@ -106,8 +105,15 @@ function serviceTargets(): ServiceTarget[] {
     "http://127.0.0.1:4010"
   ).replace(/\/$/, "");
 
+  const apiBase = (
+    process.env.API_PUBLIC_URL ||
+    process.env.API_URL ||
+    process.env.PUBLIC_API_URL ||
+    "http://127.0.0.1:4000"
+  ).replace(/\/$/, "");
+
   return [
-    { id: "api", label: "API", url: "http://127.0.0.1:4000/health" },
+    { id: "api", label: "API", url: `${apiBase}/health` },
     { id: "game", label: "Game Server", url: `${gameBase}/health` },
     { id: "agent", label: "Agent Runtime", url: `${agentBase}/health` },
     { id: "dealer", label: "Dealer", url: `${dealerBase}/health` },
@@ -267,11 +273,13 @@ export async function buildAdminOverviewSnapshot(opts?: { range?: string }) {
     lastUpdated: activeCursor?.updatedAt ?? db?.newestCursorAt ?? null,
   });
 
-  const settlementClass = classifySettlementHealth({
-    pendingCount: db?.settlement.pendingCount ?? 0,
-    oldestPendingAgeMs: db?.settlement.oldestPendingAgeMs ?? null,
-    failedCount: db?.settlement.failedCount ?? 0,
-  });
+  const settlementClass = dbError
+    ? { status: "UNAVAILABLE" as const, reasons: [`db_error:${dbError}`] }
+    : classifySettlementHealth({
+        pendingCount: db?.settlement.pendingCount ?? 0,
+        oldestPendingAgeMs: db?.settlement.oldestPendingAgeMs ?? null,
+        failedCount: db?.settlement.failedCount ?? 0,
+      });
   const settlementComponent = componentHealth(settlementClass.status, "settlement_proposals", {
     ageMs: db?.settlement.oldestPendingAgeMs ?? null,
     reasons: settlementClass.reasons,
@@ -303,16 +311,25 @@ export async function buildAdminOverviewSnapshot(opts?: { range?: string }) {
     },
   );
 
-  const incidentsOpen =
-    (db?.incidents.securityOpen ?? 0) + (db?.incidents.randomnessOpen ?? 0);
-  const incidentsCritical =
-    (db?.incidents.securityCritical ?? 0) + (db?.incidents.randomnessCritical ?? 0);
+  const incidentsOpen = db
+    ? (db.incidents.securityOpen ?? 0) + (db.incidents.randomnessOpen ?? 0)
+    : null;
+  const incidentsCritical = db
+    ? (db.incidents.securityCritical ?? 0) + (db.incidents.randomnessCritical ?? 0)
+    : null;
   const incidentsComponent = componentHealth(
-    incidentsCritical > 0 ? "CRITICAL" : incidentsOpen > 0 ? "DEGRADED" : "HEALTHY",
+    dbError || incidentsOpen == null || incidentsCritical == null
+      ? "UNAVAILABLE"
+      : incidentsCritical > 0
+        ? "CRITICAL"
+        : incidentsOpen > 0
+          ? "DEGRADED"
+          : "HEALTHY",
     "security_incidents+randomness_incidents",
     {
-      reasons:
-        incidentsOpen === 0
+      reasons: dbError
+        ? [`db_error:${dbError}`]
+        : incidentsOpen === 0
           ? ["no_open_incidents"]
           : [`open=${incidentsOpen}`, `critical=${incidentsCritical}`],
       lastUpdated: db?.incidents.newestAt ?? null,
@@ -464,10 +481,11 @@ export async function buildAdminOverviewSnapshot(opts?: { range?: string }) {
     incidents: {
       openTotal: incidentsOpen,
       critical: incidentsCritical,
-      high: db?.incidents.securityHigh ?? 0,
-      securityOpen: db?.incidents.securityOpen ?? 0,
-      randomnessOpen: db?.incidents.randomnessOpen ?? 0,
+      high: db?.incidents.securityHigh ?? null,
+      securityOpen: db?.incidents.securityOpen ?? null,
+      randomnessOpen: db?.incidents.randomnessOpen ?? null,
       source: "security_incidents+randomness_incidents",
+      unavailable: Boolean(dbError),
     },
     services: services.map((s) => ({
       id: s.id,
@@ -521,8 +539,8 @@ export async function buildAdminOverviewSnapshot(opts?: { range?: string }) {
 }
 
 async function queryDbCore(rangeHours: number) {
-  const interval = `${rangeHours} hours`;
   const [
+
     activeSessions,
     seatedPlayers,
     queuedTickets,
@@ -549,10 +567,19 @@ async function queryDbCore(rangeHours: number) {
       `select count(*)::text as count from seat_tickets where status = 'queued'`,
     ),
     query<{ count: string }>(
-      `select count(distinct hand_id)::text as count
-       from session_checkpoints
-       where created_at >= now() - ($1::text || ' hours')::interval`,
+      `select count(*)::text as count
+       from hands
+       where coalesce(settled_at, started_at) >= now() - ($1::text || ' hours')::interval
+         and (status = 'settled' or settled_at is not null)`,
       [String(rangeHours)],
+    ).catch(async () =>
+      query<{ count: string }>(
+        `select count(*)::text as count
+         from session_checkpoints
+         where created_at >= now() - ($1::text || ' hours')::interval
+           and hand_number is not null`,
+        [String(rangeHours)],
+      ),
     ),
     query<{ gross: string }>(
       `select coalesce(sum(total_rake), 0)::text as gross
@@ -689,23 +716,18 @@ function generatedIso() {
 }
 
 async function queryAiWindow(rangeHours: number) {
-  const [agg, latencies, newest] = await Promise.all([
+  const [agg, newest] = await Promise.all([
     query<{
       total: string;
       fallbacks: string;
+      p95: string | null;
     }>(
       `select count(*)::text as total,
-              count(*) filter (where fallback_used)::text as fallbacks
+              count(*) filter (where fallback_used)::text as fallbacks,
+              (percentile_cont(0.95) within group (order by latency_ms)
+                filter (where latency_ms is not null))::text as p95
        from agent_invocations
        where created_at >= now() - ($1::text || ' hours')::interval`,
-      [String(rangeHours)],
-    ),
-    query<{ latency_ms: number }>(
-      `select latency_ms from agent_invocations
-       where created_at >= now() - ($1::text || ' hours')::interval
-         and latency_ms is not null
-       order by latency_ms
-       limit 50000`,
       [String(rangeHours)],
     ),
     query<{ created_at: string }>(
@@ -717,11 +739,15 @@ async function queryAiWindow(rangeHours: number) {
   const total = Number(agg.rows[0]?.total ?? 0);
   const fallbacks = Number(agg.rows[0]?.fallbacks ?? 0);
   const fallbackRate = total > 0 ? fallbacks / total : 0;
-  const pct = latencyPercentiles(latencies.rows.map((r) => Number(r.latency_ms)));
+  const p95Raw = agg.rows[0]?.p95;
+  const p95Ms =
+    p95Raw != null && p95Raw !== "" && Number.isFinite(Number(p95Raw))
+      ? Math.round(Number(p95Raw))
+      : null;
   const health = classifyAiHealth({
     invocationCount: total,
     fallbackRate,
-    p95Ms: pct.p95,
+    p95Ms,
     thresholds: OVERVIEW_AI_THRESHOLDS,
   });
 
@@ -729,7 +755,7 @@ async function queryAiWindow(rangeHours: number) {
     total,
     fallbacks,
     fallbackRate,
-    p95Ms: pct.p95,
+    p95Ms,
     health,
     windowAgeMs: rangeHours * 3_600_000,
     newestInvocationAt: newest.rows[0]?.created_at ?? null,
@@ -744,8 +770,8 @@ async function queryRandomnessHealth() {
          and created_at < now() - ($1::text || ' seconds')::interval`,
       [String(VRF_STALE_PENDING_SEC)],
     ),
-    query<{ status: string; created_at: string; fulfilled_at: string | null }>(
-      `select status, created_at, fulfilled_at
+    query<{ status: string; created_at: string }>(
+      `select status, created_at
        from randomness_requests
        order by created_at desc
        limit 20`,
@@ -756,7 +782,11 @@ async function queryRandomnessHealth() {
     classifyRandomnessEpoch({
       status: row.status,
       createdAt: row.created_at,
-      fulfilledAt: row.fulfilled_at,
+      // Schema has no fulfilled_at — treat terminal statuses as fulfilled at created_at.
+      fulfilledAt:
+        row.status === "fulfilled" || row.status === "revealed" || row.status === "settled"
+          ? row.created_at
+          : null,
       staleAfterSec: VRF_STALE_PENDING_SEC,
     }),
   );

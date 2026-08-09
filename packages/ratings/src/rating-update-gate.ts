@@ -68,15 +68,46 @@ export type RatingUpdateGateResult =
     }
   | { allow: false; reason: RatingUpdateSkipReason; detail?: string };
 
-/** Season 1 HU ranked pool (account-owned Arena Rating). */
+/** Season 1 combined HU ranked pool (account-owned Arena Rating across all ranked cities). */
 export const HU_RANKED_POOL_SEASON1 = "hu_holdem_standard" as const;
 
 /** Six-max cash is unrated in Season 1 — stats only. */
 export const SIXMAX_STATS_POOL_SEASON1 = "nlhe_6max_standard" as const;
 
+/** Ranked city ids that own a dedicated HU Glicko pool (Porto/casual excluded). */
+export const RANKED_CITY_IDS = [
+  "bronze",
+  "silver",
+  "gold",
+  "platinum",
+  "diamond",
+] as const;
+
+export type RankedCityId = (typeof RANKED_CITY_IDS)[number];
+
+/** Per-city HU pool id, e.g. `hu_holdem_city_bronze` for Berlin. */
+export function huCityPoolId(cityId: string): string {
+  return `hu_holdem_city_${cityId}`;
+}
+
+export function isRankedCityId(cityId: string): cityId is RankedCityId {
+  return (RANKED_CITY_IDS as readonly string[]).includes(cityId);
+}
+
+export function isHuCityPoolId(poolId: string): boolean {
+  return poolId.startsWith("hu_holdem_city_");
+}
+
+/** Pools that receive a Glicko update for one ranked HU session (city + combined). */
+export function rankedHuPoolsForCity(cityId: string): string[] {
+  if (!isRankedCityId(cityId)) return [];
+  return [huCityPoolId(cityId), HU_RANKED_POOL_SEASON1];
+}
+
 const RANKED_HU_POOLS = new Set<string>([
   HU_RANKED_POOL_SEASON1,
   "hu_holdem_standard_season_1",
+  ...RANKED_CITY_IDS.map((id) => huCityPoolId(id)),
 ]);
 
 export function evaluateRatingUpdateGate(input: RatingUpdateGateInput): RatingUpdateGateResult {
@@ -94,11 +125,12 @@ export function evaluateRatingUpdateGate(input: RatingUpdateGateInput): RatingUp
   if (input.format !== "hu") {
     return { allow: false, reason: "unsupported_pool", detail: `format=${input.format}` };
   }
-  if (!RANKED_HU_POOLS.has(input.poolId) && input.poolId !== HU_RANKED_POOL_SEASON1) {
-    // Allow known HU pool; reject unknown / non-HU pools for Glicko updates.
-    if (!input.poolId.startsWith("hu_")) {
-      return { allow: false, reason: "unsupported_pool", detail: `poolId=${input.poolId}` };
-    }
+  if (
+    !RANKED_HU_POOLS.has(input.poolId) &&
+    !isHuCityPoolId(input.poolId) &&
+    !input.poolId.startsWith("hu_")
+  ) {
+    return { allow: false, reason: "unsupported_pool", detail: `poolId=${input.poolId}` };
   }
   if (!input.settlementConfirmed) {
     return { allow: false, reason: "settlement_unconfirmed" };

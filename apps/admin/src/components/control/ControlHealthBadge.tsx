@@ -19,30 +19,34 @@ export function ControlHealthBadge({
   status: ControlHealth;
   label?: string;
 }) {
-  const s = STYLES[status];
+  const s = STYLES[status] ?? STYLES.UNAVAILABLE;
   return (
     <span
+      className="ctrl-health-badge"
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 6,
-        padding: "2px 8px",
+        gap: 5,
+        padding: "2px 7px",
         borderRadius: 3,
-        fontSize: 11,
+        fontSize: 10,
         fontWeight: 600,
         letterSpacing: "0.04em",
         color: s.color,
         background: s.bg,
         border: `1px solid ${s.color}33`,
         whiteSpace: "nowrap",
+        flexShrink: 0,
+        maxWidth: "100%",
       }}
     >
       <span
         style={{
-          width: 6,
-          height: 6,
+          width: 5,
+          height: 5,
           borderRadius: 99,
           background: s.color,
+          flexShrink: 0,
         }}
       />
       {label ?? status}

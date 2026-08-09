@@ -11,10 +11,13 @@ import {
   defaultPlayer,
   evaluateRatingUpdateGate,
   HU_RANKED_POOL_SEASON1,
+  huCityPoolId,
   isPairFrequencyCapped,
+  isRankedCityId,
   MAX_PAIR_MATCHES_PER_DAY,
   PAIR_REDUCED_WEIGHT_UNTIL,
   provisionalAfterMatches,
+  rankedHuPoolsForCity,
   rateHeadsUpMatch,
   repeatedOpponentRatingWeight,
   stakeScalesRating,
@@ -59,6 +62,31 @@ test("agent loadout never resets account rating identity", () => {
   assert.equal(provisionalAfterMatches(0), true);
   assert.equal(provisionalAfterMatches(19), true);
   assert.equal(provisionalAfterMatches(20), false);
+});
+
+test("per-city HU pools + combined are both eligible", () => {
+  assert.equal(isRankedCityId("bronze"), true);
+  assert.equal(isRankedCityId("casual"), false);
+  assert.deepEqual(rankedHuPoolsForCity("bronze"), [
+    huCityPoolId("bronze"),
+    HU_RANKED_POOL_SEASON1,
+  ]);
+  assert.deepEqual(rankedHuPoolsForCity("casual"), []);
+
+  const cityGate = evaluateRatingUpdateGate({
+    matchClass: "ranked_public",
+    format: "hu",
+    settlementConfirmed: true,
+    replayOrEventVerified: true,
+    providerIncidentVoid: false,
+    integrityHold: false,
+    pairIdentityOk: true,
+    ratingWeight: 1,
+    poolId: huCityPoolId("diamond"),
+    sessionId: "sess-city",
+    settlementOrProofRoot: "0xabc",
+  });
+  assert.equal(cityGate.allow, true);
 });
 
 test("rating update gate rejects private / custom / six-max / voids", () => {

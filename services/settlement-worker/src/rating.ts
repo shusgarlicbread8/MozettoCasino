@@ -1,10 +1,10 @@
-import { isRankedLeague, query, settleRatedMatch } from "@mozetto/database";
+import { isRankedLeague, query, settleRankedCityMatch } from "@mozetto/database";
 import type { Hex } from "viem";
 import { keccakLike } from "./chain.js";
 
 /**
  * Post-settlement Glicko for on-chain HU sessions.
- * `eventLogRoot` should be the FinalSettlementV3 EIP-712 digest when settling via Hub V3.
+ * Updates the city pool and the combined Arena Rating.
  * Casual / unranked leagues skip Glicko entirely (no rated_matches row).
  */
 export async function maybeRateOnchainSession(
@@ -44,13 +44,8 @@ export async function maybeRateOnchainSession(
   );
   // Only HU-style rating (exactly two owners). Multiway Classic stays unrated for now.
   if (rows.rows.length !== 2 || !tableId) return;
-  const poolId =
-    variantId === "nlhe_hu" || maxSeats === 2
-      ? "hu_holdem_standard"
-      : variantId === "nlhe_6max"
-        ? "nlhe_6max_standard"
-        : null;
-  if (!poolId) return;
+  const isHu = variantId === "nlhe_hu" || maxSeats === 2;
+  if (!isHu) return;
   const [a, b] = rows.rows;
 
   const handsRow = await query<{ n: string }>(
@@ -71,9 +66,8 @@ export async function maybeRateOnchainSession(
   const profitA = Number(a.stack) - Number(a.buy_in);
   const profitB = Number(b.stack) - Number(b.buy_in);
   const scoreA: 0 | 0.5 | 1 = profitA > profitB ? 1 : profitA < profitB ? 0 : 0.5;
-  // Six-max Season 1 is unrated (Plan 12) — gate skips nlhe_6max_* pools.
-  await settleRatedMatch({
-    poolId,
+  await settleRankedCityMatch({
+    cityId: leagueId,
     ownerA: a.owner_id,
     ownerB: b.owner_id,
     agentA: a.agent_id || null,

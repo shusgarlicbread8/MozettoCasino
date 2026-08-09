@@ -6,6 +6,7 @@ type TimelineEntry = {
   kind: string;
   summary: string;
   source: string;
+  entityId?: string | null;
 };
 
 export async function PlayerTimelineSection({ profileId }: { profileId: string }) {
@@ -40,7 +41,7 @@ export async function PlayerTimelineSection({ profileId }: { profileId: string }
           { key: "source", header: "Source", mono: true, render: (r) => r.source },
         ]}
         rows={timeline}
-        rowKey={(r) => `${r.at}:${r.kind}:${r.summary}`}
+        rowKey={(r, i) => r.entityId || `${r.source}:${r.at}:${r.kind}:${i}`}
         empty="No timeline events (best-effort aggregation)"
       />
     </section>

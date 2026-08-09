@@ -17,7 +17,7 @@ export function ControlTable<T>({
 }: {
   columns: ControlColumn<T>[];
   rows: T[];
-  rowKey: (row: T) => string;
+  rowKey: (row: T, index: number) => string;
   empty?: string;
   error?: string | null;
   stale?: boolean;
@@ -43,9 +43,9 @@ export function ControlTable<T>({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
+          {rows.map((row, index) => (
             <tr
-              key={rowKey(row)}
+              key={`${rowKey(row, index)}#${index}`}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
               className={onRowClick ? "clickable" : undefined}
             >

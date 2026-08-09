@@ -51,9 +51,10 @@ type Overview = {
     failedCount: number | null;
   };
   incidents: {
-    openTotal: number;
-    critical: number;
-    high: number;
+    openTotal: number | null;
+    critical: number | null;
+    high: number | null;
+    unavailable?: boolean;
   };
   ai: {
     fallbackRate: number | null;
@@ -148,16 +149,33 @@ export default async function CommandCenterPage() {
         </div>
       ) : null}
 
+      {overview?.partialErrors &&
+      Object.values(overview.partialErrors).some(Boolean) ? (
+        <div className="card badge-warn text-sm" style={{ marginBottom: 16 }}>
+          Partial upstream errors (live numbers still preferred over zeros):{" "}
+          {Object.entries(overview.partialErrors)
+            .filter(([, v]) => v)
+            .map(([k, v]) => `${k}: ${String(v).slice(0, 80)}`)
+            .join(" · ")}
+        </div>
+      ) : null}
+
       <div className="ctrl-metric-grid" style={{ marginBottom: 16 }}>
         <ControlMetricCard
           label="Protocol solvency"
           value={solvency?.label ?? "UNAVAILABLE"}
           comparison={
-            solvency?.differenceUsdc != null
-              ? `Δ locked ${fmtUsdc(solvency.differenceUsdc)} USDC`
-              : solvency?.rpcError
-                ? `RPC: ${solvency.rpcError.slice(0, 40)}`
-                : undefined
+            solvency?.label === "PROTOCOL INSOLVENT"
+              ? `Vault ${fmtUsdc(solvency.vaultAssetsUsdc)} vs liabilities ${fmtUsdc(
+                  solvency.mirrorAvailableUsdc != null && solvency.mirrorEscrowUsdc != null
+                    ? solvency.mirrorAvailableUsdc + solvency.mirrorEscrowUsdc
+                    : null,
+                )} (live RPC + ledger)`
+              : solvency?.differenceUsdc != null
+                ? `Δ locked ${fmtUsdc(solvency.differenceUsdc)} USDC`
+                : solvency?.rpcError
+                  ? `RPC: ${solvency.rpcError.slice(0, 40)}`
+                  : undefined
           }
           source={overview?.components.solvency?.source ?? "admin/solvency"}
           lastUpdated={overview?.components.solvency?.lastUpdated ?? generatedAt}
@@ -210,12 +228,16 @@ export default async function CommandCenterPage() {
         <ControlMetricCard
           label="Incidents"
           value={
-            overview
+            overview?.incidents.openTotal != null && overview.incidents.critical != null
               ? `${overview.incidents.critical} critical · ${overview.incidents.openTotal} open`
               : "—"
           }
           comparison={
-            overview ? `${overview.incidents.high} high severity open` : undefined
+            overview?.incidents.high != null
+              ? `${overview.incidents.high} high severity open`
+              : overview?.incidents.unavailable
+                ? "DB unavailable — not assuming zero"
+                : undefined
           }
           source={overview?.components.incidents?.source ?? "security_incidents"}
           lastUpdated={overview?.components.incidents?.lastUpdated ?? generatedAt}
@@ -228,7 +250,11 @@ export default async function CommandCenterPage() {
               ? `${pct(overview.ai.fallbackRate)} fallback · p95 ${overview.ai.p95Ms ?? "—"}ms`
               : "—"
           }
-          comparison={`${overview?.ai.invocations ?? 0} invocations in window`}
+          comparison={
+            overview?.ai.invocations != null
+              ? `${overview.ai.invocations} invocations in window`
+              : "invocations UNAVAILABLE"
+          }
           source={overview?.components.ai?.source ?? "agent_invocations"}
           lastUpdated={overview?.components.ai?.lastUpdated ?? generatedAt}
           status={overview?.components.ai?.status ?? "UNAVAILABLE"}

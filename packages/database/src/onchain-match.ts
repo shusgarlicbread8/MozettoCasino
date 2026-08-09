@@ -215,18 +215,20 @@ export async function claimTicketPair(opts: {
       return null;
     }
 
-    // WP-040/043: random candidates within pool; filter self / linked / pair-cap in app.
+    // WP-040/043: random candidates within the city pool. Buy-ins may differ inside
+    // the 40–100BB band (same as joining an open table) — do not require exact USDC.
+    void opts.buyInUsdc;
     const oppRes = await client.query(
       `select id::text, profile_id::text, wallet_address, buy_in::text, controller_hash, agent_profile_hash,
               expires_at, nonce::text, matchmaking_pool, signature, game_template_id,
               arena_account_address, owner_address, league_bit, rated
        from seat_tickets
        where status = 'queued' and chain_id = $1 and matchmaking_pool = $2
-         and buy_in = $3 and profile_id <> $4 and expires_at > now()
+         and profile_id <> $3 and expires_at > now()
        order by random()
        limit 24
        for update skip locked`,
-      [opts.chainId, opts.matchmakingPool, opts.buyInUsdc, opts.profileId],
+      [opts.chainId, opts.matchmakingPool, opts.profileId],
     );
     const candidates = oppRes.rows as SeatTicketRow[];
     if (candidates.length === 0) {

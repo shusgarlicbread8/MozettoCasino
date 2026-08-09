@@ -409,9 +409,9 @@ export function PlayPermissionsPanel({
 
       {status?.permissionUpgradeRequired ? (
         <p style={{ margin: `${space[2]}px 0 0`, color: color.warn, fontSize: 12.5 }}>
-          Your permission was granted before the current city ladder. Enable Seamless Play again to
-          refresh it — the new grant covers every city, Porto (Casual) through Monaco, and allows
-          unrated Casual tickets.
+          Seamless Play is tied to the city you enable it for (one table template per grant). Enable
+          again for this city — league mask still allows Porto through Monaco once the template
+          matches.
         </p>
       ) : null}
 

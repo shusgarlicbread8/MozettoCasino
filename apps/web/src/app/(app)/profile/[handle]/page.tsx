@@ -61,6 +61,17 @@ type ProfilePayload = {
     wins: number;
     losses: number;
   }[];
+  cityRatings?: Array<{
+    cityId: string;
+    poolId: string;
+    label: string;
+    rating: number;
+    rd: number;
+    matches: number;
+    wins: number;
+    losses: number;
+    provisional: boolean;
+  }>;
   aggression: {
     score: number;
     preflop: number;
@@ -491,6 +502,50 @@ export default function ProfilePage() {
               </div>
             )}
           </section>
+
+          {(data.cityRatings?.length ?? 0) > 0 ? (
+            <section style={panelStyle({ padding: "16px 18px" })}>
+              <div style={{ fontFamily: font.display, fontSize: 15, fontWeight: 650, marginBottom: 10 }}>
+                City ratings
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
+                  gap: 8,
+                }}
+              >
+                {data.cityRatings!.map((c) => (
+                  <div
+                    key={c.poolId}
+                    style={{
+                      border: `1px solid ${color.line}`,
+                      borderRadius: radius.md,
+                      padding: "10px 12px",
+                      background: color.ink,
+                    }}
+                  >
+                    <div style={{ font: `500 10px ${font.mono}`, color: color.textFaint, letterSpacing: "0.08em" }}>
+                      {String(c.label).toUpperCase()}
+                    </div>
+                    <div
+                      style={{
+                        marginTop: 4,
+                        font: `600 20px ${font.mono}`,
+                        fontVariantNumeric: "tabular-nums",
+                        color: c.matches > 0 ? color.accent : color.textMuted,
+                      }}
+                    >
+                      {c.rating}
+                    </div>
+                    <div style={{ marginTop: 2, font: `400 10px ${font.mono}`, color: color.textFaint }}>
+                      {c.matches} matches · {c.wins}W/{c.losses}L
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
 
           <section style={panelStyle({ overflow: "hidden" })}>
             <div

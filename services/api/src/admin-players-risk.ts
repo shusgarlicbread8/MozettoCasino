@@ -520,11 +520,12 @@ export async function getAdminPlayerTimeline(profileId: string, limit = 100) {
   // Rating updates
   try {
     const ratings = await query<{
+      id: string;
       pool_id: string;
       rating: string;
       recorded_at: string;
     }>(
-      `select pool_id, rating::text, recorded_at
+      `select id::text, pool_id, rating::text, recorded_at
        from rating_history
        where owner_id = $1::uuid
        order by recorded_at desc
@@ -537,8 +538,8 @@ export async function getAdminPlayerTimeline(profileId: string, limit = 100) {
         kind: "rating_update",
         summary: `Rating ${Math.round(Number(r.rating))} (${r.pool_id})`,
         source: "rating_history",
-        entityId: r.pool_id,
-        detail: { rating: r.rating },
+        entityId: r.id,
+        detail: { rating: r.rating, poolId: r.pool_id },
       });
     }
   } catch {

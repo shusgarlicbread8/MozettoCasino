@@ -308,10 +308,12 @@ async function seatedOwners(tableId: string): Promise<string[]> {
  */
 export async function pairCappedToday(ownerA: string, ownerB: string): Promise<boolean> {
   const rankedIds = ARENA_LEAGUES.filter((l) => l.rated).map((l) => l.id);
+  // Combined pool only — city+combined dual settles must not double-count the cap.
   const rated = await query(
     `select count(*)::int as n from rated_matches
      where created_at > now() - interval '24 hours'
        and weight > 0
+       and pool_id = 'hu_holdem_standard'
        and ((owner_a=$1 and owner_b=$2) or (owner_a=$2 and owner_b=$1))`,
     [ownerA, ownerB],
   );

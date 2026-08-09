@@ -4,9 +4,14 @@ import {
   defaultPlayer,
   emptyCounts,
   evaluateRatingUpdateGate,
+  HU_RANKED_POOL_SEASON1,
+  huCityPoolId,
+  isRankedCityId,
   mergeCounts,
   profileKeyBaseline,
+  rankedHuPoolsForCity,
   rateHeadsUpMatch,
+  RANKED_CITY_IDS,
   repeatedOpponentRatingWeight,
   type GlickoPlayer,
   type RatingMatchClass,
@@ -14,11 +19,12 @@ import {
 import { query } from "./client.js";
 
 export const DEFAULT_POOLS = [
-  "hu_holdem_standard",
+  HU_RANKED_POOL_SEASON1,
   "nlhe_6max_standard",
   "hu_omaha_standard",
   "tournament_standard",
   "reputation",
+  ...RANKED_CITY_IDS.map((id) => huCityPoolId(id)),
 ] as const;
 
 export async function ensureAccountRatings(ownerId: string) {
@@ -31,8 +37,17 @@ export async function ensureAccountRatings(ownerId: string) {
   }
 }
 
+export async function ensurePoolRating(ownerId: string, poolId: string) {
+  await query(
+    `insert into account_ratings (owner_id, pool_id)
+     values ($1,$2) on conflict (owner_id, pool_id) do nothing`,
+    [ownerId, poolId],
+  );
+}
+
 export async function getAccountRating(ownerId: string, poolId: string) {
   await ensureAccountRatings(ownerId);
+  await ensurePoolRating(ownerId, poolId);
   const res = await query(`select * from account_ratings where owner_id=$1 and pool_id=$2`, [ownerId, poolId]);
   return res.rows[0];
 }
@@ -47,11 +62,13 @@ function asPlayer(row: { rating: string | number; rd: string | number; volatilit
 
 /** Weight for repeated opponents in the last 24h (full → half → zero). WP-043 / Plan 12. */
 export async function repeatedOpponentWeight(ownerA: string, ownerB: string): Promise<number> {
+  // Count only the combined pool so dual city+combined settles do not double-burn weight.
   const res = await query(
     `select count(*)::int as n from rated_matches
      where status='settled' and rated_at > now() - interval '24 hours'
+       and pool_id = $3
        and ((owner_a=$1 and owner_b=$2) or (owner_a=$2 and owner_b=$1))`,
-    [ownerA, ownerB],
+    [ownerA, ownerB, HU_RANKED_POOL_SEASON1],
   );
   return repeatedOpponentRatingWeight(Number(res.rows[0]?.n ?? 0));
 }
@@ -231,6 +248,33 @@ export async function settleRatedMatch(opts: {
   await writeSide(opts.ownerB, opts.agentB, beforeB, nextB, 1 - opts.scoreA);
 
   return { skipped: false as const, matchId, a: nextA, b: nextB, weight: appliedWeight };
+}
+
+/**
+ * Ranked HU settle: update the city pool and the combined Arena Rating.
+ * Casual / unknown cities are no-ops (callers should already gate with isRankedLeague).
+ */
+export async function settleRankedCityMatch(
+  opts: Omit<Parameters<typeof settleRatedMatch>[0], "poolId"> & { cityId: string },
+) {
+  const { cityId, ...rest } = opts;
+  if (!isRankedCityId(cityId)) {
+    return { skipped: true as const, reason: "not_ranked_city" as const, city: null, combined: null };
+  }
+  const pools = rankedHuPoolsForCity(cityId);
+  const cityPoolId = pools[0]!;
+  const combinedPoolId = pools[1]!;
+  const city = await settleRatedMatch({
+    ...rest,
+    poolId: cityPoolId,
+    reason: rest.reason ?? `city_${cityId}`,
+  });
+  const combined = await settleRatedMatch({
+    ...rest,
+    poolId: combinedPoolId,
+    reason: `${rest.reason ?? "hu_match"}_combined`,
+  });
+  return { skipped: false as const, city, combined, cityPoolId, combinedPoolId };
 }
 
 export async function refreshAggressionFromActions(ownerId: string, poolId = "hu_holdem_standard") {
@@ -565,7 +609,8 @@ export async function loadPublicProfile(handle: string) {
          then coalesce(nullif(ab.display_name, ''), ab.handle)
          else coalesce(nullif(aa.display_name, ''), aa.handle)
        end as opponent_agent,
-       t.name as table_name
+       t.name as table_name,
+       t.league_id::text as city_id
      from rated_matches m
      join profiles oa on oa.id = m.owner_a
      join profiles ob on ob.id = m.owner_b
@@ -573,9 +618,10 @@ export async function loadPublicProfile(handle: string) {
      left join agent_identities ab on ab.id = m.agent_b
      left join tables t on t.id = m.table_id
      where (m.owner_a = $1 or m.owner_b = $1) and m.status = 'settled'
+       and m.pool_id = $2
      order by m.rated_at desc
      limit 12`,
-    [p.id],
+    [p.id, HU_RANKED_POOL_SEASON1],
   );
 
   // Fallback: recent table sessions as activity when no rated matches yet.
@@ -613,10 +659,11 @@ export async function loadPublicProfile(handle: string) {
      left join agent_identities aa on aa.id = m.agent_a
      left join agent_identities ab on ab.id = m.agent_b
      where (m.owner_a = $1 or m.owner_b = $1) and m.status='settled'
+       and m.pool_id = $2
      group by 1, 2
      order by meetings desc
      limit 6`,
-    [p.id],
+    [p.id, HU_RANKED_POOL_SEASON1],
   );
 
   const conf = confidenceLabel(Number(hu.rd), Number(hu.matches_played));
@@ -661,6 +708,21 @@ export async function loadPublicProfile(handle: string) {
       profit: Number(hu.profit),
       provisional: Boolean(hu.provisional),
     },
+    cityRatings: RANKED_CITY_IDS.map((cityId) => {
+      const poolId = huCityPoolId(cityId);
+      const row = ratings.rows.find((r: { pool_id: string }) => r.pool_id === poolId);
+      return {
+        cityId,
+        poolId,
+        label: row?.pool_label ?? cityId,
+        rating: Math.round(Number(row?.rating ?? 1500)),
+        rd: Math.round(Number(row?.rd ?? 350) * 10) / 10,
+        matches: Number(row?.matches_played ?? 0),
+        wins: Number(row?.wins ?? 0),
+        losses: Number(row?.losses ?? 0),
+        provisional: row ? Boolean(row.provisional) : true,
+      };
+    }),
     ratings: ratings.rows.map((r: Record<string, unknown>) => ({
       poolId: r.pool_id,
       label: r.pool_label,

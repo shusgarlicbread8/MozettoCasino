@@ -47,7 +47,7 @@ import {
   closeOnchainSessionForSettlement,
   abandonUnseatedOnchainPlayer,
   rebalanceEscrowToStacks,
-  settleRatedMatch,
+  settleRankedCityMatch,
   isRankedLeague,
   getOnchainSessionForTable,
   handPhase,
@@ -2237,14 +2237,8 @@ export class TableRuntime {
     const leagueId = leagueRow.rows[0]?.league_id ?? "bronze";
     if (!isRankedLeague(leagueId)) return;
 
-    // Texas Hold'em → HU pool. Poker Classic → 6-max pool only for degenerate HU sessions.
-    const poolId =
-      this.variantId === "nlhe_hu"
-        ? "hu_holdem_standard"
-        : this.variantId === "nlhe_6max"
-          ? "nlhe_6max_standard"
-          : null;
-    if (!poolId) return;
+    // Texas Hold'em HU → city + combined Arena Rating. Classic 6-max stays unrated (Season 1).
+    if (this.variantId !== "nlhe_hu") return;
 
     const startHand = this.sessionStartHand.get(sessionId) ?? this.state.handNumber;
     const hands = Math.max(0, this.state.handNumber - startHand);
@@ -2262,8 +2256,8 @@ export class TableRuntime {
     const theirProfit = Number(theirs.stack) - Number(theirs.buy_in);
     const scoreA: 0 | 0.5 | 1 = myProfit > theirProfit ? 1 : myProfit < theirProfit ? 0 : 0.5;
 
-    await settleRatedMatch({
-      poolId,
+    await settleRankedCityMatch({
+      cityId: leagueId,
       ownerA: userId,
       ownerB: opponentId,
       agentA: agentId ?? null,

@@ -115,7 +115,7 @@ export async function PlayerIntegritySection({
             { key: "summary", header: "Summary", render: (r) => r.summary },
           ]}
           rows={integrity.signals}
-          rowKey={(r) => `${r.kind}:${r.summary}`}
+          rowKey={(r, i) => `${r.kind}:${r.summary}:${i}`}
           empty="No signals"
         />
       ) : (

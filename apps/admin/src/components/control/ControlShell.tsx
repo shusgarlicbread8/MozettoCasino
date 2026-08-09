@@ -52,14 +52,60 @@ async function fetchMe(): Promise<AdminMe | null> {
   return null;
 }
 
+function mapSolvencyToHealth(status: unknown): ControlHealth {
+  if (status === "PROTOCOL SOLVENT") return "HEALTHY";
+  if (status === "PROTOCOL INSOLVENT") return "CRITICAL";
+  if (status === "HEALTHY" || status === "DEGRADED" || status === "CRITICAL" || status === "STALE") {
+    return status;
+  }
+  return "UNAVAILABLE";
+}
+
+async function fetchProtocolHealth(): Promise<ControlHealth> {
+  try {
+    const res = await fetch("/api/admin/v1/admin/solvency", {
+      credentials: "include",
+      headers: { accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!res.ok) return "UNAVAILABLE";
+    const body = (await res.json()) as { status?: string };
+    return mapSolvencyToHealth(body.status);
+  } catch {
+    return "UNAVAILABLE";
+  }
+}
+
 export function ControlShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || "/";
   const [me, setMe] = useState<AdminMe | null>(null);
   const [env] = useState<ControlEnvironment>(() => detectEnvironment());
-  const [protocolStatus] = useState<ControlHealth>("PENDING");
+  const [protocolStatus, setProtocolStatus] = useState<ControlHealth>("PENDING");
 
   useEffect(() => {
     void fetchMe().then(setMe);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      void fetchProtocolHealth().then((status) => {
+        if (!cancelled) setProtocolStatus(status);
+      });
+    };
+    refresh();
+    // Solvency RPC is expensive — keep the top bar honest without hammering Anvil/RPC.
+    const id = window.setInterval(refresh, 120_000);
+    const onVis = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, []);
 
   if (pathname === "/login" || pathname.startsWith("/login?")) {
@@ -117,7 +163,7 @@ export function ControlShell({ children }: { children: React.ReactNode }) {
           </div>
           <div className="ctrl-topbar-item">
             <span className="ctrl-k">WALLET</span>
-            <span>{me ? truncateSubject(me.subject) : "—"}</span>
+            <span className="mono">{me ? truncateSubject(me.subject) : "—"}</span>
           </div>
           <div className="ctrl-topbar-item">
             <span className="ctrl-k">ROLE</span>

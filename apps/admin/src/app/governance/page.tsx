@@ -55,9 +55,13 @@ export default async function GovernancePage() {
         <div className="card">
           <div className="muted uppercase mb-1">Protocol Safe</div>
           <div className="break-all font-mono">
-            {safe}
-            {safe === MOCK_PROTOCOL_SAFE ? " (mock local)" : ""}
+            {safe === MOCK_PROTOCOL_SAFE ? "UNAVAILABLE" : safe}
           </div>
+          {safe === MOCK_PROTOCOL_SAFE ? (
+            <div className="badge-warn mt-1">
+              PROTOCOL_SAFE_ADDRESS unset — local mock not shown as live
+            </div>
+          ) : null}
         </div>
         <div className="card">
           <div className="muted uppercase mb-1">TimelockController</div>

@@ -45,7 +45,7 @@ const PRODUCT = {
     gameLine: "Texas Hold'em · Heads-Up",
     seatsLabel: "Heads-up",
     rules:
-      "The city sets the blinds; you choose a buy-in between 40 and 100 big blinds. Your bankroll never raises that ceiling. Ranked play runs from Berlin up to Monaco: results move Arena Rating and the same pair is hard-capped at 5 matches/day. Porto is Casual mode — the money is just as real, but no result touches Arena Rating and a rematch is only soft-avoided. Empty tables close after 10 minutes.",
+      "The city sets the blinds; you choose a buy-in between 40 and 100 big blinds. Your bankroll never raises that ceiling. Ranked play (Berlin → Monaco) moves that city’s rating and your combined Arena Rating; the same pair is hard-capped at 5 matches/day. Porto is Casual — real money, no rating, rematches only soft-avoided. Empty tables close after 10 minutes. Seamless Play must be enabled for the city you queue (one template per grant).",
     altHref: "/poker/classic",
     altLabel: "Poker (Classic) · 6-max",
     searching: "Searching for an opponent…",
